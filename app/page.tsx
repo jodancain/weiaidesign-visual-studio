@@ -44,6 +44,7 @@ import {
   DefaultSizeStyle,
   Tldraw,
   createShapeId,
+  exportToBlob,
   toRichText,
   useValue,
   type Editor,
@@ -151,6 +152,24 @@ function sessionTitleOf(messages: ChatMessage[]) {
   const text = (first?.text || "").replace(/\s+/g, " ").trim();
   if (!text) return "New chat";
   return text.length > 24 ? `${text.slice(0, 24)}…` : text;
+}
+
+/* assistant 文本渲染：3 行以上编号列表升级为 Lovart 式任务清单卡 */
+function renderAssistantText(text: string) {
+  const lines = text.split("\n");
+  const numbered = lines.filter((line) => /^\s*\d+[.、)]\s*/.test(line));
+  if (numbered.length < 3) return <p className="msgText">{text}</p>;
+  const intro = lines.filter((line) => !/^\s*\d+[.、)]\s*/.test(line) && line.trim()).join("\n");
+  return (
+    <div>
+      {intro ? <p className="msgText">{intro}</p> : null}
+      <ol className="msgChecklist">
+        {numbered.map((line, index) => (
+          <li key={index}>{line.replace(/^\s*\d+[.、)]\s*/, "")}</li>
+        ))}
+      </ol>
+    </div>
+  );
 }
 
 function formatElapsed(ms: number) {
@@ -293,6 +312,7 @@ export default function Home() {
   const [materialSwap, setMaterialSwap] = useState(false);
   const [materialNote, setMaterialNote] = useState("");
   const [exportMenu, setExportMenu] = useState(false);
+  const [projectName, setProjectName] = useState("Untitled");
 
   const [countdown, setCountdown] = useState("00040000");
 
@@ -318,6 +338,7 @@ export default function Home() {
     } catch {
       setHistory([]);
     }
+    setProjectName(localStorage.getItem("lovartProjectName") || "Untitled");
     try {
       const saved = JSON.parse(localStorage.getItem("lovartSessions") || "[]") as AgentSession[];
       setPastSessions(saved);
@@ -510,6 +531,23 @@ export default function Home() {
     [editor],
   );
 
+  /* 画布/选中导出 PNG（Lovart 分享同款产物） */
+  const exportCanvasPng = useCallback(async () => {
+    if (!editor) return;
+    const selected = editor.getSelectedShapeIds();
+    const ids = selected.length ? selected : [...editor.getCurrentPageShapeIds()];
+    if (!ids.length) {
+      setError("画布是空的，先生成或放一些内容");
+      return;
+    }
+    /* 按内容尺寸动态限流：最长边 ≤4096px，防止大画布导出撑爆渲染进程 */
+    const bounds = selected.length ? editor.getSelectionPageBounds() : editor.getCurrentPageBounds();
+    const maxSide = Math.max(bounds?.w || 1024, bounds?.h || 1024);
+    const scale = Math.min(2, Math.max(0.2, 4096 / maxSide));
+    const blob = await exportToBlob({ editor, ids, format: "png", opts: { scale, background: true } });
+    saveBlob(blob, `${(projectName || "canvas").replace(/\s+/g, "-")}.png`);
+  }, [editor, projectName]);
+
   /* 右键菜单动作 */
   const contextActions = useMemo(
     () => [
@@ -558,6 +596,10 @@ export default function Home() {
         run: async () => editor?.selectAll(),
       },
       {
+        label: "导出 PNG",
+        run: async () => exportCanvasPng(),
+      },
+      {
         label: "缩放至适配",
         run: async () => editor?.zoomToFit(),
       },
@@ -566,7 +608,7 @@ export default function Home() {
         run: async () => editor?.resetZoom(),
       },
     ],
-    [editor, placeImageOnCanvas],
+    [editor, exportCanvasPng, placeImageOnCanvas],
   );
 
   const brushColors = ["black", "grey", "red", "orange", "yellow", "green", "blue", "violet"] as const;
@@ -1486,7 +1528,17 @@ export default function Home() {
               <button className="logoBadge" type="button" aria-label="home">
                 <span>Lō</span>
               </button>
-              <input className="titleInput" defaultValue="Untitled" aria-label="project title" />
+              <input
+                className="titleInput"
+                value={projectName}
+                aria-label="project title"
+                onChange={(event) => setProjectName(event.target.value)}
+                onBlur={() => {
+                  const name = projectName.trim() || "Untitled";
+                  setProjectName(name);
+                  localStorage.setItem("lovartProjectName", name);
+                }}
+              />
               <button className="ghostIcon" type="button" aria-label="theme">
                 <Palette size={15} />
               </button>
@@ -1495,6 +1547,15 @@ export default function Home() {
               </button>
               {exportMenu ? (
                 <div className="exportMenu" onMouseLeave={() => setExportMenu(false)}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setExportMenu(false);
+                      void exportCanvasPng();
+                    }}
+                  >
+                    <Download size={14} /> 导出 PNG（画布/选中）
+                  </button>
                   <button
                     type="button"
                     onClick={() => {
@@ -1790,7 +1851,7 @@ export default function Home() {
               <button className="ghostIcon" type="button" aria-label="history" onClick={() => setShowHistory(true)}>
                 <History size={16} />
               </button>
-              <button className="ghostIcon" type="button" aria-label="share">
+              <button className="ghostIcon" type="button" aria-label="share" onClick={() => void exportCanvasPng()}>
                 <Share2 size={16} />
               </button>
               <button className="ghostIcon" type="button" aria-label="collapse">
@@ -1840,13 +1901,31 @@ export default function Home() {
                       <Sparkles size={12} />
                       {message.kind}
                     </div>
-                    {message.text ? <p className="msgText">{message.text}</p> : null}
+                    {message.text ? renderAssistantText(message.text) : null}
                     {message.error ? <p className="msgError">{message.error}</p> : null}
                     {message.images?.length ? (
                       <div className="msgImages">
                         {message.images.map((url) => (
-                          /* eslint-disable-next-line @next/next/no-img-element */
-                          <img key={url} src={url} alt="generated" onClick={() => void restoreHistoryImage(url)} />
+                          <span className="msgImageWrap" key={url}>
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={url} alt="generated" onClick={() => void restoreHistoryImage(url)} />
+                            <button
+                              type="button"
+                              aria-label="download"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void (async () => {
+                                  const dataUrl = await srcToDataUrl(url);
+                                  const link = document.createElement("a");
+                                  link.href = dataUrl;
+                                  link.download = "lovart-image.png";
+                                  link.click();
+                                })();
+                              }}
+                            >
+                              <Download size={12} />
+                            </button>
+                          </span>
                         ))}
                       </div>
                     ) : null}
