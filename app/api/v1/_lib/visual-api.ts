@@ -149,7 +149,7 @@ async function imagePayloadToBuffer(item: { b64_json?: string; url?: string }) {
   }
 }
 
-async function generateImage(prompt: string, aspect: string, outPath: string) {
+async function generateImage(prompt: string, aspect: string, outPath: string, qualityOverride = "") {
   const { baseUrl, apiKey } = openAIConfig();
   let payload: { data?: Array<{ b64_json?: string; url?: string }> } | null = null;
   let lastError: unknown = null;
@@ -168,7 +168,7 @@ async function generateImage(prompt: string, aspect: string, outPath: string) {
           prompt,
           size: imageSize(aspect),
           n: 1,
-          ...(imageQuality ? { quality: imageQuality } : {}),
+          ...((qualityOverride || imageQuality) ? { quality: qualityOverride || imageQuality } : {}),
           ...(imageOutputFormat ? { output_format: imageOutputFormat } : {}),
           ...(imageOutputCompression > 0 ? { output_compression: imageOutputCompression } : {}),
         }),
@@ -191,7 +191,7 @@ async function generateImage(prompt: string, aspect: string, outPath: string) {
   return { model: usedModel || imageModel, mimeType: normalizeImageMime(`image/${imageOutputFormat || "png"}`), size: buffer.length, mode: "generation" };
 }
 
-async function editImageWithReference(prompt: string, aspect: string, outPath: string, references: ReferenceImage[]) {
+async function editImageWithReference(prompt: string, aspect: string, outPath: string, references: ReferenceImage[], qualityOverride = "") {
   const { baseUrl, apiKey } = openAIConfig();
   const source = references[0];
   if (!source?.buffer?.length) throw new Error("reference image is empty");
@@ -206,7 +206,7 @@ async function editImageWithReference(prompt: string, aspect: string, outPath: s
       form.append("prompt", prompt);
       form.append("size", imageSize(aspect));
       form.append("n", "1");
-      if (imageQuality) form.append("quality", imageQuality);
+      if (qualityOverride || imageQuality) form.append("quality", qualityOverride || imageQuality);
       if (imageOutputFormat) form.append("output_format", imageOutputFormat);
       if (imageOutputCompression > 0) form.append("output_compression", String(imageOutputCompression));
       form.append("image", new Blob([new Uint8Array(source.buffer)], { type: source.mimeType || "image/png" }), source.filename || "reference.png");
@@ -267,6 +267,12 @@ function extractReferenceImages(payload: Record<string, unknown>) {
 }
 
 function standaloneImagePrompt(payload: Record<string, unknown>, index: number, count: number) {
+  const rawPrompt = String(payload.raw_prompt || "").trim();
+  if (rawPrompt) {
+    return count > 1
+      ? `${rawPrompt}\nVariation ${index} of ${count}: keep the same core idea but change composition, staging, and detail.`
+      : rawPrompt;
+  }
   const prompt = String(payload.prompt || payload.image_prompt || payload.video_subject || "").trim();
   if (!prompt) return "";
   const style = String(payload.style || payload.visual_style || "").trim();
@@ -308,6 +314,9 @@ export async function createStandaloneImages(payload: Record<string, unknown>, r
   if (!prompt) throw new Error("prompt is required");
   const aspect = String(payload.aspect_ratio || payload.aspect || payload.video_aspect || "1:1");
   const count = Math.max(1, Math.min(4, Number(payload.n || payload.count || payload.image_count || 1)));
+  const qualityOverride = ["low", "medium", "high"].includes(String(payload.quality || "").toLowerCase())
+    ? String(payload.quality).toLowerCase()
+    : "";
   const imageId = `img-${randomUUID()}`;
   const runDir = join(imageOutputDir, imageId);
   await mkdir(runDir, { recursive: true });
@@ -327,14 +336,14 @@ export async function createStandaloneImages(payload: Record<string, unknown>, r
         let result: { model: string; mimeType: string; size: number; mode: string };
         if (references.length) {
           try {
-            result = await editImageWithReference(imagePrompt, aspect, outPath, references);
+            result = await editImageWithReference(imagePrompt, aspect, outPath, references, qualityOverride);
           } catch (error) {
             referenceMode = "fallback_generation";
             errors.push(`reference edit fallback for image-${index}: ${error instanceof Error ? error.message : String(error)}`);
-            result = await generateImage(`${imagePrompt}\nUse the uploaded reference only as conceptual direction if unavailable to the model.`, aspect, outPath);
+            result = await generateImage(`${imagePrompt}\nUse the uploaded reference only as conceptual direction if unavailable to the model.`, aspect, outPath, qualityOverride);
           }
         } else {
-          result = await generateImage(imagePrompt, aspect, outPath);
+          result = await generateImage(imagePrompt, aspect, outPath, qualityOverride);
         }
         const written = await stat(outPath);
         const publicUrl = imagePublicUrl(request, imageId, filename);
