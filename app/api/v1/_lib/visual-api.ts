@@ -309,6 +309,59 @@ async function mapLimit<T, R>(items: T[], limit: number, mapper: (item: T, index
   return results;
 }
 
+type ImageEditsResult =
+  | { ok: true; imageB64: string; model: string }
+  | { ok: false; detail: string };
+
+/* True mask inpaint via OpenAI-compatible `images/edits` (mask: transparent = repaint). */
+export async function tryImageEdits(params: {
+  image: Buffer;
+  mask: Buffer;
+  prompt: string;
+  size: string;
+}): Promise<ImageEditsResult> {
+  const { baseUrl, apiKey } = openAIConfig();
+  const errors: string[] = [];
+  for (const model of imageGenerationModels) {
+    const form = new FormData();
+    form.append("model", model);
+    form.append("image", new Blob([new Uint8Array(params.image)], { type: "image/png" }), "image.png");
+    form.append("mask", new Blob([new Uint8Array(params.mask)], { type: "image/png" }), "mask.png");
+    form.append("prompt", params.prompt);
+    form.append("size", params.size);
+    form.append("n", "1");
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), imageTimeoutSeconds * 1000);
+    try {
+      const response = await fetch(`${baseUrl}/images/edits`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}` },
+        body: form,
+        signal: controller.signal,
+      });
+      const text = await response.text();
+      if (!response.ok) {
+        errors.push(`${model}: HTTP ${response.status} ${text.slice(0, 160)}`);
+        continue;
+      }
+      const parsed = JSON.parse(text) as { data?: Array<{ b64_json?: string; url?: string }> };
+      const first = parsed.data?.[0];
+      if (first?.b64_json) return { ok: true, imageB64: `data:image/png;base64,${first.b64_json}`, model };
+      if (first?.url) {
+        const imageResponse = await fetch(first.url);
+        const buffer = Buffer.from(await imageResponse.arrayBuffer());
+        return { ok: true, imageB64: `data:image/png;base64,${buffer.toString("base64")}`, model };
+      }
+      errors.push(`${model}: empty data`);
+    } catch (error) {
+      errors.push(`${model}: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return { ok: false, detail: errors.join(" | ") };
+}
+
 export async function createStandaloneImages(payload: Record<string, unknown>, request: Request) {
   const prompt = String(payload.prompt || payload.image_prompt || payload.video_subject || "").trim();
   if (!prompt) throw new Error("prompt is required");

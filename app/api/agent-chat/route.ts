@@ -65,6 +65,21 @@ const TOOLS = [
   {
     type: "function",
     function: {
+      name: "edit_selected_image",
+      description:
+        "对画布选中的第一张图做指令式修改（去除背景/高清增强细节/移除某元素/调整局部/换角度等），保持主体与风格一致。需要用户已选中图片。",
+      parameters: {
+        type: "object",
+        properties: {
+          instruction: { type: "string", description: "修改指令，中文，明确说明改什么、保持什么不变" },
+        },
+        required: ["instruction"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "image_to_video",
       description: "图生视频：把画布选中的第一张图片交给视频管线（数分钟，提交后后台轮询，完成弹出链接）。需要用户已选中图片。",
       parameters: {
