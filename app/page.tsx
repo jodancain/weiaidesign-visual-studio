@@ -555,6 +555,12 @@ export default function Home() {
     [editor],
   );
 
+  /* dev-only 测试钩子：E2E 验证时向画布注入图片 */
+  useEffect(() => {
+    if (process.env.NODE_ENV !== "development") return;
+    (window as unknown as Record<string, unknown>).__studioPlaceImage = placeImageOnCanvas;
+  }, [placeImageOnCanvas]);
+
   /* 画布/选中导出 PNG（Lovart 分享同款产物） */
   const exportCanvasPng = useCallback(async () => {
     if (!editor) return;
@@ -1343,7 +1349,10 @@ export default function Home() {
 
   const runAction = useCallback(
     async (label: string, fn: () => Promise<void>) => {
-      if (busy) return;
+      if (busy) {
+        setError(`「${busyLabel || "上一个任务"}」仍在进行中，请稍候`);
+        return;
+      }
       if (!token) {
         setError("先在 Agent 面板里填 VIDEO_API_TOKEN");
         setShowAgentMenu(true);
@@ -1363,7 +1372,7 @@ export default function Home() {
         setBusyLabel("");
       }
     },
-    [busy, pushMessage, token],
+    [busy, busyLabel, pushMessage, token],
   );
 
   const generateVariation = useCallback(() => {
@@ -2635,7 +2644,7 @@ export default function Home() {
             ) : null}
             {fontOcr === "loading" ? (
               <p className="ocrHint">
-                <Loader2 className="spin" size={13} /> 正在识别图中文字…
+                <Loader2 className="spin" size={13} /> 正在识别图中文字…（也可直接在下方输入，不必等待）
               </p>
             ) : null}
             {fontOcr === "done" && fontLines ? (
@@ -2655,12 +2664,10 @@ export default function Home() {
                 ))}
               </div>
             ) : null}
-            {fontOcr === "failed" || fontOcr === "idle" ? (
-              <label>
-                新文字内容
-                <input autoFocus value={fontText} onChange={(event) => setFontText(event.target.value)} placeholder="例如：云东 AI 视觉" />
-              </label>
-            ) : null}
+            <label>
+              {fontOcr === "done" && fontLines ? "或整体替换为（可选，优先用上面的逐行编辑）" : "新文字内容"}
+              <input autoFocus value={fontText} onChange={(event) => setFontText(event.target.value)} placeholder="例如：云东 AI 视觉" />
+            </label>
             <label>
               补充说明（可选）
               <input value={fontNote} onChange={(event) => setFontNote(event.target.value)} placeholder="例如：保持金属质感和描边" />
@@ -2671,11 +2678,9 @@ export default function Home() {
                 className="darkButton"
                 type="button"
                 disabled={
-                  fontOcr === "loading" ||
-                  (fontOcr === "done" && fontLines
-                    ? !fontLines.some((line) => line.to.trim() && line.to.trim() !== line.from.trim())
-                    : !fontText.trim())
+                  !fontText.trim() && !(fontLines || []).some((line) => line.to.trim() && line.to.trim() !== line.from.trim())
                 }
+                title="改动上方任意一行，或在输入框填写新文字"
                 onClick={runFontRestyle}
               >
                 生成

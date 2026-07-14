@@ -28,7 +28,7 @@ export async function POST(request: Request) {
 
   const model = env.VISION_LLM_MODEL || env.AGENT_LLM_MODEL || "gpt-5.4-mini";
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 60000);
+  const timer = setTimeout(() => controller.abort(), 20000);
   try {
     const upstream = await fetch(`${baseURL}/chat/completions`, {
       method: "POST",
