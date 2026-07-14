@@ -205,6 +205,92 @@ async function srcToDataUrl(src: string): Promise<string> {
   });
 }
 
+/* 纯色背景转透明：四角种子 flood fill，只抠与边缘连通的背景（relay 不支持原生 alpha，白底生成 + 客户端抠图） */
+async function solidBackgroundToAlpha(src: string): Promise<string> {
+  const dataUrl = src.startsWith("data:") ? src : await srcToDataUrl(src);
+  const img = await loadImage(dataUrl);
+  const w = img.naturalWidth;
+  const h = img.naturalHeight;
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return dataUrl;
+  ctx.drawImage(img, 0, 0);
+  const imageData = ctx.getImageData(0, 0, w, h);
+  const px = imageData.data;
+  const corners = [
+    [0, 0],
+    [w - 1, 0],
+    [0, h - 1],
+    [w - 1, h - 1],
+  ];
+  let br = 0;
+  let bgc = 0;
+  let bb = 0;
+  for (const [x, y] of corners) {
+    const i = (y * w + x) * 4;
+    br += px[i];
+    bgc += px[i + 1];
+    bb += px[i + 2];
+  }
+  br /= 4;
+  bgc /= 4;
+  bb /= 4;
+  const tolSq = 52 * 52;
+  const matches = (i: number) => {
+    const dr = px[i] - br;
+    const dg = px[i + 1] - bgc;
+    const db = px[i + 2] - bb;
+    return dr * dr + dg * dg + db * db < tolSq;
+  };
+  const visited = new Uint8Array(w * h);
+  const stack: number[] = [];
+  for (const [x, y] of corners) {
+    const idx = y * w + x;
+    if (!visited[idx] && matches(idx * 4)) {
+      visited[idx] = 1;
+      stack.push(idx);
+    }
+  }
+  while (stack.length) {
+    const idx = stack.pop() as number;
+    px[idx * 4 + 3] = 0;
+    const x = idx % w;
+    const y = (idx / w) | 0;
+    if (x > 0) {
+      const n = idx - 1;
+      if (!visited[n] && matches(n * 4)) {
+        visited[n] = 1;
+        stack.push(n);
+      }
+    }
+    if (x < w - 1) {
+      const n = idx + 1;
+      if (!visited[n] && matches(n * 4)) {
+        visited[n] = 1;
+        stack.push(n);
+      }
+    }
+    if (y > 0) {
+      const n = idx - w;
+      if (!visited[n] && matches(n * 4)) {
+        visited[n] = 1;
+        stack.push(n);
+      }
+    }
+    if (y < h - 1) {
+      const n = idx + w;
+      if (!visited[n] && matches(n * 4)) {
+        visited[n] = 1;
+        stack.push(n);
+      }
+    }
+  }
+  ctx.putImageData(imageData, 0, 0);
+  return canvas.toDataURL("image/png");
+}
+
 /* 居中裁切到精确比例（gpt-image 只有 1:1/3:2/2:3 三种原生 size，16:9/9:16 由此保证真比例） */
 async function cropToAspect(src: string, aspect: string): Promise<string> {
   const [aw, ah] = aspect.split(":").map(Number);
@@ -793,11 +879,14 @@ export default function Home() {
       const referenceImages = await Promise.all((params.refs || []).slice(0, 4).map((src) => srcToDataUrl(src)));
       const placeholderId = createPlaceholder("生成图片");
       try {
+        const effectivePrompt = params.transparent
+          ? `${params.prompt}。背景为纯白色（#FFFFFF）纯净平涂，无阴影无渐变，主体边缘干净利落`
+          : params.prompt;
         const payload = await api<ImagesResult>("/images", {
           method: "POST",
           body: JSON.stringify({
-            prompt: params.prompt,
-            raw_prompt: params.kind === "agent" ? params.prompt : undefined,
+            prompt: effectivePrompt,
+            raw_prompt: params.kind === "agent" ? effectivePrompt : undefined,
             style: params.kind === "agent" ? undefined : style,
             brand: params.kind === "agent" ? undefined : brand,
             audience: params.kind === "agent" ? undefined : audience,
@@ -813,8 +902,9 @@ export default function Home() {
         removePlaceholder(placeholderId);
         const targetAspect = params.aspect || aspect;
         for (const url of urls) {
-          const cropped = targetAspect === "16:9" || targetAspect === "9:16" ? await cropToAspect(url, targetAspect) : url;
-          await placeImageOnCanvas(cropped);
+          let finalSrc = targetAspect === "16:9" || targetAspect === "9:16" ? await cropToAspect(url, targetAspect) : url;
+          if (params.transparent) finalSrc = await solidBackgroundToAlpha(finalSrc);
+          await placeImageOnCanvas(finalSrc);
         }
         pushHistory({
           kind: params.kind === "agent" ? "agent-images" : "images",
@@ -891,9 +981,14 @@ export default function Home() {
         });
         const urls = (payload.data?.images || []).map((item) => String(item.public_url || "")).filter(Boolean);
         removePlaceholder(placeholderId);
-        for (const url of urls) await placeImageOnCanvas(url, params.kind);
+        const placed: string[] = [];
+        for (const url of urls) {
+          const finalSrc = params.transparent ? await solidBackgroundToAlpha(url) : url;
+          await placeImageOnCanvas(finalSrc, params.kind);
+          placed.push(finalSrc);
+        }
         pushHistory({ kind: params.kind, prompt: params.instruction, outputs: urls.map((url) => ({ url })) });
-        return urls;
+        return placed;
       } finally {
         removePlaceholder(placeholderId);
       }
@@ -1755,7 +1850,7 @@ export default function Home() {
                     pushMessage({ role: "user", text: "Remove BG 去除背景" });
                     const urls = await doImageEdit({
                       src: selection.images[0],
-                      instruction: "完整保留主体，彻底移除全部背景，输出透明背景，主体边缘干净利落，主体本身完全不变",
+                      instruction: "完整保留主体，把背景替换为纯白色（#FFFFFF）纯净平涂，无阴影无渐变，主体边缘干净利落，主体本身完全不变",
                       kind: "remove-bg",
                       transparent: true,
                     });

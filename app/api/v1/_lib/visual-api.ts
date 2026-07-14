@@ -170,7 +170,7 @@ async function generateImage(prompt: string, aspect: string, outPath: string, qu
           n: 1,
           ...((qualityOverride || imageQuality) ? { quality: qualityOverride || imageQuality } : {}),
           ...(transparent
-            ? { background: "transparent", output_format: "png" }
+            ? { output_format: "png" }
             : {
                 ...(imageOutputFormat ? { output_format: imageOutputFormat } : {}),
                 ...(imageOutputCompression > 0 ? { output_compression: imageOutputCompression } : {}),
@@ -212,7 +212,6 @@ async function editImageWithReference(prompt: string, aspect: string, outPath: s
       form.append("n", "1");
       if (qualityOverride || imageQuality) form.append("quality", qualityOverride || imageQuality);
       if (transparent) {
-        form.append("background", "transparent");
         form.append("output_format", "png");
       } else {
         if (imageOutputFormat) form.append("output_format", imageOutputFormat);
