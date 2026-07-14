@@ -1838,3 +1838,38 @@ button {
   display: grid;
   place-items: center;
 }
+
+/* ---------- font restyle line editing ---------- */
+.ocrHint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #9a9ea6;
+  margin: 4px 0 10px;
+}
+.fontLines {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.fontLines input {
+  border: 1px solid #e6e8ec;
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 13px;
+  color: #1f2126;
+  background: #fafafa;
+}
+.fontLines input:focus {
+  outline: none;
+  border-color: #111214;
+  background: #fff;
+}
+.fontLines input.changed {
+  border-color: #4263eb;
+  background: #f4f7ff;
+}

@@ -327,7 +327,9 @@ export default function Home() {
   const [contextMenu, setContextMenu] = useState<{ open: boolean; x: number; y: number }>({ open: false, x: 0, y: 0 });
   const [brushColor, setBrushColor] = useState("black");
   const [brushSize, setBrushSize] = useState("m");
-  const [fontDialog, setFontDialog] = useState<{ open: boolean; src?: string }>({ open: false });
+  const [fontDialog, setFontDialog] = useState<{ open: boolean; src?: string; preview?: string }>({ open: false });
+  const [fontLines, setFontLines] = useState<Array<{ from: string; to: string }> | null>(null);
+  const [fontOcr, setFontOcr] = useState<"idle" | "loading" | "done" | "failed">("idle");
   const [fontText, setFontText] = useState("");
   const [fontNote, setFontNote] = useState("");
   const [materialDialog, setMaterialDialog] = useState<{ open: boolean; a?: string; b?: string }>({ open: false });
@@ -822,24 +824,31 @@ export default function Home() {
   );
 
   const doFontRestyle = useCallback(
-    async (params: { src: string; newText: string; note?: string }) => {
+    async (params: { src: string; newText: string; note?: string; lineEdits?: Array<{ from: string; to: string }> }) => {
       const imageB64 = await srcToDataUrl(params.src);
-      const payload = await api<ImagesResult>("/font-restyle", {
-        method: "POST",
-        body: JSON.stringify({
-          image_b64: imageB64,
-          new_text: params.newText,
-          style_note: params.note || "",
-          aspect_ratio: aspect,
-          n: 1,
-        }),
-      });
-      const urls = (payload.data?.images || []).map((item) => String(item.public_url || "")).filter(Boolean);
-      for (const url of urls) await placeImageOnCanvas(url, `font-${params.newText}`);
-      pushHistory({ kind: "font-restyle", prompt: params.newText, outputs: urls.map((url) => ({ url })) });
-      return urls;
+      const placeholderId = createPlaceholder("同风格改字");
+      try {
+        const payload = await api<ImagesResult>("/font-restyle", {
+          method: "POST",
+          body: JSON.stringify({
+            image_b64: imageB64,
+            new_text: params.newText,
+            style_note: params.note || "",
+            ...(params.lineEdits?.length ? { line_edits: params.lineEdits } : {}),
+            aspect_ratio: aspect,
+            n: 1,
+          }),
+        });
+        const urls = (payload.data?.images || []).map((item) => String(item.public_url || "")).filter(Boolean);
+        removePlaceholder(placeholderId);
+        for (const url of urls) await placeImageOnCanvas(url, `font-${params.newText || "line-edit"}`);
+        pushHistory({ kind: "font-restyle", prompt: params.newText || "逐行改字", outputs: urls.map((url) => ({ url })) });
+        return urls;
+      } finally {
+        removePlaceholder(placeholderId);
+      }
     },
-    [api, aspect, placeImageOnCanvas, pushHistory],
+    [api, aspect, createPlaceholder, placeImageOnCanvas, pushHistory, removePlaceholder],
   );
 
   const doMaterialTransfer = useCallback(
@@ -1136,7 +1145,7 @@ export default function Home() {
   const exportSvgFile = useCallback(async () => {
     const result = await getExportSvg();
     if (!result) return false;
-    saveBlob(new Blob([result.svg], { type: "image/svg+xml" }), "lovart-canvas.svg");
+    saveBlob(new Blob([result.svg], { type: "image/svg+xml" }), "studio-canvas.svg");
     return true;
   }, [getExportSvg]);
 
@@ -1157,7 +1166,7 @@ export default function Home() {
       await (
         pdf as unknown as { svg: (el: Element, opts: Record<string, number>) => Promise<unknown> }
       ).svg(element, { x: 0, y: 0, width: result.width, height: result.height });
-      saveBlob(pdf.output("blob"), "lovart-canvas.ai");
+      saveBlob(pdf.output("blob"), "studio-canvas.ai");
       return true;
     } finally {
       setBusy(false);
@@ -1179,7 +1188,7 @@ export default function Home() {
         default: { imageToSVG: (url: string, cb: (svg: string) => void, preset?: string) => void };
       };
       const svg = await new Promise<string>((resolve) => mod.default.imageToSVG(dataUrl, resolve, "posterized2"));
-      saveBlob(new Blob([svg], { type: "image/svg+xml" }), "lovart-vectorized.svg");
+      saveBlob(new Blob([svg], { type: "image/svg+xml" }), "studio-vectorized.svg");
       /* 同时以矢量 asset 落画布，可无损缩放 */
       const svgDataUrl = `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`;
       await placeImageOnCanvas(svgDataUrl, "vectorized");
@@ -1381,17 +1390,56 @@ export default function Home() {
     });
   }, [prompt, pushMessage, runAction, selection.images, startImageToVideo]);
 
+  /* 打开改字：预览转 dataURL（修裂图）+ 视觉识别行字（Lovart Edit Text 式逐行编辑） */
+  const initFontDialog = useCallback(
+    (src: string) => {
+      setFontText("");
+      setFontNote("");
+      setFontLines(null);
+      setFontOcr("loading");
+      setFontDialog({ open: true, src });
+      void (async () => {
+        let preview = src;
+        try {
+          preview = await srcToDataUrl(src);
+          setFontDialog((prev) => (prev.open && prev.src === src ? { ...prev, preview } : prev));
+        } catch {
+          /* keep original src */
+        }
+        try {
+          const payload = await api<{ lines?: string[] }>("/ocr-lines", {
+            method: "POST",
+            body: JSON.stringify({ image_b64: preview.startsWith("data:") ? preview : await srcToDataUrl(src) }),
+          });
+          const lines = ((payload.data as { lines?: string[] } | undefined)?.lines || []).filter(Boolean);
+          if (lines.length) {
+            setFontLines(lines.map((line) => ({ from: line, to: line })));
+            setFontOcr("done");
+          } else {
+            setFontOcr("failed");
+          }
+        } catch {
+          setFontOcr("failed");
+        }
+      })();
+    },
+    [api],
+  );
+
   const runFontRestyle = useCallback(() => {
     const src = fontDialog.src;
+    const edits = (fontLines || []).filter((line) => line.to.trim() && line.to.trim() !== line.from.trim());
     const text = fontText.trim();
-    if (!src || !text) return;
+    if (!src || (!text && !edits.length)) return;
     setFontDialog({ open: false });
+    const summary = edits.length ? edits.map((line) => `“${line.from}”→“${line.to}”`).join("、") : `“${text}”`;
     void runAction("同风格改字", async () => {
-      pushMessage({ role: "user", text: `同风格改字 → “${text}”` });
-      const urls = await doFontRestyle({ src, newText: text, note: fontNote });
+      pushMessage({ role: "user", text: `同风格改字 → ${summary}` });
+      const urls = await doFontRestyle({ src, newText: text, note: fontNote, lineEdits: edits });
       pushMessage({ role: "assistant", kind: "同风格改字", images: urls });
+      setContextChips(urls.slice(0, 2));
     });
-  }, [doFontRestyle, fontDialog.src, fontNote, fontText, pushMessage, runAction]);
+  }, [doFontRestyle, fontDialog.src, fontLines, fontNote, fontText, pushMessage, runAction]);
 
   const runMaterialTransfer = useCallback(() => {
     const first = materialDialog.a;
@@ -1736,11 +1784,7 @@ export default function Home() {
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  setFontText("");
-                  setFontNote("");
-                  setFontDialog({ open: true, src: selection.images[0] });
-                }}
+                onClick={() => initFontDialog(selection.images[0])}
               >
                 <Type size={14} />
                 改字
@@ -1856,9 +1900,7 @@ export default function Home() {
                   setError("先选中画布上包含字体设计的图片");
                   return;
                 }
-                setFontText("");
-                setFontNote("");
-                setFontDialog({ open: true, src: selection.images[0] });
+                initFontDialog(selection.images[0]);
               }}
             >
               <span className="aiGlyph">
@@ -1901,7 +1943,7 @@ export default function Home() {
 
           {!hasConversation ? (
             <section className="skillCenter" aria-label="Lovart skills">
-              <h2>Try these Lovart Skills</h2>
+              <h2>Try these Studio Skills</h2>
               <div className="chipCloud">
                 {skillChips.map((chip) => (
                   <button key={chip.label} className="skillChip" type="button" onClick={() => applySkill(chip)}>
@@ -1957,7 +1999,7 @@ export default function Home() {
                                   const dataUrl = await srcToDataUrl(url);
                                   const link = document.createElement("a");
                                   link.href = dataUrl;
-                                  link.download = "lovart-image.png";
+                                  link.download = "studio-image.png";
                                   link.click();
                                 })();
                               }}
@@ -2585,23 +2627,57 @@ export default function Home() {
                 <X size={16} />
               </button>
             </div>
-            {fontDialog.src ? (
+            {fontDialog.preview || fontDialog.src ? (
               <div className="dialogPreview">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={fontDialog.src} alt="reference lettering" />
+                <img src={fontDialog.preview || fontDialog.src} alt="reference lettering" />
               </div>
             ) : null}
-            <label>
-              新文字内容
-              <input autoFocus value={fontText} onChange={(event) => setFontText(event.target.value)} placeholder="例如：云东 AI 视觉" />
-            </label>
+            {fontOcr === "loading" ? (
+              <p className="ocrHint">
+                <Loader2 className="spin" size={13} /> 正在识别图中文字…
+              </p>
+            ) : null}
+            {fontOcr === "done" && fontLines ? (
+              <div className="fontLines">
+                <div className="inlineLabel">编辑文字（改哪行填哪行，其余保持原样）</div>
+                {fontLines.map((line, index) => (
+                  <input
+                    key={index}
+                    value={line.to}
+                    className={line.to.trim() !== line.from.trim() ? "changed" : ""}
+                    onChange={(event) =>
+                      setFontLines((prev) =>
+                        prev ? prev.map((item, i) => (i === index ? { ...item, to: event.target.value } : item)) : prev,
+                      )
+                    }
+                  />
+                ))}
+              </div>
+            ) : null}
+            {fontOcr === "failed" || fontOcr === "idle" ? (
+              <label>
+                新文字内容
+                <input autoFocus value={fontText} onChange={(event) => setFontText(event.target.value)} placeholder="例如：云东 AI 视觉" />
+              </label>
+            ) : null}
             <label>
               补充说明（可选）
               <input value={fontNote} onChange={(event) => setFontNote(event.target.value)} placeholder="例如：保持金属质感和描边" />
             </label>
             <div className="dialogFooter">
               <span>保持原字体的骨架 / 笔画 / 质感 / 颜色</span>
-              <button className="darkButton" type="button" disabled={!fontText.trim()} onClick={runFontRestyle}>
+              <button
+                className="darkButton"
+                type="button"
+                disabled={
+                  fontOcr === "loading" ||
+                  (fontOcr === "done" && fontLines
+                    ? !fontLines.some((line) => line.to.trim() && line.to.trim() !== line.from.trim())
+                    : !fontText.trim())
+                }
+                onClick={runFontRestyle}
+              >
                 生成
               </button>
             </div>

@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 
 const env = process.env;
 
-const AGENT_SYSTEM_PROMPT = `你是 Lovart 风格的专业视觉设计代理（内部版），语言用中文。
+const AGENT_SYSTEM_PROMPT = `你是 Youngtuo Visual Studio 的专业视觉设计代理，语言用中文。
 工作方式：
 1. 收到设计请求后，先用一两句话简述设计方案（构图/风格/配色/文字），不要长篇大论。
 2. 生成图片前必须扩写 prompt：把要出现的中文/英文字样逐字写明（例如 标题文字："茶館"、副标题："CHAGUAN"），说明文字排版位置与字体气质、整体构图、主体细节、材质与光影、背景处理；避免泛泛描述。

@@ -17,8 +17,14 @@ export async function POST(request: Request) {
     return jsonCors({ detail: "invalid JSON body" }, { status: 400 });
   }
 
-  const newText = String(payload.new_text || payload.text || "").trim();
-  if (!newText) return jsonCors({ detail: "new_text is required" }, { status: 400 });
+  const lineEdits = (Array.isArray(payload.line_edits) ? payload.line_edits : [])
+    .map((item) => {
+      const record = item as { from?: unknown; to?: unknown };
+      return { from: String(record.from || "").trim(), to: String(record.to || "").trim() };
+    })
+    .filter((item) => item.from && item.to && item.from !== item.to);
+  const newText = String(payload.new_text || payload.text || "").trim() || lineEdits.map((item) => item.to).join(" / ");
+  if (!newText && !lineEdits.length) return jsonCors({ detail: "new_text or line_edits is required" }, { status: 400 });
   const hasReference =
     Boolean(payload.image_b64) ||
     (Array.isArray(payload.reference_images) && payload.reference_images.length > 0);
@@ -27,9 +33,14 @@ export async function POST(request: Request) {
   }
 
   const styleNote = String(payload.style_note || payload.note || "").trim();
+  const replacementDirective = lineEdits.length
+    ? `Replace ONLY these text lines, keeping every other line exactly as-is: ${lineEdits
+        .map((item) => `"${item.from}" -> "${item.to}"`)
+        .join("; ")}.`
+    : `Re-render the exact same lettering design, but replace the text content with: "${newText}".`;
   const rawPrompt = [
     "The reference image contains custom designed lettering / typography.",
-    `Re-render the exact same lettering design, but replace the text content with: "${newText}".`,
+    replacementDirective,
     "Precisely preserve every visual property of the original type design:",
     "letterform skeleton, stroke weight and contrast, serifs and terminals, texture,",
     "material, bevels, outlines, drop shadows, color and gradients, lighting,",
