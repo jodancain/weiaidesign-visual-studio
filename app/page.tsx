@@ -205,6 +205,28 @@ async function srcToDataUrl(src: string): Promise<string> {
   });
 }
 
+/* 居中裁切到精确比例（gpt-image 只有 1:1/3:2/2:3 三种原生 size，16:9/9:16 由此保证真比例） */
+async function cropToAspect(src: string, aspect: string): Promise<string> {
+  const [aw, ah] = aspect.split(":").map(Number);
+  if (!aw || !ah) return src;
+  const dataUrl = src.startsWith("data:") ? src : await srcToDataUrl(src);
+  const img = await loadImage(dataUrl);
+  const target = aw / ah;
+  const current = img.naturalWidth / img.naturalHeight;
+  if (Math.abs(current - target) / target < 0.02) return src;
+  let w = img.naturalWidth;
+  let h = img.naturalHeight;
+  if (current > target) w = Math.round(h * target);
+  else h = Math.round(w / target);
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return src;
+  ctx.drawImage(img, (img.naturalWidth - w) / 2, (img.naturalHeight - h) / 2, w, h, 0, 0, w, h);
+  return canvas.toDataURL("image/png");
+}
+
 function saveBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -521,8 +543,8 @@ export default function Home() {
       editor.createShape({
         id: shapeId,
         type: "image",
-        x: center.x - displayWidth / 2 + (slot % 3) * (displayWidth + 24) - displayWidth,
-        y: center.y - displayHeight / 2 + Math.floor(slot / 3) * 60,
+        x: center.x - displayWidth / 2 + (slot % 2) * (displayWidth + 24) - displayWidth / 2,
+        y: center.y - displayHeight / 2 + Math.floor(slot % 4 / 2) * (displayHeight + 24) + Math.floor(slot / 4) * 40,
         props: { assetId, w: displayWidth, h: displayHeight },
       });
       editor.select(shapeId);
@@ -751,7 +773,15 @@ export default function Home() {
   );
 
   const doGenerateImages = useCallback(
-    async (params: { prompt: string; aspect?: string; count?: number; quality?: string; refs?: string[]; kind?: string }) => {
+    async (params: {
+      prompt: string;
+      aspect?: string;
+      count?: number;
+      quality?: string;
+      refs?: string[];
+      kind?: string;
+      transparent?: boolean;
+    }) => {
       const referenceImages = await Promise.all((params.refs || []).slice(0, 4).map((src) => srcToDataUrl(src)));
       const placeholderId = createPlaceholder("生成图片");
       try {
@@ -767,12 +797,17 @@ export default function Home() {
             aspect_ratio: params.aspect || aspect,
             n: Math.max(1, Math.min(4, params.count || count)),
             ...(params.quality ? { quality: params.quality } : {}),
+            ...(params.transparent ? { background: "transparent" } : {}),
             ...(referenceImages.length ? { reference_images: referenceImages } : {}),
           }),
         });
         const urls = (payload.data?.images || []).map((item) => String(item.public_url || "")).filter(Boolean);
         removePlaceholder(placeholderId);
-        for (const url of urls) await placeImageOnCanvas(url);
+        const targetAspect = params.aspect || aspect;
+        for (const url of urls) {
+          const cropped = targetAspect === "16:9" || targetAspect === "9:16" ? await cropToAspect(url, targetAspect) : url;
+          await placeImageOnCanvas(cropped);
+        }
         pushHistory({
           kind: params.kind === "agent" ? "agent-images" : "images",
           prompt: params.prompt,
@@ -824,7 +859,7 @@ export default function Home() {
 
   /* 指令式图片编辑：参考图 + 指令重绘（Quick Edit / Upscale / Remove BG / Eraser / Multi-Angles 共用管线） */
   const doImageEdit = useCallback(
-    async (params: { src: string; instruction: string; kind: string; count?: number }) => {
+    async (params: { src: string; instruction: string; kind: string; count?: number; transparent?: boolean }) => {
       const referenceImage = await srcToDataUrl(params.src);
       const placeholderId = createPlaceholder("修改图片");
       try {
@@ -835,6 +870,7 @@ export default function Home() {
             raw_prompt: `严格以参考图为基础重绘：${params.instruction}。除指令要求的修改外，主体、构图、风格、配色、文字内容全部保持与参考图一致。`,
             aspect_ratio: aspect,
             n: Math.max(1, Math.min(4, params.count || 1)),
+            ...(params.transparent ? { background: "transparent" } : {}),
             reference_images: [referenceImage],
           }),
         });
@@ -1167,6 +1203,8 @@ export default function Home() {
             aspect: args.aspect ? String(args.aspect) : undefined,
             count: args.count ? Number(args.count) : 1,
             quality: args.quality ? String(args.quality) : undefined,
+            transparent: Boolean(args.transparent_background),
+            refs: args.use_selected_reference ? sel.images.slice(0, 2) : undefined,
             kind: "agent",
           });
           pushMessage({ role: "assistant", kind: "生成图片", images: urls });
@@ -1660,8 +1698,9 @@ export default function Home() {
                     pushMessage({ role: "user", text: "Remove BG 去除背景" });
                     const urls = await doImageEdit({
                       src: selection.images[0],
-                      instruction: "去除背景，替换为纯白色干净背景，主体边缘干净利落，主体本身完全不变",
+                      instruction: "完整保留主体，彻底移除全部背景，输出透明背景，主体边缘干净利落，主体本身完全不变",
                       kind: "remove-bg",
+                      transparent: true,
                     });
                     pushMessage({ role: "assistant", kind: "去背景", images: urls });
                     setContextChips(urls.slice(0, 2));

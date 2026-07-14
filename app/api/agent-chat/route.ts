@@ -28,6 +28,8 @@ const TOOLS = [
           aspect: { type: "string", description: "画幅：1:1 | 3:2 | 2:3 | 16:9 | 9:16" },
           count: { type: "number", description: "张数 1-4，默认 1" },
           quality: { type: "string", description: "low | medium | high" },
+          transparent_background: { type: "boolean", description: "透明背景输出（logo/贴纸/图标/素材类需求时设 true）" },
+          use_selected_reference: { type: "boolean", description: "以画布选中图为参考图（用户说\"参考这张/基于这张画\"时设 true）" },
         },
         required: ["prompt"],
       },

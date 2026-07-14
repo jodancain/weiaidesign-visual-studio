@@ -149,7 +149,7 @@ async function imagePayloadToBuffer(item: { b64_json?: string; url?: string }) {
   }
 }
 
-async function generateImage(prompt: string, aspect: string, outPath: string, qualityOverride = "") {
+async function generateImage(prompt: string, aspect: string, outPath: string, qualityOverride = "", transparent = false) {
   const { baseUrl, apiKey } = openAIConfig();
   let payload: { data?: Array<{ b64_json?: string; url?: string }> } | null = null;
   let lastError: unknown = null;
@@ -169,8 +169,12 @@ async function generateImage(prompt: string, aspect: string, outPath: string, qu
           size: imageSize(aspect),
           n: 1,
           ...((qualityOverride || imageQuality) ? { quality: qualityOverride || imageQuality } : {}),
-          ...(imageOutputFormat ? { output_format: imageOutputFormat } : {}),
-          ...(imageOutputCompression > 0 ? { output_compression: imageOutputCompression } : {}),
+          ...(transparent
+            ? { background: "transparent", output_format: "png" }
+            : {
+                ...(imageOutputFormat ? { output_format: imageOutputFormat } : {}),
+                ...(imageOutputCompression > 0 ? { output_compression: imageOutputCompression } : {}),
+              }),
         }),
         timeoutMs: imageTimeoutSeconds * 1000,
       });
@@ -188,10 +192,10 @@ async function generateImage(prompt: string, aspect: string, outPath: string, qu
   const buffer = await imagePayloadToBuffer(item);
   await mkdir(dirname(outPath), { recursive: true });
   await writeFile(outPath, buffer);
-  return { model: usedModel || imageModel, mimeType: normalizeImageMime(`image/${imageOutputFormat || "png"}`), size: buffer.length, mode: "generation" };
+  return { model: usedModel || imageModel, mimeType: normalizeImageMime(transparent ? "image/png" : `image/${imageOutputFormat || "png"}`), size: buffer.length, mode: "generation" };
 }
 
-async function editImageWithReference(prompt: string, aspect: string, outPath: string, references: ReferenceImage[], qualityOverride = "") {
+async function editImageWithReference(prompt: string, aspect: string, outPath: string, references: ReferenceImage[], qualityOverride = "", transparent = false) {
   const { baseUrl, apiKey } = openAIConfig();
   const source = references[0];
   if (!source?.buffer?.length) throw new Error("reference image is empty");
@@ -207,8 +211,13 @@ async function editImageWithReference(prompt: string, aspect: string, outPath: s
       form.append("size", imageSize(aspect));
       form.append("n", "1");
       if (qualityOverride || imageQuality) form.append("quality", qualityOverride || imageQuality);
-      if (imageOutputFormat) form.append("output_format", imageOutputFormat);
-      if (imageOutputCompression > 0) form.append("output_compression", String(imageOutputCompression));
+      if (transparent) {
+        form.append("background", "transparent");
+        form.append("output_format", "png");
+      } else {
+        if (imageOutputFormat) form.append("output_format", imageOutputFormat);
+        if (imageOutputCompression > 0) form.append("output_compression", String(imageOutputCompression));
+      }
       form.append("image", new Blob([new Uint8Array(source.buffer)], { type: source.mimeType || "image/png" }), source.filename || "reference.png");
       payload = await fetchJson(`${baseUrl}/images/edits`, {
         method: "POST",
@@ -230,7 +239,7 @@ async function editImageWithReference(prompt: string, aspect: string, outPath: s
   const buffer = await imagePayloadToBuffer(item);
   await mkdir(dirname(outPath), { recursive: true });
   await writeFile(outPath, buffer);
-  return { model: usedModel || imageModel, mimeType: normalizeImageMime(`image/${imageOutputFormat || "png"}`), size: buffer.length, mode: "edit" };
+  return { model: usedModel || imageModel, mimeType: normalizeImageMime(transparent ? "image/png" : `image/${imageOutputFormat || "png"}`), size: buffer.length, mode: "edit" };
 }
 
 function decodeImageBase64(value: unknown) {
@@ -370,6 +379,7 @@ export async function createStandaloneImages(payload: Record<string, unknown>, r
   const qualityOverride = ["low", "medium", "high"].includes(String(payload.quality || "").toLowerCase())
     ? String(payload.quality).toLowerCase()
     : "";
+  const transparent = String(payload.background || "") === "transparent";
   const imageId = `img-${randomUUID()}`;
   const runDir = join(imageOutputDir, imageId);
   await mkdir(runDir, { recursive: true });
@@ -381,7 +391,7 @@ export async function createStandaloneImages(payload: Record<string, unknown>, r
     Array.from({ length: count }, (_, index) => index + 1),
     Math.min(count, imageGenerationConcurrency),
     async (index) => {
-      const filename = `image-${String(index).padStart(2, "0")}.${imageExtension()}`;
+      const filename = `image-${String(index).padStart(2, "0")}.${transparent ? "png" : imageExtension()}`;
       const outPath = join(runDir, filename);
       const imagePrompt = standaloneImagePrompt(payload, index, count);
       let referenceMode = references.length ? "edit" : "none";
@@ -389,14 +399,14 @@ export async function createStandaloneImages(payload: Record<string, unknown>, r
         let result: { model: string; mimeType: string; size: number; mode: string };
         if (references.length) {
           try {
-            result = await editImageWithReference(imagePrompt, aspect, outPath, references, qualityOverride);
+            result = await editImageWithReference(imagePrompt, aspect, outPath, references, qualityOverride, transparent);
           } catch (error) {
             referenceMode = "fallback_generation";
             errors.push(`reference edit fallback for image-${index}: ${error instanceof Error ? error.message : String(error)}`);
-            result = await generateImage(`${imagePrompt}\nUse the uploaded reference only as conceptual direction if unavailable to the model.`, aspect, outPath, qualityOverride);
+            result = await generateImage(`${imagePrompt}\nUse the uploaded reference only as conceptual direction if unavailable to the model.`, aspect, outPath, qualityOverride, transparent);
           }
         } else {
-          result = await generateImage(imagePrompt, aspect, outPath, qualityOverride);
+          result = await generateImage(imagePrompt, aspect, outPath, qualityOverride, transparent);
         }
         const written = await stat(outPath);
         const publicUrl = imagePublicUrl(request, imageId, filename);
