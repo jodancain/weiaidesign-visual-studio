@@ -62,7 +62,7 @@ export async function POST(request: Request) {
   } catch (error) {
     const fallback = Boolean((error as { fallback?: boolean })?.fallback);
     return jsonCors(
-      { detail: error instanceof Error ? error.message : String(error), fallback: fallback || true },
+      { detail: error instanceof Error ? error.message : String(error), fallback },
       { status: 502 },
     );
   }
