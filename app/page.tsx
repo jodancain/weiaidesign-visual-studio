@@ -205,6 +205,70 @@ async function srcToDataUrl(src: string): Promise<string> {
   });
 }
 
+/** OCR line with optional normalized bbox [x0,y0,x1,y1] in 0–1000. */
+type FontLineEdit = { from: string; to: string; box?: [number, number, number, number] };
+
+/** Expand normalized 0–1000 box by 8% of its size on each side, clamp to [0,1000]. */
+function expandBoxNorm(box: [number, number, number, number], padRatio = 0.08): [number, number, number, number] {
+  const [x0, y0, x1, y1] = box;
+  const padX = Math.max(4, (x1 - x0) * padRatio);
+  const padY = Math.max(4, (y1 - y0) * padRatio);
+  return [
+    Math.max(0, Math.min(1000, x0 - padX)),
+    Math.max(0, Math.min(1000, y0 - padY)),
+    Math.max(0, Math.min(1000, x1 + padX)),
+    Math.max(0, Math.min(1000, y1 + padY)),
+  ];
+}
+
+/** Paint canvas: opaque white rects over changed-line bboxes (for composite + OpenAI mask). */
+function paintCanvasFromBoxes(w: number, h: number, boxes: Array<[number, number, number, number]>) {
+  const paint = document.createElement("canvas");
+  paint.width = w;
+  paint.height = h;
+  const ctx = paint.getContext("2d");
+  if (!ctx) throw new Error("canvas unavailable");
+  for (const raw of boxes) {
+    const [x0, y0, x1, y1] = expandBoxNorm(raw);
+    const px = (x0 / 1000) * w;
+    const py = (y0 / 1000) * h;
+    const pw = ((x1 - x0) / 1000) * w;
+    const ph = ((y1 - y0) / 1000) * h;
+    ctx.fillStyle = "rgba(255,0,0,1)";
+    ctx.fillRect(px, py, Math.max(1, pw), Math.max(1, ph));
+  }
+  return paint;
+}
+
+function inpaintSizeFor(w: number, h: number) {
+  if (w === h) return "1024x1024";
+  if (w > h) return "1536x1024";
+  return "1024x1536";
+}
+
+/** mask 外取原图、mask 内取重绘结果，边缘羽化（paint 上非透明区 = 重绘区） */
+function compositeByMask(img: HTMLImageElement, result: HTMLImageElement, paint: HTMLCanvasElement) {
+  const w = paint.width;
+  const h = paint.height;
+  const comp = document.createElement("canvas");
+  comp.width = w;
+  comp.height = h;
+  const ctx = comp.getContext("2d");
+  if (!ctx) throw new Error("canvas unavailable");
+  ctx.drawImage(img, 0, 0, w, h);
+  const layer = document.createElement("canvas");
+  layer.width = w;
+  layer.height = h;
+  const lctx = layer.getContext("2d");
+  if (!lctx) throw new Error("canvas unavailable");
+  lctx.drawImage(result, 0, 0, w, h);
+  lctx.globalCompositeOperation = "destination-in";
+  lctx.filter = "blur(6px)";
+  lctx.drawImage(paint, 0, 0, w, h);
+  ctx.drawImage(layer, 0, 0);
+  return comp.toDataURL("image/png");
+}
+
 /* 纯色背景转透明：四角种子 flood fill，只抠与边缘连通的背景（relay 不支持原生 alpha，白底生成 + 客户端抠图） */
 async function solidBackgroundToAlpha(src: string): Promise<string> {
   const dataUrl = src.startsWith("data:") ? src : await srcToDataUrl(src);
@@ -414,7 +478,7 @@ export default function Home() {
   const [brushColor, setBrushColor] = useState("black");
   const [brushSize, setBrushSize] = useState("m");
   const [fontDialog, setFontDialog] = useState<{ open: boolean; src?: string; preview?: string }>({ open: false });
-  const [fontLines, setFontLines] = useState<Array<{ from: string; to: string }> | null>(null);
+  const [fontLines, setFontLines] = useState<FontLineEdit[] | null>(null);
   const [fontOcr, setFontOcr] = useState<"idle" | "loading" | "done" | "failed">("idle");
   const [fontText, setFontText] = useState("");
   const [fontNote, setFontNote] = useState("");
@@ -818,7 +882,7 @@ export default function Home() {
 
   /* 长耗时图片操作走异步任务：提交秒回 + 轮询（每个 HTTP 请求都短，绕开 Cloudflare 100s/524 超时） */
   const apiAsyncImages = useCallback(
-    async (path: string, body: Record<string, unknown>) => {
+    async <T = ImagesResult>(path: string, body: Record<string, unknown>) => {
       const submitted = await api<{ job_id?: string }>(path, {
         method: "POST",
         body: JSON.stringify({ ...body, async: true }),
@@ -827,9 +891,9 @@ export default function Home() {
       if (!jobId) throw new Error("任务提交失败：无 job id");
       for (let attempt = 0; attempt < 200; attempt += 1) {
         await new Promise((resolve) => setTimeout(resolve, 3000));
-        const status = await api<{ state?: string; result?: ImagesResult; error?: string }>(`/image-jobs/${jobId}`);
-        const data = (status.data || {}) as { state?: string; result?: ImagesResult; error?: string };
-        if (data.state === "done") return { data: data.result } as { data?: ImagesResult };
+        const status = await api<{ state?: string; result?: T; error?: string }>(`/image-jobs/${jobId}`);
+        const data = (status.data || {}) as { state?: string; result?: T; error?: string };
+        if (data.state === "done") return { data: data.result } as { data?: T };
         if (data.state === "failed") throw new Error(data.error || "生成失败");
       }
       throw new Error("生成超时（10 分钟），请稍后在历史里重试");
@@ -940,18 +1004,96 @@ export default function Home() {
   );
 
   const doFontRestyle = useCallback(
-    async (params: { src: string; newText: string; note?: string; lineEdits?: Array<{ from: string; to: string }> }) => {
+    async (params: {
+      src: string;
+      newText: string;
+      note?: string;
+      lineEdits?: FontLineEdit[];
+      /** When true and every edited line has a bbox, use mask-local inpaint (partial line edit). */
+      useLocalMask?: boolean;
+    }) => {
       const imageB64 = await srcToDataUrl(params.src);
       const placeholderId = createPlaceholder("同风格改字");
       try {
+        const edits = params.lineEdits || [];
+        const boxedEdits = edits.filter(
+          (line) => line.box && line.box.length === 4 && line.to.trim() && line.to.trim() !== line.from.trim(),
+        );
+        // Partial-line + bbox → mask inpaint (non-text area stays pixel-identical after composite)
+        if (params.useLocalMask && boxedEdits.length && boxedEdits.length === edits.length) {
+          const img = await loadImage(imageB64);
+          const w = img.naturalWidth || img.width;
+          const h = img.naturalHeight || img.height;
+          const paint = paintCanvasFromBoxes(
+            w,
+            h,
+            boxedEdits.map((line) => line.box as [number, number, number, number]),
+          );
+          const base = document.createElement("canvas");
+          base.width = w;
+          base.height = h;
+          base.getContext("2d")?.drawImage(img, 0, 0, w, h);
+          const baseB64 = base.toDataURL("image/png");
+          // OpenAI mask: transparent = repaint
+          const openaiMask = document.createElement("canvas");
+          openaiMask.width = w;
+          openaiMask.height = h;
+          const mctx = openaiMask.getContext("2d");
+          if (!mctx) throw new Error("canvas unavailable");
+          mctx.fillStyle = "#000";
+          mctx.fillRect(0, 0, w, h);
+          mctx.globalCompositeOperation = "destination-out";
+          mctx.drawImage(paint, 0, 0);
+          const maskB64 = openaiMask.toDataURL("image/png");
+          const instructionParts = boxedEdits.map(
+            (line) => `把此区域内的文字「${line.from}」替换为「${line.to}」`,
+          );
+          const instruction = [
+            instructionParts.join("；") + "。",
+            "逐笔画沿用原字体设计（骨架、笔画粗细、材质、颜色、描边、投影）。",
+            "区域外保持原样，不得改变背景与未遮罩区域的任何像素。",
+            params.note ? `补充：${params.note}` : "",
+          ]
+            .filter(Boolean)
+            .join("");
+
+          let resultImg: HTMLImageElement | null = null;
+          try {
+            const payload = await apiAsyncImages<{ image_b64?: string }>("/inpaint", {
+              image_b64: baseB64,
+              mask_b64: maskB64,
+              instruction,
+              size: inpaintSizeFor(w, h),
+            });
+            const b64 = payload.data?.image_b64;
+            if (b64) resultImg = await loadImage(b64);
+          } catch {
+            /* fall through to whole-image path */
+          }
+          if (resultImg) {
+            const composed = compositeByMask(img, resultImg, paint);
+            removePlaceholder(placeholderId);
+            await placeImageOnCanvas(composed, `font-local-${boxedEdits.map((l) => l.to).join("-").slice(0, 40)}`);
+            pushHistory({
+              kind: "font-restyle-local",
+              prompt: boxedEdits.map((l) => `${l.from}→${l.to}`).join("、"),
+              outputs: [{ url: composed }],
+            });
+            return [composed];
+          }
+          // inpaint failed → fall through to full-image font-restyle
+        }
+
         const payload = await apiAsyncImages("/font-restyle", {
-            image_b64: imageB64,
-            new_text: params.newText,
-            style_note: params.note || "",
-            ...(params.lineEdits?.length ? { line_edits: params.lineEdits } : {}),
-            aspect_ratio: aspect,
-            n: 1,
-          });
+          image_b64: imageB64,
+          new_text: params.newText,
+          style_note: params.note || "",
+          ...(edits.length
+            ? { line_edits: edits.map(({ from, to }) => ({ from, to })) }
+            : {}),
+          aspect_ratio: aspect,
+          n: 1,
+        });
         const urls = (payload.data?.images || []).map((item) => String(item.public_url || "")).filter(Boolean);
         removePlaceholder(placeholderId);
         for (const url of urls) await placeImageOnCanvas(url, `font-${params.newText || "line-edit"}`);
@@ -1067,29 +1209,6 @@ export default function Home() {
     [maskBrush, redrawMaskView],
   );
 
-  /* mask 外取原图、mask 内取重绘结果，边缘羽化 */
-  const compositeByMask = useCallback((img: HTMLImageElement, result: HTMLImageElement, paint: HTMLCanvasElement) => {
-    const w = paint.width;
-    const h = paint.height;
-    const comp = document.createElement("canvas");
-    comp.width = w;
-    comp.height = h;
-    const ctx = comp.getContext("2d");
-    if (!ctx) throw new Error("canvas unavailable");
-    ctx.drawImage(img, 0, 0, w, h);
-    const layer = document.createElement("canvas");
-    layer.width = w;
-    layer.height = h;
-    const lctx = layer.getContext("2d");
-    if (!lctx) throw new Error("canvas unavailable");
-    lctx.drawImage(result, 0, 0, w, h);
-    lctx.globalCompositeOperation = "destination-in";
-    lctx.filter = "blur(6px)";
-    lctx.drawImage(paint, 0, 0, w, h);
-    ctx.drawImage(layer, 0, 0);
-    return comp.toDataURL("image/png");
-  }, []);
-
   const doMaskInpaint = useCallback(
     async (instruction: string) => {
       const img = maskImgRef.current;
@@ -1119,11 +1238,13 @@ export default function Home() {
       let resultImg: HTMLImageElement | null = null;
       let engine = "images/edits";
       try {
-        const payload = await api<{ image_b64?: string }>("/inpaint", {
-          method: "POST",
-          body: JSON.stringify({ image_b64: imageB64, mask_b64: maskB64, instruction: finalInstruction, size: "1024x1024" }),
+        const payload = await apiAsyncImages<{ image_b64?: string }>("/inpaint", {
+          image_b64: imageB64,
+          mask_b64: maskB64,
+          instruction: finalInstruction,
+          size: "1024x1024",
         });
-        const b64 = (payload.data as { image_b64?: string } | undefined)?.image_b64;
+        const b64 = payload.data?.image_b64;
         if (b64) resultImg = await loadImage(b64);
       } catch {
         /* relay 不支持 edits → 降级参考图重绘 */
@@ -1155,7 +1276,7 @@ export default function Home() {
       pushHistory({ kind: `inpaint(${engine})`, prompt: finalInstruction, outputs: [] });
       return composed;
     },
-    [api, apiAsyncImages, compositeByMask, placeImageOnCanvas, pushHistory],
+    [api, apiAsyncImages, placeImageOnCanvas, pushHistory],
   );
 
   /* ---------- 可视化拆层：矢量化按颜色分组 → 每层独立可拖拽 shape ---------- */
@@ -1468,13 +1589,36 @@ export default function Home() {
           /* keep original src */
         }
         try {
-          const payload = await api<{ lines?: string[] }>("/ocr-lines", {
+          const payload = await api<{
+            lines?: string[];
+            line_boxes?: Array<{ text?: string; box?: number[] }>;
+          }>("/ocr-lines", {
             method: "POST",
             body: JSON.stringify({ image_b64: preview.startsWith("data:") ? preview : await srcToDataUrl(src) }),
           });
-          const lines = ((payload.data as { lines?: string[] } | undefined)?.lines || []).filter(Boolean);
-          if (lines.length) {
-            setFontLines(lines.map((line) => ({ from: line, to: line })));
+          const data = (payload.data || {}) as {
+            lines?: string[];
+            line_boxes?: Array<{ text?: string; box?: number[] }>;
+          };
+          const boxes = Array.isArray(data.line_boxes) ? data.line_boxes : [];
+          const fromBoxes: FontLineEdit[] = [];
+          for (const item of boxes) {
+            const text = String(item.text || "").trim();
+            if (!text) continue;
+            const b = item.box;
+            const entry: FontLineEdit = { from: text, to: text };
+            if (Array.isArray(b) && b.length >= 4) {
+              entry.box = [Number(b[0]), Number(b[1]), Number(b[2]), Number(b[3])];
+            }
+            fromBoxes.push(entry);
+          }
+          const lines = (data.lines || []).filter(Boolean);
+          const mapped: FontLineEdit[] =
+            fromBoxes.length > 0
+              ? fromBoxes
+              : lines.map((line) => ({ from: line, to: line }));
+          if (mapped.length) {
+            setFontLines(mapped);
             setFontOcr("done");
           } else {
             setFontOcr("failed");
@@ -1489,14 +1633,27 @@ export default function Home() {
 
   const runFontRestyle = useCallback(() => {
     const src = fontDialog.src;
-    const edits = (fontLines || []).filter((line) => line.to.trim() && line.to.trim() !== line.from.trim());
+    const allLines = fontLines || [];
+    const edits = allLines.filter((line) => line.to.trim() && line.to.trim() !== line.from.trim());
     const text = fontText.trim();
     if (!src || (!text && !edits.length)) return;
     setFontDialog({ open: false });
+    // Partial line edits (not whole-image replace) + every edit has bbox → local mask path
+    const isPartialLineEdit =
+      edits.length > 0 &&
+      !text &&
+      allLines.length > edits.length &&
+      edits.every((line) => line.box && line.box.length === 4);
     const summary = edits.length ? edits.map((line) => `“${line.from}”→“${line.to}”`).join("、") : `“${text}”`;
     void runAction("同风格改字", async () => {
-      pushMessage({ role: "user", text: `同风格改字 → ${summary}` });
-      const urls = await doFontRestyle({ src, newText: text, note: fontNote, lineEdits: edits });
+      pushMessage({ role: "user", text: `同风格改字 → ${summary}${isPartialLineEdit ? "（局部 mask）" : ""}` });
+      const urls = await doFontRestyle({
+        src,
+        newText: text,
+        note: fontNote,
+        lineEdits: edits,
+        useLocalMask: isPartialLineEdit,
+      });
       pushMessage({ role: "assistant", kind: "同风格改字", images: urls });
       setContextChips(urls.slice(0, 2));
     });

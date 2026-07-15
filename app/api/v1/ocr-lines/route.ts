@@ -5,10 +5,49 @@ export const dynamic = "force-dynamic";
 
 const env = process.env;
 
+type OcrLine = { text: string; box?: [number, number, number, number] };
+
+function clamp1000(n: number) {
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(1000, Math.round(n)));
+}
+
+/** Parse vision model output: prefer [{text, box}], fall back to plain string[]. */
+function parseOcrLines(raw: unknown[]): OcrLine[] {
+  const lines: OcrLine[] = [];
+  for (const item of raw) {
+    if (typeof item === "string") {
+      const text = item.trim();
+      if (text) lines.push({ text });
+      continue;
+    }
+    if (!item || typeof item !== "object") continue;
+    const record = item as { text?: unknown; box?: unknown; bbox?: unknown };
+    const text = String(record.text ?? "").trim();
+    if (!text) continue;
+    const boxRaw = Array.isArray(record.box) ? record.box : Array.isArray(record.bbox) ? record.bbox : null;
+    if (boxRaw && boxRaw.length >= 4) {
+      const box: [number, number, number, number] = [
+        clamp1000(Number(boxRaw[0])),
+        clamp1000(Number(boxRaw[1])),
+        clamp1000(Number(boxRaw[2])),
+        clamp1000(Number(boxRaw[3])),
+      ];
+      // Ensure x0<=x1, y0<=y1
+      if (box[0] > box[2]) [box[0], box[2]] = [box[2], box[0]];
+      if (box[1] > box[3]) [box[1], box[3]] = [box[3], box[1]];
+      lines.push({ text, box });
+    } else {
+      lines.push({ text });
+    }
+  }
+  return lines;
+}
+
 // Detect the text lines inside a lettering/design image via the relay's
 // vision-capable chat model, so the client can offer per-line editing
-// (Lovart "Edit Text" style). Falls back gracefully client-side when the
-// model lacks vision support.
+// (Lovart "Edit Text" style). Returns optional normalized bboxes for
+// mask-local font restyle. Falls back to plain string lines when needed.
 export async function POST(request: Request) {
   const authError = requireVideoToken(request);
   if (authError) return authError;
@@ -31,6 +70,14 @@ export async function POST(request: Request) {
   const image = String(payload.image_b64 || "");
   if (!image.startsWith("data:image/")) return jsonCors({ detail: "image_b64 (data URL) is required" }, { status: 400 });
 
+  const ocrPrompt = [
+    "识别这张设计图里的所有文字，按视觉行（从上到下）拆分。",
+    "只输出 JSON 数组，每项为对象：{\"text\":\"该行文字\",\"box\":[x0,y0,x1,y1]}。",
+    "box 为该行文字的轴对齐包围盒，坐标归一化到 0–1000（相对整图宽高，左上为原点，x0<x1，y0<y1）。",
+    "示例：[{\"text\":\"SLOW DOWN\",\"box\":[120,280,880,420]},{\"text\":\"Enjoy Life!\",\"box\":[200,480,800,620]}]。",
+    "不要输出任何其他内容。若无法给出坐标，可退回纯字符串数组 [\"行1\",\"行2\"]。",
+  ].join("");
+
   const errors: string[] = [];
   for (const upstream of upstreams) {
     const controller = new AbortController();
@@ -45,10 +92,7 @@ export async function POST(request: Request) {
             {
               role: "user",
               content: [
-                {
-                  type: "text",
-                  text: '识别这张设计图里的所有文字，按视觉行（从上到下）拆分，每行一个字符串。只输出 JSON 数组，例如 ["99.9%","angel","(nobody\'s perfect)"]。不要输出任何其他内容。',
-                },
+                { type: "text", text: ocrPrompt },
                 { type: "image_url", image_url: { url: image } },
               ],
             },
@@ -69,8 +113,32 @@ export async function POST(request: Request) {
         errors.push(`${upstream.model}: no JSON array`);
         continue;
       }
-      const lines = (JSON.parse(match[0]) as unknown[]).map((item) => String(item)).filter((item) => item.trim());
-      return jsonCors({ status: 200, message: "success", data: { lines, model: upstream.model } });
+      let parsed: unknown[];
+      try {
+        parsed = JSON.parse(match[0]) as unknown[];
+      } catch {
+        errors.push(`${upstream.model}: invalid JSON array`);
+        continue;
+      }
+      if (!Array.isArray(parsed)) {
+        errors.push(`${upstream.model}: not an array`);
+        continue;
+      }
+      const ocrLines = parseOcrLines(parsed);
+      if (!ocrLines.length) {
+        errors.push(`${upstream.model}: empty lines`);
+        continue;
+      }
+      // Back-compat: lines is string[]; line_boxes carries optional bboxes
+      const lines = ocrLines.map((item) => item.text);
+      const line_boxes = ocrLines.map((item) =>
+        item.box ? { text: item.text, box: item.box } : { text: item.text },
+      );
+      return jsonCors({
+        status: 200,
+        message: "success",
+        data: { lines, line_boxes, model: upstream.model },
+      });
     } catch (error) {
       errors.push(`${upstream.model}: ${error instanceof Error ? error.message : String(error)}`);
     } finally {

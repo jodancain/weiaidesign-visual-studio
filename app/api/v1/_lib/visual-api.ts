@@ -355,7 +355,8 @@ export async function tryImageEdits(params: {
 }): Promise<ImageEditsResult> {
   const { baseUrl, apiKey } = openAIConfig();
   const errors: string[] = [];
-  for (const model of imageGenerationModels) {
+
+  async function postEdits(model: string, withFidelity: boolean) {
     const form = new FormData();
     form.append("model", model);
     form.append("image", new Blob([new Uint8Array(params.image)], { type: "image/png" }), "image.png");
@@ -363,7 +364,7 @@ export async function tryImageEdits(params: {
     form.append("prompt", params.prompt);
     form.append("size", params.size);
     form.append("n", "1");
-    form.append("input_fidelity", "high");
+    if (withFidelity) form.append("input_fidelity", "high");
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), imageTimeoutSeconds * 1000);
     try {
@@ -374,6 +375,26 @@ export async function tryImageEdits(params: {
         signal: controller.signal,
       });
       const text = await response.text();
+      return { response, text };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  for (const model of imageGenerationModels) {
+    try {
+      let response: Response;
+      let text: string;
+      try {
+        ({ response, text } = await postEdits(model, true));
+        if (!response.ok && /input_fidelity/i.test(text)) {
+          ({ response, text } = await postEdits(model, false));
+        }
+      } catch (fidelityError) {
+        const message = fidelityError instanceof Error ? fidelityError.message : String(fidelityError);
+        if (!/input_fidelity/i.test(message)) throw fidelityError;
+        ({ response, text } = await postEdits(model, false));
+      }
       if (!response.ok) {
         errors.push(`${model}: HTTP ${response.status} ${text.slice(0, 160)}`);
         continue;
@@ -389,8 +410,6 @@ export async function tryImageEdits(params: {
       errors.push(`${model}: empty data`);
     } catch (error) {
       errors.push(`${model}: ${error instanceof Error ? error.message : String(error)}`);
-    } finally {
-      clearTimeout(timer);
     }
   }
   return { ok: false, detail: errors.join(" | ") };
