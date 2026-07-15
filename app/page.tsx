@@ -41,6 +41,7 @@ import {
 import {
   AssetRecordType,
   DefaultColorStyle,
+  DefaultFontStyle,
   DefaultSizeStyle,
   Tldraw,
   createShapeId,
@@ -59,6 +60,78 @@ import "tldraw/tldraw.css";
 
 const API_BASE = "/api/v1";
 const AGENT_MAX_ROUNDS = 6;
+
+/** Chinese OFL fonts (subset woff2) mapped onto all 16 tldraw font slots. */
+const FONT_DRAW_URL = "/fonts/lxgw-wenkai.woff2";
+const FONT_SANS_URL = "/fonts/source-han-sans.woff2";
+const FONT_SERIF_URL = "/fonts/source-han-serif.woff2";
+const FONT_MONO_URL = "/fonts/smiley-sans.woff2";
+const FONT_ASSET_URLS = {
+  fonts: {
+    tldraw_draw: FONT_DRAW_URL,
+    tldraw_draw_bold: FONT_DRAW_URL,
+    tldraw_draw_italic: FONT_DRAW_URL,
+    tldraw_draw_italic_bold: FONT_DRAW_URL,
+    tldraw_sans: FONT_SANS_URL,
+    tldraw_sans_bold: FONT_SANS_URL,
+    tldraw_sans_italic: FONT_SANS_URL,
+    tldraw_sans_italic_bold: FONT_SANS_URL,
+    tldraw_serif: FONT_SERIF_URL,
+    tldraw_serif_bold: FONT_SERIF_URL,
+    tldraw_serif_italic: FONT_SERIF_URL,
+    tldraw_serif_italic_bold: FONT_SERIF_URL,
+    tldraw_mono: FONT_MONO_URL,
+    tldraw_mono_bold: FONT_MONO_URL,
+    tldraw_mono_italic: FONT_MONO_URL,
+    tldraw_mono_italic_bold: FONT_MONO_URL,
+  },
+} as const;
+
+type BrandKit = {
+  name: string;
+  palette: string[];
+  styleWords: string;
+  logoRef: string;
+  fontHint: string;
+};
+
+const EMPTY_BRAND_KIT: BrandKit = { name: "", palette: [], styleWords: "", logoRef: "", fontHint: "" };
+
+function brandKitToPromptText(kit: BrandKit): string {
+  const parts: string[] = [];
+  if (kit.name.trim()) parts.push(`品牌名：${kit.name.trim()}`);
+  if (kit.palette.length) parts.push(`色板：${kit.palette.join(", ")}`);
+  if (kit.styleWords.trim()) parts.push(`风格词：${kit.styleWords.trim()}`);
+  if (kit.fontHint.trim()) parts.push(`字体气质：${kit.fontHint.trim()}`);
+  return parts.join("；");
+}
+
+async function resizeImageDataUrl(src: string, maxEdge = 512): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxEdge / Math.max(img.naturalWidth || 1, img.naturalHeight || 1));
+      const w = Math.max(1, Math.round((img.naturalWidth || 1) * scale));
+      const h = Math.max(1, Math.round((img.naturalHeight || 1) * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        resolve(src);
+        return;
+      }
+      ctx.drawImage(img, 0, 0, w, h);
+      try {
+        resolve(canvas.toDataURL("image/jpeg", 0.85));
+      } catch {
+        resolve(src);
+      }
+    };
+    img.onerror = () => reject(new Error("logo resize failed"));
+    img.src = src;
+  });
+}
 
 const stylePresets = [
   "极简高级留白",
@@ -425,10 +498,11 @@ export default function Home() {
   const [style, setStyle] = useState(stylePresets[0]);
   const [aspect, setAspect] = useState("1:1");
   const [count, setCount] = useState(2);
-  const [brand, setBrand] = useState("");
+  const [brandKit, setBrandKit] = useState<BrandKit>(EMPTY_BRAND_KIT);
   const [audience, setAudience] = useState("");
   const [negativePrompt, setNegativePrompt] = useState("");
   const [references, setReferences] = useState<string[]>([]);
+  const brandText = useMemo(() => brandKitToPromptText(brandKit), [brandKit]);
 
   const [busy, setBusy] = useState(false);
   const [busyLabel, setBusyLabel] = useState("");
@@ -477,6 +551,9 @@ export default function Home() {
   const [contextMenu, setContextMenu] = useState<{ open: boolean; x: number; y: number }>({ open: false, x: 0, y: 0 });
   const [brushColor, setBrushColor] = useState("black");
   const [brushSize, setBrushSize] = useState("m");
+  const [textFont, setTextFont] = useState<"draw" | "sans" | "serif" | "mono">("draw");
+  const [textColor, setTextColor] = useState("black");
+  const [textSize, setTextSize] = useState("m");
   const [fontDialog, setFontDialog] = useState<{ open: boolean; src?: string; preview?: string }>({ open: false });
   const [fontLines, setFontLines] = useState<FontLineEdit[] | null>(null);
   const [fontOcr, setFontOcr] = useState<"idle" | "loading" | "done" | "failed">("idle");
@@ -513,6 +590,20 @@ export default function Home() {
       setHistory([]);
     }
     setProjectName(localStorage.getItem("lovartProjectName") || "Untitled");
+    try {
+      const savedKit = JSON.parse(localStorage.getItem("lovartBrandKit") || "null") as BrandKit | null;
+      if (savedKit && typeof savedKit === "object") {
+        setBrandKit({
+          name: String(savedKit.name || ""),
+          palette: Array.isArray(savedKit.palette) ? savedKit.palette.map(String).filter(Boolean).slice(0, 6) : [],
+          styleWords: String(savedKit.styleWords || ""),
+          logoRef: String(savedKit.logoRef || ""),
+          fontHint: String(savedKit.fontHint || ""),
+        });
+      }
+    } catch {
+      /* ignore corrupt brand kit */
+    }
     try {
       const saved = JSON.parse(localStorage.getItem("lovartSessions") || "[]") as AgentSession[];
       setPastSessions(saved);
@@ -827,6 +918,78 @@ export default function Home() {
     [editor],
   );
 
+  const applyTextFont = useCallback(
+    (font: "draw" | "sans" | "serif" | "mono") => {
+      if (!editor) return;
+      setTextFont(font);
+      editor.setStyleForNextShapes(DefaultFontStyle, font);
+      editor.setStyleForSelectedShapes(DefaultFontStyle, font);
+    },
+    [editor],
+  );
+
+  const applyTextColor = useCallback(
+    (color: string) => {
+      if (!editor) return;
+      setTextColor(color);
+      editor.setStyleForNextShapes(DefaultColorStyle, color as never);
+      editor.setStyleForSelectedShapes(DefaultColorStyle, color as never);
+    },
+    [editor],
+  );
+
+  const applyTextSize = useCallback(
+    (size: string) => {
+      if (!editor) return;
+      setTextSize(size);
+      editor.setStyleForNextShapes(DefaultSizeStyle, size as never);
+      editor.setStyleForSelectedShapes(DefaultSizeStyle, size as never);
+    },
+    [editor],
+  );
+
+  const persistBrandKit = useCallback((next: BrandKit) => {
+    setBrandKit(next);
+    try {
+      localStorage.setItem("lovartBrandKit", JSON.stringify(next));
+    } catch {
+      /* quota / private mode — keep in-memory only */
+    }
+  }, []);
+
+  const onBrandLogoUpload = useCallback(
+    async (file: File | null) => {
+      if (!file) return;
+      const reader = new FileReader();
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.onerror = () => reject(new Error("logo read failed"));
+        reader.readAsDataURL(file);
+      });
+      let logoRef = dataUrl;
+      try {
+        logoRef = await resizeImageDataUrl(dataUrl, 512);
+      } catch {
+        logoRef = dataUrl;
+      }
+      const next = { ...brandKit, logoRef };
+      try {
+        localStorage.setItem("lovartBrandKit", JSON.stringify(next));
+        persistBrandKit(next);
+      } catch {
+        // retry without logo if quota exceeded
+        const without = { ...brandKit, logoRef: "" };
+        try {
+          localStorage.setItem("lovartBrandKit", JSON.stringify(without));
+        } catch {
+          /* ignore */
+        }
+        persistBrandKit({ ...brandKit, logoRef });
+      }
+    },
+    [brandKit, persistBrandKit],
+  );
+
   const dockTools: CanvasTool[] = [
     { id: "select", title: "选择", icon: <MousePointer2 size={19} />, tool: "select" },
     { id: "note", title: "标注", icon: <MapPin size={19} />, tool: "note" },
@@ -962,17 +1125,21 @@ export default function Home() {
       transparent?: boolean;
       imageModel?: string;
     }) => {
-      const referenceImages = await Promise.all((params.refs || []).slice(0, 6).map((src) => srcToDataUrl(src)));
+      const refs = [...(params.refs || [])];
+      // Direct gen: append brand logo as extra reference when present
+      if (params.kind !== "agent" && brandKit.logoRef) refs.push(brandKit.logoRef);
+      const referenceImages = await Promise.all(refs.slice(0, 6).map((src) => srcToDataUrl(src)));
       const placeholderId = createPlaceholder("生成图片");
       try {
         const effectivePrompt = params.transparent
           ? `${params.prompt}。背景为纯白色（#FFFFFF）纯净平涂，无阴影无渐变，主体边缘干净利落`
           : params.prompt;
+        const brandLine = params.kind === "agent" ? undefined : brandText || undefined;
         const payload = await apiAsyncImages("/images", {
             prompt: effectivePrompt,
             raw_prompt: params.kind === "agent" ? effectivePrompt : undefined,
             style: params.kind === "agent" ? undefined : style,
-            brand: params.kind === "agent" ? undefined : brand,
+            brand: brandLine,
             audience: params.kind === "agent" ? undefined : audience,
             negative_prompt: params.kind === "agent" ? undefined : negativePrompt,
             aspect_ratio: params.aspect || aspect,
@@ -1000,7 +1167,7 @@ export default function Home() {
         removePlaceholder(placeholderId);
       }
     },
-    [api, apiAsyncImages, aspect, audience, brand, count, createPlaceholder, negativePrompt, placeImageOnCanvas, pushHistory, removePlaceholder, style],
+    [apiAsyncImages, aspect, audience, brandKit.logoRef, brandText, count, createPlaceholder, negativePrompt, placeImageOnCanvas, pushHistory, removePlaceholder, style],
   );
 
   const doFontRestyle = useCallback(
@@ -1405,6 +1572,10 @@ export default function Home() {
             : /@Image-1\.5/i.test(lastUserText)
               ? "gpt-image-1.5"
               : undefined;
+          const agentRefs = [
+            ...(args.use_selected_reference ? sel.images.slice(0, 2) : []),
+            ...(brandKit.logoRef ? [brandKit.logoRef] : []),
+          ];
           const urls = await doGenerateImages({
             imageModel,
             prompt: String(args.prompt || ""),
@@ -1412,7 +1583,7 @@ export default function Home() {
             count: args.count ? Number(args.count) : 1,
             quality: args.quality ? String(args.quality) : undefined,
             transparent: Boolean(args.transparent_background),
-            refs: args.use_selected_reference ? sel.images.slice(0, 2) : undefined,
+            refs: agentRefs.length ? agentRefs : undefined,
             kind: "agent",
           });
           pushMessage({ role: "assistant", kind: "生成图片", images: urls });
@@ -1462,7 +1633,7 @@ export default function Home() {
           return `未知工具 ${name}`;
       }
     },
-    [doFontRestyle, doGenerateImages, doMaterialTransfer, exportAiFile, pushMessage, vectorizeSelected],
+    [brandKit.logoRef, doFontRestyle, doGenerateImages, doImageEdit, doMaterialTransfer, exportAiFile, pushMessage, vectorizeSelected],
   );
 
   const sendToAgent = useCallback(async () => {
@@ -1493,7 +1664,17 @@ export default function Home() {
               selectedImageCount: sel.images.length,
               canvasShapeCount: shapeCount,
               lastGeneratedImages: contextChips,
-              defaults: { style, aspect, count, brand, audience, negativePrompt },
+              defaults: { style, aspect, count, brand: brandText, audience, negativePrompt },
+              brand_kit:
+                brandKit.name || brandKit.palette.length || brandKit.styleWords || brandKit.fontHint || brandKit.logoRef
+                  ? {
+                      name: brandKit.name,
+                      palette: brandKit.palette,
+                      styleWords: brandKit.styleWords,
+                      fontHint: brandKit.fontHint,
+                      hasLogo: Boolean(brandKit.logoRef),
+                    }
+                  : undefined,
             },
           }),
         });
@@ -1535,7 +1716,7 @@ export default function Home() {
     } finally {
       setAgentBusy(false);
     }
-  }, [agentBusy, api, aspect, audience, brand, contextChips, count, execAgentTool, negativePrompt, prompt, pushMessage, shapeCount, style, token]);
+  }, [agentBusy, aspect, audience, brandKit, brandText, contextChips, count, execAgentTool, negativePrompt, prompt, pushMessage, shapeCount, style, token]);
 
   /* --------------------------- ui handlers -------------------------- */
 
@@ -1781,7 +1962,12 @@ export default function Home() {
           }}
         >
           <div className="tldrawHost">
-            <Tldraw hideUi persistenceKey="lovart-visual-canvas-v3" onMount={(instance) => setEditor(instance)} />
+            <Tldraw
+              hideUi
+              persistenceKey="lovart-visual-canvas-v3"
+              assetUrls={FONT_ASSET_URLS}
+              onMount={(instance) => setEditor(instance)}
+            />
           </div>
 
           {contextMenu.open ? (
@@ -1820,6 +2006,52 @@ export default function Home() {
                   type="button"
                   className={brushSize === size.id ? "brushSizeBtn on" : "brushSizeBtn"}
                   onClick={() => applyBrushSize(size.id)}
+                >
+                  {size.label}
+                </button>
+              ))}
+            </div>
+          ) : null}
+
+          {toolId === "text" ? (
+            <div className="brushBar textBar">
+              {(
+                [
+                  { id: "draw" as const, label: "文楷", family: "tldraw_draw" },
+                  { id: "sans" as const, label: "黑体", family: "tldraw_sans" },
+                  { id: "serif" as const, label: "宋体", family: "tldraw_serif" },
+                  { id: "mono" as const, label: "得意", family: "tldraw_mono" },
+                ] as const
+              ).map((font) => (
+                <button
+                  key={font.id}
+                  type="button"
+                  className={textFont === font.id ? "textFontBtn on" : "textFontBtn"}
+                  style={{ fontFamily: font.family }}
+                  title={font.label}
+                  onClick={() => applyTextFont(font.id)}
+                >
+                  {font.label}
+                </button>
+              ))}
+              <i className="dockDivider" />
+              {brushColors.map((color) => (
+                <button
+                  key={`text-${color}`}
+                  type="button"
+                  title={color}
+                  className={textColor === color ? "brushSwatch on" : "brushSwatch"}
+                  style={{ background: brushColorHex[color] }}
+                  onClick={() => applyTextColor(color)}
+                />
+              ))}
+              <i className="dockDivider" />
+              {brushSizes.map((size) => (
+                <button
+                  key={`text-size-${size.id}`}
+                  type="button"
+                  className={textSize === size.id ? "brushSizeBtn on" : "brushSizeBtn"}
+                  onClick={() => applyTextSize(size.id)}
                 >
                   {size.label}
                 </button>
@@ -2309,8 +2541,8 @@ export default function Home() {
                     @低画质 <em>low</em>
                   </button>
                   <div className="mentionGroup">Brand Kit</div>
-                  <button type="button" onClick={() => applyMention(brand ? `@品牌(${brand})` : "@品牌")}>
-                    @品牌规则 <em>{brand ? brand.slice(0, 14) : "Agent 面板可配置"}</em>
+                  <button type="button" onClick={() => applyMention(brandText ? `@品牌(${brandText})` : "@品牌")}>
+                    @品牌规则 <em>{brandText ? brandText.slice(0, 14) : "Agent 面板可配置"}</em>
                   </button>
                 </div>
               ) : null}
@@ -2381,10 +2613,81 @@ export default function Home() {
                           </button>
                         ))}
                       </div>
+                      <div className="inlineLabel">Brand Kit</div>
                       <label>
-                        品牌
-                        <input value={brand} onChange={(event) => setBrand(event.target.value)} placeholder="品牌关键词 / VI 规则" />
+                        品牌名
+                        <input
+                          value={brandKit.name}
+                          onChange={(event) => persistBrandKit({ ...brandKit, name: event.target.value })}
+                          placeholder="品牌名称"
+                        />
                       </label>
+                      <label>
+                        风格词
+                        <input
+                          value={brandKit.styleWords}
+                          onChange={(event) => persistBrandKit({ ...brandKit, styleWords: event.target.value })}
+                          placeholder="极简 / 国潮 / 科技感"
+                        />
+                      </label>
+                      <label>
+                        字体气质
+                        <input
+                          value={brandKit.fontHint}
+                          onChange={(event) => persistBrandKit({ ...brandKit, fontHint: event.target.value })}
+                          placeholder="衬线优雅 / 无衬线现代"
+                        />
+                      </label>
+                      <div className="inlineLabel">色板（≤6）</div>
+                      <div className="brandPalette">
+                        {brandKit.palette.map((hex, index) => (
+                          <button
+                            key={`${hex}-${index}`}
+                            type="button"
+                            className="brandSwatch"
+                            style={{ background: hex }}
+                            title={`${hex}（点击删除）`}
+                            onClick={() =>
+                              persistBrandKit({ ...brandKit, palette: brandKit.palette.filter((_, i) => i !== index) })
+                            }
+                          />
+                        ))}
+                        {brandKit.palette.length < 6 ? (
+                          <label className="brandAddColor" title="添加颜色">
+                            +
+                            <input
+                              type="color"
+                              value="#4263eb"
+                              onChange={(event) => {
+                                const hex = event.target.value.toUpperCase();
+                                if (brandKit.palette.includes(hex)) return;
+                                persistBrandKit({ ...brandKit, palette: [...brandKit.palette, hex].slice(0, 6) });
+                              }}
+                            />
+                          </label>
+                        ) : null}
+                      </div>
+                      <div className="inlineLabel">Logo 参考图</div>
+                      <div className="brandLogoRow">
+                        {brandKit.logoRef ? (
+                          <div className="referenceThumb">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={brandKit.logoRef} alt="brand logo" />
+                            <button type="button" onClick={() => persistBrandKit({ ...brandKit, logoRef: "" })}>
+                              <X size={10} />
+                            </button>
+                          </div>
+                        ) : null}
+                        <label className="brandLogoUpload">
+                          {brandKit.logoRef ? "更换" : "上传 Logo"}
+                          <input
+                            type="file"
+                            accept="image/*"
+                            hidden
+                            onChange={(event) => void onBrandLogoUpload(event.target.files?.[0] || null)}
+                          />
+                        </label>
+                      </div>
                       <label>
                         受众
                         <input value={audience} onChange={(event) => setAudience(event.target.value)} placeholder="目标人群" />
