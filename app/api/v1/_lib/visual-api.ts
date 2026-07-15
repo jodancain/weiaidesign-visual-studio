@@ -149,13 +149,20 @@ async function imagePayloadToBuffer(item: { b64_json?: string; url?: string }) {
   }
 }
 
-async function generateImage(prompt: string, aspect: string, outPath: string, qualityOverride = "", transparent = false) {
+function orderedImageModels(preferred = "") {
+  const clean = preferred.trim();
+  if (!clean) return imageGenerationModels;
+  return Array.from(new Set([clean, ...imageGenerationModels]));
+}
+
+async function generateImage(prompt: string, aspect: string, outPath: string, qualityOverride = "", transparent = false, preferredModel = "") {
   const { baseUrl, apiKey } = openAIConfig();
+  const models = orderedImageModels(preferredModel);
   let payload: { data?: Array<{ b64_json?: string; url?: string }> } | null = null;
   let lastError: unknown = null;
   let usedModel = "";
   for (let attempt = 1; attempt <= imageGenerationRetries; attempt += 1) {
-    const model = imageGenerationModels[Math.min(attempt - 1, imageGenerationModels.length - 1)] || imageModel;
+    const model = models[Math.min(attempt - 1, models.length - 1)] || imageModel;
     try {
       payload = await fetchJson(`${baseUrl}/images/generations`, {
         method: "POST",
@@ -195,15 +202,16 @@ async function generateImage(prompt: string, aspect: string, outPath: string, qu
   return { model: usedModel || imageModel, mimeType: normalizeImageMime(transparent ? "image/png" : `image/${imageOutputFormat || "png"}`), size: buffer.length, mode: "generation" };
 }
 
-async function editImageWithReference(prompt: string, aspect: string, outPath: string, references: ReferenceImage[], qualityOverride = "", transparent = false) {
+async function editImageWithReference(prompt: string, aspect: string, outPath: string, references: ReferenceImage[], qualityOverride = "", transparent = false, preferredModel = "") {
   const { baseUrl, apiKey } = openAIConfig();
   const source = references[0];
   if (!source?.buffer?.length) throw new Error("reference image is empty");
+  const models = orderedImageModels(preferredModel);
   let payload: { data?: Array<{ b64_json?: string; url?: string }> } | null = null;
   let lastError: unknown = null;
   let usedModel = "";
   for (let attempt = 1; attempt <= imageGenerationRetries; attempt += 1) {
-    const model = imageGenerationModels[Math.min(attempt - 1, imageGenerationModels.length - 1)] || imageModel;
+    const model = models[Math.min(attempt - 1, models.length - 1)] || imageModel;
     try {
       const form = new FormData();
       form.append("model", model);
@@ -379,6 +387,7 @@ export async function createStandaloneImages(payload: Record<string, unknown>, r
     ? String(payload.quality).toLowerCase()
     : "";
   const transparent = String(payload.background || "") === "transparent";
+  const preferredModel = String(payload.image_model || payload.model || "").trim();
   const imageId = `img-${randomUUID()}`;
   const runDir = join(imageOutputDir, imageId);
   await mkdir(runDir, { recursive: true });
@@ -398,14 +407,14 @@ export async function createStandaloneImages(payload: Record<string, unknown>, r
         let result: { model: string; mimeType: string; size: number; mode: string };
         if (references.length) {
           try {
-            result = await editImageWithReference(imagePrompt, aspect, outPath, references, qualityOverride, transparent);
+            result = await editImageWithReference(imagePrompt, aspect, outPath, references, qualityOverride, transparent, preferredModel);
           } catch (error) {
             referenceMode = "fallback_generation";
             errors.push(`reference edit fallback for image-${index}: ${error instanceof Error ? error.message : String(error)}`);
-            result = await generateImage(`${imagePrompt}\nUse the uploaded reference only as conceptual direction if unavailable to the model.`, aspect, outPath, qualityOverride, transparent);
+            result = await generateImage(`${imagePrompt}\nUse the uploaded reference only as conceptual direction if unavailable to the model.`, aspect, outPath, qualityOverride, transparent, preferredModel);
           }
         } else {
-          result = await generateImage(imagePrompt, aspect, outPath, qualityOverride, transparent);
+          result = await generateImage(imagePrompt, aspect, outPath, qualityOverride, transparent, preferredModel);
         }
         const written = await stat(outPath);
         const publicUrl = imagePublicUrl(request, imageId, filename);

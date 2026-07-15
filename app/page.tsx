@@ -875,6 +875,7 @@ export default function Home() {
       refs?: string[];
       kind?: string;
       transparent?: boolean;
+      imageModel?: string;
     }) => {
       const referenceImages = await Promise.all((params.refs || []).slice(0, 4).map((src) => srcToDataUrl(src)));
       const placeholderId = createPlaceholder("生成图片");
@@ -894,6 +895,7 @@ export default function Home() {
             aspect_ratio: params.aspect || aspect,
             n: Math.max(1, Math.min(4, params.count || count)),
             ...(params.quality ? { quality: params.quality } : {}),
+            ...(params.imageModel ? { image_model: params.imageModel } : {}),
             ...(params.transparent ? { background: "transparent" } : {}),
             ...(referenceImages.length ? { reference_images: referenceImages } : {}),
           }),
@@ -1308,7 +1310,17 @@ export default function Home() {
       const sel = selectionRef.current;
       switch (name) {
         case "generate_images": {
+          const lastUserText = String(
+            [...oaiHistoryRef.current].reverse().find((m) => m.role === "user" && typeof (m as { content?: unknown }).content === "string")
+              ?.["content" as never] || "",
+          );
+          const imageModel = /@Image-2\b/i.test(lastUserText)
+            ? "gpt-image-2"
+            : /@Image-1\.5/i.test(lastUserText)
+              ? "gpt-image-1.5"
+              : undefined;
           const urls = await doGenerateImages({
+            imageModel,
             prompt: String(args.prompt || ""),
             aspect: args.aspect ? String(args.aspect) : undefined,
             count: args.count ? Number(args.count) : 1,
@@ -2175,7 +2187,14 @@ export default function Home() {
             <div className="composer">
               {showMentionMenu ? (
                 <div className="mentionMenu">
-                  <div className="mentionGroup">模型</div>
+                  <div className="mentionGroup">生图模型</div>
+                  <button type="button" onClick={() => applyMention("@Image-2")}>
+                    @Image-2 <em>GPT-Image-2 · 最新</em>
+                  </button>
+                  <button type="button" onClick={() => applyMention("@Image-1.5")}>
+                    @Image-1.5 <em>稳定</em>
+                  </button>
+                  <div className="mentionGroup">对话模型</div>
                   <button type="button" onClick={() => applyMention("@GPT-5.4")}>
                     @GPT-5.4 <em>默认 · 最强规划</em>
                   </button>
