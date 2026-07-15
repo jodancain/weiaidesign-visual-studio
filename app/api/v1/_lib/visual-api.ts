@@ -206,16 +206,17 @@ async function generateImage(prompt: string, aspect: string, outPath: string, qu
 
 async function editImageWithReference(prompt: string, aspect: string, outPath: string, references: ReferenceImage[], qualityOverride = "", transparent = false, preferredModel = "") {
   const { baseUrl, apiKey } = openAIConfig();
-  const source = references[0];
-  if (!source?.buffer?.length) throw new Error("reference image is empty");
+  const validRefs = references.filter((ref) => ref?.buffer?.length);
+  if (!validRefs.length) throw new Error("reference image is empty");
   const models = orderedImageModels(preferredModel);
   let payload: { data?: Array<{ b64_json?: string; url?: string }> } | null = null;
   let lastError: unknown = null;
   let usedModel = "";
+  let referenceMode: "multi" | "single_fallback" = validRefs.length > 1 ? "multi" : "single_fallback";
   for (let attempt = 1; attempt <= imageGenerationRetries; attempt += 1) {
     const model = models[Math.min(attempt - 1, models.length - 1)] || imageModel;
     try {
-      const buildForm = (withFidelity: boolean) => {
+      const buildForm = (withFidelity: boolean, multi: boolean) => {
         const form = new FormData();
         form.append("model", model);
         form.append("prompt", prompt);
@@ -229,26 +230,85 @@ async function editImageWithReference(prompt: string, aspect: string, outPath: s
           if (imageOutputFormat) form.append("output_format", imageOutputFormat);
           if (imageOutputCompression > 0) form.append("output_compression", String(imageOutputCompression));
         }
-        form.append("image", new Blob([new Uint8Array(source.buffer)], { type: source.mimeType || "image/png" }), source.filename || "reference.png");
+        const refsToSend = multi && validRefs.length > 1 ? validRefs : [validRefs[0]];
+        if (refsToSend.length > 1) {
+          // OpenAI multi-image edits: repeat image[] field
+          for (const ref of refsToSend) {
+            form.append(
+              "image[]",
+              new Blob([new Uint8Array(ref.buffer)], { type: ref.mimeType || "image/png" }),
+              ref.filename || "reference.png",
+            );
+          }
+        } else {
+          const source = refsToSend[0];
+          form.append(
+            "image",
+            new Blob([new Uint8Array(source.buffer)], { type: source.mimeType || "image/png" }),
+            source.filename || "reference.png",
+          );
+        }
         return form;
       };
+
+      const postEdits = async (withFidelity: boolean, multi: boolean) =>
+        fetchJson(`${baseUrl}/images/edits`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${apiKey}` },
+          body: buildForm(withFidelity, multi),
+          timeoutMs: imageTimeoutSeconds * 1000,
+        });
+
+      const canMulti = validRefs.length > 1;
+      // Matrix: multi+fidelity → multi no fidelity (only if error mentions input_fidelity)
+      //         → single+fidelity → single (multi→single on any 4xx / parse error)
+      type EditStep = { multi: boolean; withFidelity: boolean };
+      const runStep = async (step: EditStep) => {
+        payload = await postEdits(step.withFidelity, step.multi);
+        referenceMode = step.multi && canMulti ? "multi" : "single_fallback";
+      };
+
       try {
-        payload = await fetchJson(`${baseUrl}/images/edits`, {
-          method: "POST",
-          headers: { authorization: `Bearer ${apiKey}` },
-          body: buildForm(true),
-          timeoutMs: imageTimeoutSeconds * 1000,
-        });
-      } catch (fidelityError) {
-        const message = fidelityError instanceof Error ? fidelityError.message : String(fidelityError);
-        if (!/input_fidelity/i.test(message)) throw fidelityError;
-        payload = await fetchJson(`${baseUrl}/images/edits`, {
-          method: "POST",
-          headers: { authorization: `Bearer ${apiKey}` },
-          body: buildForm(false),
-          timeoutMs: imageTimeoutSeconds * 1000,
-        });
+        if (canMulti) {
+          try {
+            await runStep({ multi: true, withFidelity: true });
+          } catch (multiFidErr) {
+            const msg = multiFidErr instanceof Error ? multiFidErr.message : String(multiFidErr);
+            if (/input_fidelity/i.test(msg)) {
+              try {
+                await runStep({ multi: true, withFidelity: false });
+              } catch {
+                // multi without fidelity also failed → fall through to single
+                await runStep({ multi: false, withFidelity: true }).catch(async (singleFidErr) => {
+                  const sMsg = singleFidErr instanceof Error ? singleFidErr.message : String(singleFidErr);
+                  if (/input_fidelity/i.test(sMsg)) await runStep({ multi: false, withFidelity: false });
+                  else throw singleFidErr;
+                });
+              }
+            } else {
+              // any multi failure (4xx / parse) → single path
+              try {
+                await runStep({ multi: false, withFidelity: true });
+              } catch (singleFidErr) {
+                const sMsg = singleFidErr instanceof Error ? singleFidErr.message : String(singleFidErr);
+                if (/input_fidelity/i.test(sMsg)) await runStep({ multi: false, withFidelity: false });
+                else throw singleFidErr;
+              }
+            }
+          }
+        } else {
+          try {
+            await runStep({ multi: false, withFidelity: true });
+          } catch (singleFidErr) {
+            const sMsg = singleFidErr instanceof Error ? singleFidErr.message : String(singleFidErr);
+            if (/input_fidelity/i.test(sMsg)) await runStep({ multi: false, withFidelity: false });
+            else throw singleFidErr;
+          }
+        }
+      } catch (stepError) {
+        throw stepError;
       }
+
       usedModel = model;
       lastError = null;
       break;
@@ -258,12 +318,19 @@ async function editImageWithReference(prompt: string, aspect: string, outPath: s
     }
   }
   if (lastError) throw new Error(`image edit failed after ${imageGenerationRetries} attempt(s): ${lastError instanceof Error ? lastError.message : String(lastError)}`);
-  const item = payload?.data?.[0];
+  const resolved = payload as { data?: Array<{ b64_json?: string; url?: string }> } | null;
+  const item = resolved?.data?.[0];
   if (!item) throw new Error("image edit returned no data");
   const buffer = await imagePayloadToBuffer(item);
   await mkdir(dirname(outPath), { recursive: true });
   await writeFile(outPath, buffer);
-  return { model: usedModel || imageModel, mimeType: normalizeImageMime(transparent ? "image/png" : `image/${imageOutputFormat || "png"}`), size: buffer.length, mode: "edit" };
+  return {
+    model: usedModel || imageModel,
+    mimeType: normalizeImageMime(transparent ? "image/png" : `image/${imageOutputFormat || "png"}`),
+    size: buffer.length,
+    mode: "edit",
+    referenceMode,
+  };
 }
 
 function decodeImageBase64(value: unknown) {
@@ -285,7 +352,7 @@ function extractReferenceImages(payload: Record<string, unknown>) {
       else if (item && typeof item === "object") candidates.push(item as Record<string, unknown>);
     }
   }
-  for (const item of candidates.slice(0, 4)) {
+  for (const item of candidates.slice(0, 6)) {
     const raw = item.b64 || item.data_url || item.data || "";
     if (!raw) continue;
     const decoded = decodeImageBase64(raw);
@@ -475,12 +542,13 @@ export async function createStandaloneImages(payload: Record<string, unknown>, r
       const filename = `image-${String(index).padStart(2, "0")}.${transparent ? "png" : imageExtension()}`;
       const outPath = join(runDir, filename);
       const imagePrompt = standaloneImagePrompt(payload, index, count);
-      let referenceMode = references.length ? "edit" : "none";
+      let referenceMode: string = references.length ? "edit" : "none";
       try {
-        let result: { model: string; mimeType: string; size: number; mode: string };
+        let result: { model: string; mimeType: string; size: number; mode: string; referenceMode?: string };
         if (references.length) {
           try {
             result = await editImageWithReference(imagePrompt, aspect, outPath, references, qualityOverride, transparent, preferredModel);
+            referenceMode = result.referenceMode || (references.length > 1 ? "multi" : "single_fallback");
           } catch (error) {
             referenceMode = "fallback_generation";
             errors.push(`reference edit fallback for image-${index}: ${error instanceof Error ? error.message : String(error)}`);

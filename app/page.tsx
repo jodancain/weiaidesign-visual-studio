@@ -962,7 +962,7 @@ export default function Home() {
       transparent?: boolean;
       imageModel?: string;
     }) => {
-      const referenceImages = await Promise.all((params.refs || []).slice(0, 4).map((src) => srcToDataUrl(src)));
+      const referenceImages = await Promise.all((params.refs || []).slice(0, 6).map((src) => srcToDataUrl(src)));
       const placeholderId = createPlaceholder("生成图片");
       try {
         const effectivePrompt = params.transparent
