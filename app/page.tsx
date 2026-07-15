@@ -1186,52 +1186,6 @@ export default function Home() {
     [placeImageOnCanvas, pushHistory],
   );
 
-  const startImageToVideo = useCallback(
-    async (params: { src: string; subject: string }) => {
-      const imageB64 = await srcToDataUrl(params.src);
-      const created = await api<{ image_job_id?: string; job_id?: string }>("/image-videos", {
-        method: "POST",
-        body: JSON.stringify({
-          video_subject: params.subject,
-          video_aspect: aspect === "16:9" || aspect === "3:2" ? "16:9" : "9:16",
-          first_image_b64: imageB64,
-          video_clip_duration: 8,
-        }),
-      });
-      const createdData = (created.data || created) as { image_job_id?: string; job_id?: string };
-      const jobId = String(createdData.image_job_id || createdData.job_id || "");
-      if (!jobId) throw new Error("视频任务创建失败");
-      void (async () => {
-        for (let attempt = 0; attempt < 120; attempt += 1) {
-          await new Promise((resolve) => setTimeout(resolve, 5000));
-          try {
-            const status = await api<Record<string, unknown>>(`/image-videos/${jobId}`);
-            const data = (status.data || {}) as Record<string, unknown>;
-            const drive = (data.drive_video as { webViewLink?: string } | undefined)?.webViewLink;
-            const storage = (data.storage_video as { public_url?: string } | undefined)?.public_url;
-            if (drive || storage) {
-              const url = String(storage || drive);
-              setVideoUrl(url);
-              pushMessage({ role: "assistant", kind: "视频", videoUrl: url });
-              pushHistory({ kind: "video", prompt: params.subject, outputs: [], videoUrl: url });
-              return;
-            }
-            const state = String(data.state ?? "");
-            if (state === "failed" || state === "error") {
-              setError(String(data.error || "视频生成失败"));
-              return;
-            }
-          } catch {
-            /* transient poll error */
-          }
-        }
-        setError("视频生成超时，可稍后在历史里重查");
-      })();
-      return jobId;
-    },
-    [api, aspect, pushHistory, pushMessage],
-  );
-
   /* --------------------------- vector export ------------------------ */
 
   const getExportSvg = useCallback(async () => {
@@ -1362,10 +1316,7 @@ export default function Home() {
           return `修改完成，已放到画布。链接：\n${urls.join("\n")}`;
         }
         case "image_to_video": {
-          const src = sel.images[0];
-          if (!src) return "失败：画布上没有选中的图片，请提醒用户先选中。";
-          const jobId = await startImageToVideo({ src, subject: String(args.subject || "让画面自然动起来") });
-          return `视频任务已提交（job ${jobId}），完成后页面会弹出播放链接，无需等待。`;
+          return "视频功能已迁移到独立页面 /video（右上角\"视频\"入口）。请告诉用户到那里上传首帧图并描述运动即可提交任务。";
         }
         case "vectorize_selected": {
           const ok = await vectorizeSelected();
@@ -1379,17 +1330,12 @@ export default function Home() {
           return `未知工具 ${name}`;
       }
     },
-    [doFontRestyle, doGenerateImages, doMaterialTransfer, exportAiFile, pushMessage, startImageToVideo, vectorizeSelected],
+    [doFontRestyle, doGenerateImages, doMaterialTransfer, exportAiFile, pushMessage, vectorizeSelected],
   );
 
   const sendToAgent = useCallback(async () => {
     const text = prompt.trim();
     if (!text || agentBusy) return;
-    if (!token) {
-      setError("先在 Agent 面板里填 VIDEO_API_TOKEN");
-      setShowAgentMenu(true);
-      return;
-    }
     setPrompt("");
     setShowMentionMenu(false);
     setError("");
@@ -1467,11 +1413,6 @@ export default function Home() {
         setError(`「${busyLabel || "上一个任务"}」仍在进行中，请稍候`);
         return;
       }
-      if (!token) {
-        setError("先在 Agent 面板里填 VIDEO_API_TOKEN");
-        setShowAgentMenu(true);
-        return;
-      }
       setBusy(true);
       setBusyLabel(label);
       setError("");
@@ -1498,20 +1439,6 @@ export default function Home() {
       pushMessage({ role: "assistant", kind: "生成变体", images: urls });
     });
   }, [doGenerateImages, prompt, pushMessage, references, runAction, selection.images]);
-
-  const sendSelectedToVideo = useCallback(() => {
-    const src = selection.images[0];
-    if (!src) {
-      setError("先选中画布上的一张图片");
-      return;
-    }
-    const subject = prompt.trim() || "让画面自然地动起来，镜头缓慢推进";
-    void runAction("图生视频", async () => {
-      pushMessage({ role: "user", text: `图生视频：${subject}` });
-      const jobId = await startImageToVideo({ src, subject });
-      pushMessage({ role: "assistant", kind: "视频任务", text: `已提交 job ${jobId}，完成后弹出链接` });
-    });
-  }, [prompt, pushMessage, runAction, selection.images, startImageToVideo]);
 
   /* 打开改字：预览转 dataURL（修裂图）+ 视觉识别行字（Lovart Edit Text 式逐行编辑） */
   const initFontDialog = useCallback(
@@ -1754,6 +1681,9 @@ export default function Home() {
               <button className="ghostIcon" type="button" aria-label="more" onClick={() => setExportMenu((v) => !v)}>
                 <ChevronDown size={15} />
               </button>
+              <a className="videoEntry" href="/video" title="图生视频（独立页面）">
+                <Clapperboard size={14} /> 视频
+              </a>
               {exportMenu ? (
                 <div className="exportMenu" onMouseLeave={() => setExportMenu(false)}>
                   <button
@@ -1950,10 +1880,6 @@ export default function Home() {
                 <Layers size={14} />
                 材质
               </button>
-              <button type="button" onClick={sendSelectedToVideo}>
-                <Clapperboard size={14} />
-                视频
-              </button>
               <button type="button" onClick={() => void vectorizeSelected()}>
                 <Spline size={14} />
                 矢量
@@ -2008,7 +1934,7 @@ export default function Home() {
                 <Sparkles size={9} className="aiSpark" />
               </span>
             </button>
-            <button type="button" title="AI 图生视频" className="dockButton" onClick={sendSelectedToVideo}>
+            <button type="button" title="AI 图生视频（独立页面）" className="dockButton" onClick={() => { window.location.href = "/video"; }}>
               <span className="aiGlyph">
                 <SquarePlay size={19} />
                 <Sparkles size={9} className="aiSpark" />

@@ -83,7 +83,7 @@ const TOOLS = [
     type: "function",
     function: {
       name: "image_to_video",
-      description: "图生视频：把画布选中的第一张图片交给视频管线（数分钟，提交后后台轮询，完成弹出链接）。需要用户已选中图片。",
+      description: "视频功能已迁移到独立页面 /video。用户要做视频时调用本工具即可获得指路话术。",
       parameters: {
         type: "object",
         properties: { subject: { type: "string", description: "视频运动/内容描述" } },

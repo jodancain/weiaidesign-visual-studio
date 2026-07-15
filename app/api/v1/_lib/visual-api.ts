@@ -51,6 +51,8 @@ export function optionsResponse() {
 }
 
 export function requireVideoToken(request: Request) {
+  /* 默认开放访问（上游凭证均在服务端）；设 REQUIRE_ACCESS_TOKEN=1 时恢复门禁 */
+  if (env.REQUIRE_ACCESS_TOKEN !== "1") return null;
   const token = env.VIDEO_API_TOKEN || "";
   if (!token) {
     return jsonCors({ detail: "VIDEO_API_TOKEN is not configured" }, { status: 503 });
