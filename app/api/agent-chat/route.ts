@@ -109,17 +109,34 @@ const TOOLS = [
   },
 ];
 
+type ChatUpstream = { base: string; key: string; models: string[] };
+
+/* 主备双上游：AGENT_LLM_*（新 router，多模型自动匹配）优先，原 relay 备选 */
+function chatUpstreams(): ChatUpstream[] {
+  const list: ChatUpstream[] = [];
+  const agentBase = (env.AGENT_LLM_BASE_URL || "").replace(/\/+$/, "");
+  const agentKey = env.AGENT_LLM_API_KEY || "";
+  const agentModels = (env.AGENT_LLM_MODELS || "cx/gpt-5.4,cbcn/glm-5.2,cbcn/kimi-k2.7")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (agentBase && agentKey && agentModels.length) list.push({ base: agentBase, key: agentKey, models: agentModels });
+  const relayBase = (env.IMAGE_OPENAI_BASE_URL || "").replace(/\/+$/, "");
+  const relayKey = env.IMAGE_OPENAI_API_KEY || env.OPENAI_API_KEY || "";
+  if (relayBase && relayKey) list.push({ base: relayBase, key: relayKey, models: [env.AGENT_LLM_MODEL || "gpt-5.4-mini"] });
+  return list;
+}
+
 export async function POST(request: Request) {
   const authError = requireVideoToken(request);
   if (authError) return authError;
 
-  const baseURL = (env.IMAGE_OPENAI_BASE_URL || "").replace(/\/+$/, "");
-  const apiKey = env.IMAGE_OPENAI_API_KEY || env.OPENAI_API_KEY || "";
-  if (!baseURL || !apiKey) {
-    return jsonCors({ detail: "agent LLM is not configured (IMAGE_OPENAI_BASE_URL / IMAGE_OPENAI_API_KEY)" }, { status: 503 });
+  const upstreams = chatUpstreams();
+  if (!upstreams.length) {
+    return jsonCors({ detail: "agent LLM is not configured (AGENT_LLM_* / IMAGE_OPENAI_*)" }, { status: 503 });
   }
 
-  let payload: { messages?: unknown[]; canvas_state?: unknown };
+  let payload: { messages?: unknown[]; canvas_state?: unknown; model?: string };
   try {
     payload = (await request.json()) as typeof payload;
   } catch {
@@ -129,39 +146,54 @@ export async function POST(request: Request) {
   if (!history.length) return jsonCors({ detail: "messages is required" }, { status: 400 });
 
   const systemContent = `${AGENT_SYSTEM_PROMPT}\n\n当前画布状态：${JSON.stringify(payload.canvas_state || {})}`;
+  const preferred = String(payload.model || "").trim();
+  const errors: string[] = [];
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 90000);
-  try {
-    const upstream = await fetch(`${baseURL}/chat/completions`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
-      body: JSON.stringify({
-        model: env.AGENT_LLM_MODEL || "gpt-5.4-mini",
-        messages: [{ role: "system", content: systemContent }, ...history.slice(-30)],
-        tools: TOOLS,
-        tool_choice: "auto",
-      }),
-      signal: controller.signal,
-    });
-    const text = await upstream.text();
-    let data: unknown = {};
-    try {
-      data = JSON.parse(text);
-    } catch {
-      data = { raw: text };
+  for (const upstream of upstreams) {
+    const models = preferred && upstream.models.includes(preferred)
+      ? [preferred, ...upstream.models.filter((m) => m !== preferred)]
+      : upstream.models;
+    for (const model of models) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 90000);
+      try {
+        const response = await fetch(`${upstream.base}/chat/completions`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${upstream.key}`, "content-type": "application/json" },
+          body: JSON.stringify({
+            model,
+            messages: [{ role: "system", content: systemContent }, ...history.slice(-30)],
+            tools: TOOLS,
+            tool_choice: "auto",
+          }),
+          signal: controller.signal,
+        });
+        const text = await response.text();
+        if (!response.ok) {
+          errors.push(`${model}: HTTP ${response.status} ${text.slice(0, 120)}`);
+          continue;
+        }
+        let data: unknown = {};
+        try {
+          data = JSON.parse(text);
+        } catch {
+          errors.push(`${model}: non-JSON response`);
+          continue;
+        }
+        const message = (data as { choices?: Array<{ message?: unknown }> }).choices?.[0]?.message || null;
+        if (!message) {
+          errors.push(`${model}: no message`);
+          continue;
+        }
+        return jsonCors({ status: 200, message: "success", data: { message, model } });
+      } catch (error) {
+        errors.push(`${model}: ${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        clearTimeout(timer);
+      }
     }
-    if (!upstream.ok) {
-      return jsonCors({ detail: `agent llm error ${upstream.status}: ${text.slice(0, 500)}` }, { status: 502 });
-    }
-    const message = (data as { choices?: Array<{ message?: unknown }> }).choices?.[0]?.message || null;
-    if (!message) return jsonCors({ detail: "agent llm returned no message" }, { status: 502 });
-    return jsonCors({ status: 200, message: "success", data: { message } });
-  } catch (error) {
-    return jsonCors({ detail: error instanceof Error ? error.message : String(error) }, { status: 500 });
-  } finally {
-    clearTimeout(timer);
   }
+  return jsonCors({ detail: `all agent models failed: ${errors.join(" | ").slice(0, 600)}` }, { status: 502 });
 }
 
 export async function OPTIONS() {

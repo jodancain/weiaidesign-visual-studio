@@ -1392,6 +1392,13 @@ export default function Home() {
           headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
           body: JSON.stringify({
             messages: oaiHistoryRef.current,
+            model: /@GPT-5\.4/i.test(prompt)
+              ? "cx/gpt-5.4"
+              : /@GLM-5\.2/i.test(prompt)
+                ? "cbcn/glm-5.2"
+                : /@Kimi/i.test(prompt)
+                  ? "cbcn/kimi-k2.7"
+                  : undefined,
             canvas_state: {
               selectedImageCount: sel.images.length,
               canvasShapeCount: shapeCount,
@@ -2168,6 +2175,16 @@ export default function Home() {
             <div className="composer">
               {showMentionMenu ? (
                 <div className="mentionMenu">
+                  <div className="mentionGroup">模型</div>
+                  <button type="button" onClick={() => applyMention("@GPT-5.4")}>
+                    @GPT-5.4 <em>默认 · 最强规划</em>
+                  </button>
+                  <button type="button" onClick={() => applyMention("@GLM-5.2")}>
+                    @GLM-5.2 <em>中文强</em>
+                  </button>
+                  <button type="button" onClick={() => applyMention("@Kimi")}>
+                    @Kimi <em>K2.7 长上下文</em>
+                  </button>
                   <div className="mentionGroup">画质</div>
                   <button type="button" onClick={() => applyMention("@高画质")}>
                     @高画质 <em>high</em>
