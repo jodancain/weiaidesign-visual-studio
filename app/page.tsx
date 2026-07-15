@@ -816,6 +816,27 @@ export default function Home() {
     [token],
   );
 
+  /* 长耗时图片操作走异步任务：提交秒回 + 轮询（每个 HTTP 请求都短，绕开 Cloudflare 100s/524 超时） */
+  const apiAsyncImages = useCallback(
+    async (path: string, body: Record<string, unknown>) => {
+      const submitted = await api<{ job_id?: string }>(path, {
+        method: "POST",
+        body: JSON.stringify({ ...body, async: true }),
+      });
+      const jobId = (submitted.data as { job_id?: string } | undefined)?.job_id;
+      if (!jobId) throw new Error("任务提交失败：无 job id");
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        const status = await api<{ state?: string; result?: ImagesResult; error?: string }>(`/image-jobs/${jobId}`);
+        const data = (status.data || {}) as { state?: string; result?: ImagesResult; error?: string };
+        if (data.state === "done") return { data: data.result } as { data?: ImagesResult };
+        if (data.state === "failed") throw new Error(data.error || "生成失败");
+      }
+      throw new Error("生成超时（10 分钟），请稍后在历史里重试");
+    },
+    [api],
+  );
+
   const pushHistory = useCallback((entry: Omit<HistoryEntry, "id" | "ts">) => {
     setHistory((prev) => [{ id: uid(), ts: Date.now(), ...entry }, ...prev].slice(0, 60));
   }, []);
@@ -883,9 +904,7 @@ export default function Home() {
         const effectivePrompt = params.transparent
           ? `${params.prompt}。背景为纯白色（#FFFFFF）纯净平涂，无阴影无渐变，主体边缘干净利落`
           : params.prompt;
-        const payload = await api<ImagesResult>("/images", {
-          method: "POST",
-          body: JSON.stringify({
+        const payload = await apiAsyncImages("/images", {
             prompt: effectivePrompt,
             raw_prompt: params.kind === "agent" ? effectivePrompt : undefined,
             style: params.kind === "agent" ? undefined : style,
@@ -898,8 +917,7 @@ export default function Home() {
             ...(params.imageModel ? { image_model: params.imageModel } : {}),
             ...(params.transparent ? { background: "transparent" } : {}),
             ...(referenceImages.length ? { reference_images: referenceImages } : {}),
-          }),
-        });
+          });
         const urls = (payload.data?.images || []).map((item) => String(item.public_url || "")).filter(Boolean);
         removePlaceholder(placeholderId);
         const targetAspect = params.aspect || aspect;
@@ -918,7 +936,7 @@ export default function Home() {
         removePlaceholder(placeholderId);
       }
     },
-    [api, aspect, audience, brand, count, createPlaceholder, negativePrompt, placeImageOnCanvas, pushHistory, removePlaceholder, style],
+    [api, apiAsyncImages, aspect, audience, brand, count, createPlaceholder, negativePrompt, placeImageOnCanvas, pushHistory, removePlaceholder, style],
   );
 
   const doFontRestyle = useCallback(
@@ -926,17 +944,14 @@ export default function Home() {
       const imageB64 = await srcToDataUrl(params.src);
       const placeholderId = createPlaceholder("同风格改字");
       try {
-        const payload = await api<ImagesResult>("/font-restyle", {
-          method: "POST",
-          body: JSON.stringify({
+        const payload = await apiAsyncImages("/font-restyle", {
             image_b64: imageB64,
             new_text: params.newText,
             style_note: params.note || "",
             ...(params.lineEdits?.length ? { line_edits: params.lineEdits } : {}),
             aspect_ratio: aspect,
             n: 1,
-          }),
-        });
+          });
         const urls = (payload.data?.images || []).map((item) => String(item.public_url || "")).filter(Boolean);
         removePlaceholder(placeholderId);
         for (const url of urls) await placeImageOnCanvas(url, `font-${params.newText || "line-edit"}`);
@@ -946,15 +961,17 @@ export default function Home() {
         removePlaceholder(placeholderId);
       }
     },
-    [api, aspect, createPlaceholder, placeImageOnCanvas, pushHistory, removePlaceholder],
+    [apiAsyncImages, aspect, createPlaceholder, placeImageOnCanvas, pushHistory, removePlaceholder],
   );
 
   const doMaterialTransfer = useCallback(
     async (params: { target: string; material: string; instruction?: string }) => {
       const composite = await compositeTargetWithSwatch(await srcToDataUrl(params.target), await srcToDataUrl(params.material));
-      const payload = await api<ImagesResult>("/material-transfer", {
-        method: "POST",
-        body: JSON.stringify({ image_b64: composite, instruction: params.instruction || "", aspect_ratio: aspect, n: 1 }),
+      const payload = await apiAsyncImages("/material-transfer", {
+        image_b64: composite,
+        instruction: params.instruction || "",
+        aspect_ratio: aspect,
+        n: 1,
       });
       const urls = (payload.data?.images || []).map((item) => String(item.public_url || "")).filter(Boolean);
       for (const url of urls) await placeImageOnCanvas(url, "material");
@@ -970,17 +987,14 @@ export default function Home() {
       const referenceImage = await srcToDataUrl(params.src);
       const placeholderId = createPlaceholder("修改图片");
       try {
-        const payload = await api<ImagesResult>("/images", {
-          method: "POST",
-          body: JSON.stringify({
+        const payload = await apiAsyncImages("/images", {
             prompt: `严格以参考图为基础重绘：${params.instruction}。除指令要求的修改外，主体、构图、风格、配色、文字内容全部保持与参考图一致。`,
             raw_prompt: `严格以参考图为基础重绘：${params.instruction}。除指令要求的修改外，主体、构图、风格、配色、文字内容全部保持与参考图一致。`,
             aspect_ratio: aspect,
             n: Math.max(1, Math.min(4, params.count || 1)),
             ...(params.transparent ? { background: "transparent" } : {}),
             reference_images: [referenceImage],
-          }),
-        });
+          });
         const urls = (payload.data?.images || []).map((item) => String(item.public_url || "")).filter(Boolean);
         removePlaceholder(placeholderId);
         const placed: string[] = [];
@@ -995,7 +1009,7 @@ export default function Home() {
         removePlaceholder(placeholderId);
       }
     },
-    [api, aspect, createPlaceholder, placeImageOnCanvas, pushHistory, removePlaceholder],
+    [apiAsyncImages, aspect, createPlaceholder, placeImageOnCanvas, pushHistory, removePlaceholder],
   );
 
   /* ---------- 真 mask inpaint：edits 优先，降级为参考图重绘；两条路径都做像素级合成（mask 外原图无损） ---------- */
@@ -1125,15 +1139,12 @@ export default function Home() {
         actx.globalAlpha = 0.45;
         actx.drawImage(paint, 0, 0);
         actx.globalAlpha = 1;
-        const payload = await api<ImagesResult>("/images", {
-          method: "POST",
-          body: JSON.stringify({
-            prompt: `参考图中红色半透明标记的区域需要重绘：${finalInstruction}。未标记区域保持与参考图完全一致。输出图中不得出现任何红色标记。`,
-            raw_prompt: `参考图中红色半透明标记的区域需要重绘：${finalInstruction}。未标记区域保持与参考图完全一致。输出图中不得出现任何红色标记。`,
-            aspect_ratio: w >= h ? (w === h ? "1:1" : "3:2") : "2:3",
-            n: 1,
-            reference_images: [annotated.toDataURL("image/png")],
-          }),
+        const payload = await apiAsyncImages("/images", {
+          prompt: `参考图中红色半透明标记的区域需要重绘：${finalInstruction}。未标记区域保持与参考图完全一致。输出图中不得出现任何红色标记。`,
+          raw_prompt: `参考图中红色半透明标记的区域需要重绘：${finalInstruction}。未标记区域保持与参考图完全一致。输出图中不得出现任何红色标记。`,
+          aspect_ratio: w >= h ? (w === h ? "1:1" : "3:2") : "2:3",
+          n: 1,
+          reference_images: [annotated.toDataURL("image/png")],
         });
         const url = (payload.data?.images || []).map((item) => String(item.public_url || "")).find(Boolean);
         if (!url) throw new Error("重绘失败：无输出");
@@ -1144,7 +1155,7 @@ export default function Home() {
       pushHistory({ kind: `inpaint(${engine})`, prompt: finalInstruction, outputs: [] });
       return composed;
     },
-    [api, compositeByMask, placeImageOnCanvas, pushHistory],
+    [api, apiAsyncImages, compositeByMask, placeImageOnCanvas, pushHistory],
   );
 
   /* ---------- 可视化拆层：矢量化按颜色分组 → 每层独立可拖拽 shape ---------- */

@@ -1,4 +1,4 @@
-import { createStandaloneImages, jsonCors, optionsResponse, requireVideoToken } from "../_lib/visual-api";
+import { createStandaloneImages, jsonCors, optionsResponse, requireVideoToken, startAsyncImageJob } from "../_lib/visual-api";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -39,16 +39,21 @@ export async function POST(request: Request) {
     .filter(Boolean)
     .join("\n");
 
+  const buildPayload = {
+    ...payload,
+    prompt: `material-transfer${instruction ? `: ${instruction}` : ""}`,
+    raw_prompt: rawPrompt,
+    n: Math.max(1, Math.min(4, Number(payload.n || payload.count || 1))),
+  };
+  if (payload.async === true || payload.async === "true" || payload.async === 1) {
+    const jobId = startAsyncImageJob(async () => {
+      const data = await createStandaloneImages(buildPayload, request);
+      return { ...data, kind: "material-transfer" };
+    });
+    return jsonCors({ status: 200, message: "accepted", data: { job_id: jobId } });
+  }
   try {
-    const data = await createStandaloneImages(
-      {
-        ...payload,
-        prompt: `material-transfer${instruction ? `: ${instruction}` : ""}`,
-        raw_prompt: rawPrompt,
-        n: Math.max(1, Math.min(4, Number(payload.n || payload.count || 1))),
-      },
-      request,
-    );
+    const data = await createStandaloneImages(buildPayload, request);
     return jsonCors({ status: 200, message: "success", data: { ...data, kind: "material-transfer" } });
   } catch (error) {
     return jsonCors({ detail: error instanceof Error ? error.message : String(error) }, { status: 500 });

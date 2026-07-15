@@ -380,6 +380,42 @@ export async function tryImageEdits(params: {
   return { ok: false, detail: errors.join(" | ") };
 }
 
+/* ---------- 异步图片任务：提交秒回 job_id，后台执行，轮询取结果（绕开 Cloudflare 100s 超时） ---------- */
+
+const jobsDir = () => join(imageOutputDir, "_jobs");
+
+async function writeJob(jobId: string, data: Record<string, unknown>) {
+  await mkdir(jobsDir(), { recursive: true });
+  await writeFile(join(jobsDir(), `${jobId}.json`), JSON.stringify(data));
+}
+
+export function startAsyncImageJob(run: () => Promise<Record<string, unknown>>) {
+  const jobId = `ijob-${randomUUID()}`;
+  void (async () => {
+    await writeJob(jobId, { state: "running", started_at: Date.now() });
+    try {
+      const result = await run();
+      await writeJob(jobId, { state: "done", result, finished_at: Date.now() });
+    } catch (error) {
+      await writeJob(jobId, {
+        state: "failed",
+        error: error instanceof Error ? error.message : String(error),
+        finished_at: Date.now(),
+      });
+    }
+  })();
+  return jobId;
+}
+
+export async function readAsyncImageJob(jobId: string) {
+  if (!/^ijob-[a-f0-9-]+$/.test(jobId)) return null;
+  try {
+    return JSON.parse(await readFile(join(jobsDir(), `${jobId}.json`), "utf8")) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
 export async function createStandaloneImages(payload: Record<string, unknown>, request: Request) {
   const prompt = String(payload.prompt || payload.image_prompt || payload.video_subject || "").trim();
   if (!prompt) throw new Error("prompt is required");

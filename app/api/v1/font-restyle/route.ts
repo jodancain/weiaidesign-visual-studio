@@ -1,4 +1,4 @@
-import { createStandaloneImages, jsonCors, optionsResponse, requireVideoToken } from "../_lib/visual-api";
+import { createStandaloneImages, jsonCors, optionsResponse, requireVideoToken, startAsyncImageJob } from "../_lib/visual-api";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -52,16 +52,21 @@ export async function POST(request: Request) {
     .filter(Boolean)
     .join("\n");
 
-  try {
-    const data = await createStandaloneImages(
-      {
+  const buildPayload = {
         ...payload,
         prompt: `font-restyle: ${newText}`,
         raw_prompt: rawPrompt,
         n: Math.max(1, Math.min(4, Number(payload.n || payload.count || 1))),
-      },
-      request,
-    );
+      };
+  if (payload.async === true || payload.async === "true" || payload.async === 1) {
+    const jobId = startAsyncImageJob(async () => {
+      const data = await createStandaloneImages(buildPayload, request);
+      return { ...data, kind: "font-restyle", new_text: newText };
+    });
+    return jsonCors({ status: 200, message: "accepted", data: { job_id: jobId } });
+  }
+  try {
+    const data = await createStandaloneImages(buildPayload, request);
     return jsonCors({ status: 200, message: "success", data: { ...data, kind: "font-restyle", new_text: newText } });
   } catch (error) {
     return jsonCors({ detail: error instanceof Error ? error.message : String(error) }, { status: 500 });
