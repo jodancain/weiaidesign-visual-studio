@@ -215,25 +215,40 @@ async function editImageWithReference(prompt: string, aspect: string, outPath: s
   for (let attempt = 1; attempt <= imageGenerationRetries; attempt += 1) {
     const model = models[Math.min(attempt - 1, models.length - 1)] || imageModel;
     try {
-      const form = new FormData();
-      form.append("model", model);
-      form.append("prompt", prompt);
-      form.append("size", imageSize(aspect));
-      form.append("n", "1");
-      if (qualityOverride || imageQuality) form.append("quality", qualityOverride || imageQuality);
-      if (transparent) {
-        form.append("output_format", "png");
-      } else {
-        if (imageOutputFormat) form.append("output_format", imageOutputFormat);
-        if (imageOutputCompression > 0) form.append("output_compression", String(imageOutputCompression));
+      const buildForm = (withFidelity: boolean) => {
+        const form = new FormData();
+        form.append("model", model);
+        form.append("prompt", prompt);
+        form.append("size", imageSize(aspect));
+        form.append("n", "1");
+        if (withFidelity) form.append("input_fidelity", "high");
+        if (qualityOverride || imageQuality) form.append("quality", qualityOverride || imageQuality);
+        if (transparent) {
+          form.append("output_format", "png");
+        } else {
+          if (imageOutputFormat) form.append("output_format", imageOutputFormat);
+          if (imageOutputCompression > 0) form.append("output_compression", String(imageOutputCompression));
+        }
+        form.append("image", new Blob([new Uint8Array(source.buffer)], { type: source.mimeType || "image/png" }), source.filename || "reference.png");
+        return form;
+      };
+      try {
+        payload = await fetchJson(`${baseUrl}/images/edits`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${apiKey}` },
+          body: buildForm(true),
+          timeoutMs: imageTimeoutSeconds * 1000,
+        });
+      } catch (fidelityError) {
+        const message = fidelityError instanceof Error ? fidelityError.message : String(fidelityError);
+        if (!/input_fidelity/i.test(message)) throw fidelityError;
+        payload = await fetchJson(`${baseUrl}/images/edits`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${apiKey}` },
+          body: buildForm(false),
+          timeoutMs: imageTimeoutSeconds * 1000,
+        });
       }
-      form.append("image", new Blob([new Uint8Array(source.buffer)], { type: source.mimeType || "image/png" }), source.filename || "reference.png");
-      payload = await fetchJson(`${baseUrl}/images/edits`, {
-        method: "POST",
-        headers: { authorization: `Bearer ${apiKey}` },
-        body: form,
-        timeoutMs: imageTimeoutSeconds * 1000,
-      });
       usedModel = model;
       lastError = null;
       break;
@@ -348,6 +363,7 @@ export async function tryImageEdits(params: {
     form.append("prompt", params.prompt);
     form.append("size", params.size);
     form.append("n", "1");
+    form.append("input_fidelity", "high");
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), imageTimeoutSeconds * 1000);
     try {

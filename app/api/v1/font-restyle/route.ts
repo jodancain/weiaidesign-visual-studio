@@ -34,25 +34,27 @@ export async function POST(request: Request) {
 
   const styleNote = String(payload.style_note || payload.note || "").trim();
   const replacementDirective = lineEdits.length
-    ? `Replace ONLY these text lines, keeping every other line exactly as-is: ${lineEdits
-        .map((item) => `"${item.from}" -> "${item.to}"`)
-        .join("; ")}.`
-    : `Re-render the exact same lettering design, but replace the text content with: "${newText}".`;
+    ? `只替换下列文字行，其余每一行文字逐字保持原样：${lineEdits
+        .map((item) => `「${item.from}」改为「${item.to}」`)
+        .join("；")}。`
+    : `把图中的文字内容替换为：「${newText}」。`;
   const rawPrompt = [
-    "The reference image contains custom designed lettering / typography.",
+    "这是对同一张图片的编辑任务，不是重新创作。图中包含定制设计的美术字/字体设计。",
     replacementDirective,
-    "Precisely preserve every visual property of the original type design:",
-    "letterform skeleton, stroke weight and contrast, serifs and terminals, texture,",
-    "material, bevels, outlines, drop shadows, color and gradients, lighting,",
-    "perspective, layout and spacing rhythm.",
-    "Keep the same background and decorative elements unchanged.",
-    "Do not add watermarks, extra text, or new elements.",
-    styleNote ? `Extra direction: ${styleNote}` : "",
+    "新文字必须逐笔画沿用原字体设计，以下全部保持与原图一致：",
+    "字体骨架与字形比例、笔画粗细与边缘处理、衬线与笔锋、材质与纹理、",
+    "立体感与描边、投影与高光、颜色与渐变、透视角度、排版位置与字距节奏。",
+    "背景的每个像素、装饰元素、未提及的文字行全部保持原样，不得改变构图与配色。",
+    "不得添加水印、多余文字或新元素。",
+    styleNote ? `补充要求：${styleNote}` : "",
   ]
     .filter(Boolean)
     .join("\n");
 
   const buildPayload = {
+    quality: ["low", "medium", "high"].includes(String(payload.quality || "").toLowerCase())
+      ? String(payload.quality).toLowerCase()
+      : "high",
         ...payload,
         prompt: `font-restyle: ${newText}`,
         raw_prompt: rawPrompt,
