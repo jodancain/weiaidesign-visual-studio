@@ -1,0 +1,9 @@
+{
+  "status": 200,
+  "message": "success",
+  "data": {
+    "state": "failed",
+    "error": "relay images/edits unavailable: gpt-image-2: HTTP 502 <!DOCTYPE html>\n<!--[if lt IE 7]> <html class=\"no-js ie6 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 7]>    <html class=\"no-js ie7 oldie\" lang=\"en-US\"> <![endi | gpt-image-1.5: HTTP 502 <!DOCTYPE html>\n<!--[if lt IE 7]> <html class=\"no-js ie6 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 7]>    <html class=\"no-js ie7 oldie\" lang=\"en-US\"> <![endi | gpt-image-1: HTTP 502 <!DOCTYPE html>\n<!--[if lt IE 7]> <html class=\"no-js ie6 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 7]>    <html class=\"no-js ie7 oldie\" lang=\"en-US\"> <![endi",
+    "finished_at": 1784162302879
+  }
+}
