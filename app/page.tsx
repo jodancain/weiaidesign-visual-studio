@@ -9,6 +9,10 @@ import {
   ChevronDown,
   Circle,
   Clapperboard,
+  Cloud,
+  CloudCheck,
+  CloudOff,
+  CloudUpload,
   Copy,
   Download,
   FileSearch,
@@ -46,6 +50,8 @@ import {
   Tldraw,
   createShapeId,
   exportToBlob,
+  getSnapshot,
+  loadSnapshot,
   toRichText,
   useValue,
   type Editor,
@@ -647,6 +653,8 @@ export default function Home() {
   const [projects, setProjects] = useState<ProjectMeta[]>(() => defaultProjectList());
   const [activeProjectId, setActiveProjectId] = useState(DEFAULT_PROJECT_ID);
   const [projectName, setProjectName] = useState("Untitled");
+  /** local = only browser; saving = cloud PUT in flight; synced = last cloud save ok; error = last save failed */
+  const [syncStatus, setSyncStatus] = useState<"local" | "saving" | "synced" | "error">("local");
 
   const [countdown, setCountdown] = useState("00040000");
 
@@ -658,10 +666,33 @@ export default function Home() {
   const recognitionRef = useRef<{ stop: () => void } | null>(null);
   const oaiHistoryRef = useRef<OaiMessage[]>([]);
   const selectionRef = useRef(selection);
+  const skipAutosaveRef = useRef(false);
+  const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeProjectIdRef = useRef(activeProjectId);
+  const projectNameRef = useRef(projectName);
+  const editorRef = useRef<Editor | null>(null);
 
   useEffect(() => {
     selectionRef.current = selection;
   }, [selection]);
+
+  useEffect(() => {
+    activeProjectIdRef.current = activeProjectId;
+  }, [activeProjectId]);
+
+  useEffect(() => {
+    projectNameRef.current = projectName;
+  }, [projectName]);
+
+  useEffect(() => {
+    editorRef.current = editor;
+  }, [editor]);
+
+  const authHeaders = useCallback((): HeadersInit => {
+    const headers: HeadersInit = { "content-type": "application/json" };
+    if (token) headers.authorization = `Bearer ${token}`;
+    return headers;
+  }, [token]);
 
   const renameActiveProject = useCallback(
     (rawName: string) => {
@@ -675,6 +706,118 @@ export default function Home() {
     },
     [activeProjectId],
   );
+
+  const saveCanvasToCloud = useCallback(
+    async (opts?: { silent?: boolean }) => {
+      const ed = editorRef.current;
+      const projectId = activeProjectIdRef.current;
+      if (!ed) {
+        if (!opts?.silent) setError("画布尚未就绪");
+        return false;
+      }
+      let snapshot: ReturnType<typeof getSnapshot>;
+      try {
+        snapshot = getSnapshot(ed.store);
+      } catch (error) {
+        if (!opts?.silent) setError(error instanceof Error ? error.message : "无法读取画布快照");
+        return false;
+      }
+      setSyncStatus("saving");
+      try {
+        const res = await fetch(`${API_BASE}/canvas-snapshots/${encodeURIComponent(projectId)}`, {
+          method: "PUT",
+          headers: authHeaders(),
+          body: JSON.stringify({
+            snapshot,
+            projectName: projectNameRef.current,
+          }),
+        });
+        const json = (await res.json().catch(() => ({}))) as { detail?: string };
+        if (!res.ok) throw new Error(json.detail || `保存失败 HTTP ${res.status}`);
+        setSyncStatus("synced");
+        if (!opts?.silent) setError("");
+        return true;
+      } catch (error) {
+        setSyncStatus("error");
+        if (!opts?.silent) setError(error instanceof Error ? error.message : "云端保存失败");
+        return false;
+      }
+    },
+    [authHeaders],
+  );
+
+  const restoreCanvasFromCloud = useCallback(async () => {
+    const ed = editorRef.current;
+    const projectId = activeProjectIdRef.current;
+    if (!ed) {
+      setError("画布尚未就绪");
+      return false;
+    }
+    if (!window.confirm("从云端恢复将覆盖当前画布内容，继续？")) return false;
+    setSyncStatus("saving");
+    try {
+      const res = await fetch(`${API_BASE}/canvas-snapshots/${encodeURIComponent(projectId)}`, {
+        method: "GET",
+        headers: authHeaders(),
+      });
+      const json = (await res.json().catch(() => ({}))) as {
+        detail?: string;
+        data?: { snapshot?: unknown; projectName?: string | null };
+      };
+      if (!res.ok) throw new Error(json.detail || `恢复失败 HTTP ${res.status}`);
+      const snapshot = json.data?.snapshot;
+      if (!snapshot || typeof snapshot !== "object") throw new Error("云端快照为空或格式无效");
+      skipAutosaveRef.current = true;
+      loadSnapshot(ed.store, snapshot as Parameters<typeof loadSnapshot>[1]);
+      if (json.data?.projectName) renameActiveProject(String(json.data.projectName));
+      setSyncStatus("synced");
+      setError("");
+      window.setTimeout(() => {
+        skipAutosaveRef.current = false;
+      }, 1500);
+      return true;
+    } catch (error) {
+      setSyncStatus("error");
+      setError(error instanceof Error ? error.message : "云端恢复失败");
+      return false;
+    }
+  }, [authHeaders, renameActiveProject]);
+
+  // 60s debounced autosave when document changes
+  useEffect(() => {
+    if (!editor) return;
+    setSyncStatus("local");
+    if (autosaveTimerRef.current) {
+      clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+    }
+    const unlisten = editor.store.listen(
+      () => {
+        if (skipAutosaveRef.current) return;
+        setSyncStatus((prev) => (prev === "saving" ? prev : "local"));
+        if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
+        autosaveTimerRef.current = setTimeout(() => {
+          autosaveTimerRef.current = null;
+          void saveCanvasToCloud({ silent: true }).then((ok) => {
+            if (!ok) {
+              // silent retry once after 15s
+              window.setTimeout(() => {
+                void saveCanvasToCloud({ silent: true });
+              }, 15_000);
+            }
+          });
+        }, 60_000);
+      },
+      { scope: "document" },
+    );
+    return () => {
+      unlisten();
+      if (autosaveTimerRef.current) {
+        clearTimeout(autosaveTimerRef.current);
+        autosaveTimerRef.current = null;
+      }
+    };
+  }, [editor, activeProjectId, saveCanvasToCloud]);
 
   const switchProject = useCallback(
     (id: string) => {
@@ -693,6 +836,7 @@ export default function Home() {
       setSelection({ ids: [], images: [], box: null });
       setContextChips([]);
       setShapeCount(0);
+      setSyncStatus("local");
       setActiveProjectId(id);
       const target = projects.find((p) => p.id === id);
       setProjectName(target?.name || "Untitled");
@@ -712,6 +856,7 @@ export default function Home() {
     setSelection({ ids: [], images: [], box: null });
     setContextChips([]);
     setShapeCount(0);
+    setSyncStatus("local");
     setActiveProjectId(id);
     setProjectName(name);
     setExportMenu(false);
@@ -735,6 +880,7 @@ export default function Home() {
     setSelection({ ids: [], images: [], box: null });
     setContextChips([]);
     setShapeCount(0);
+    setSyncStatus("local");
     setActiveProjectId(fallback.id);
     setProjectName(fallback.name);
     setExportMenu(false);
@@ -2244,6 +2390,33 @@ export default function Home() {
                   }
                 }}
               />
+              <button
+                className={`syncStatusIcon ${syncStatus}`}
+                type="button"
+                title={
+                  syncStatus === "synced"
+                    ? "已同步到云端"
+                    : syncStatus === "saving"
+                      ? "正在保存到云端…"
+                      : syncStatus === "error"
+                        ? "云端同步失败，点此重试"
+                        : "仅本地（变更后约 60s 自动保存）"
+                }
+                aria-label="cloud sync status"
+                onClick={() => {
+                  void saveCanvasToCloud();
+                }}
+              >
+                {syncStatus === "synced" ? (
+                  <CloudCheck size={15} />
+                ) : syncStatus === "saving" ? (
+                  <Loader2 size={15} className="spin" />
+                ) : syncStatus === "error" ? (
+                  <CloudOff size={15} />
+                ) : (
+                  <Cloud size={15} />
+                )}
+              </button>
               <button className="ghostIcon" type="button" aria-label="theme">
                 <Palette size={15} />
               </button>
@@ -2285,6 +2458,26 @@ export default function Home() {
                   </button>
                   <button type="button" className="exportMenuItem danger" onClick={deleteActiveProject}>
                     <X size={14} /> 删除当前项目
+                  </button>
+                  <div className="exportMenuDivider" />
+                  <div className="exportMenuSection">云同步</div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setExportMenu(false);
+                      void saveCanvasToCloud();
+                    }}
+                  >
+                    <CloudUpload size={14} /> 保存到云端
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setExportMenu(false);
+                      void restoreCanvasFromCloud();
+                    }}
+                  >
+                    <Cloud size={14} /> 从云端恢复
                   </button>
                   <div className="exportMenuDivider" />
                   <div className="exportMenuSection">导出</div>

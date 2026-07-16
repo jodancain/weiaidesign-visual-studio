@@ -35,7 +35,7 @@ export function jsonCors(payload: unknown, init: ResponseInit = {}) {
   const headers = new Headers(init.headers);
   headers.set("access-control-allow-origin", "*");
   headers.set("access-control-allow-headers", "authorization, content-type");
-  headers.set("access-control-allow-methods", "GET,POST,HEAD,OPTIONS");
+  headers.set("access-control-allow-methods", "GET,POST,PUT,HEAD,OPTIONS");
   return NextResponse.json(payload, { ...init, headers });
 }
 
@@ -45,7 +45,7 @@ export function optionsResponse() {
     headers: {
       "access-control-allow-origin": "*",
       "access-control-allow-headers": "authorization, content-type",
-      "access-control-allow-methods": "GET,POST,HEAD,OPTIONS",
+      "access-control-allow-methods": "GET,POST,PUT,HEAD,OPTIONS",
     },
   });
 }

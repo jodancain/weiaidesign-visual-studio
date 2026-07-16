@@ -294,8 +294,15 @@ button {
   place-items: center;
   width: 28px;
   height: 28px;
+  border: 0;
+  background: transparent;
   border-radius: 8px;
   color: var(--soft-ink);
+  cursor: pointer;
+}
+
+.syncStatusIcon:hover {
+  background: rgba(31, 33, 38, 0.06);
 }
 
 .syncStatusIcon.synced {
