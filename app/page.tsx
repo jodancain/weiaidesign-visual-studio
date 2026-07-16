@@ -625,7 +625,7 @@ export default function Home() {
   const [quickEditText, setQuickEditText] = useState("");
   const [elementDialog, setElementDialog] = useState<{ open: boolean; src?: string }>({ open: false });
   const [elementTarget, setElementTarget] = useState("");
-  const [elementOp, setElementOp] = useState<"recolor" | "remove" | "replace" | "free" | "layers">("recolor");
+  const [elementOp, setElementOp] = useState<"recolor" | "remove" | "replace" | "free" | "layers" | "smart-split">("recolor");
   const [elementValue, setElementValue] = useState("");
   const [maskDialog, setMaskDialog] = useState<{ open: boolean; src?: string }>({ open: false });
   const [maskBrush, setMaskBrush] = useState(36);
@@ -1632,6 +1632,81 @@ export default function Home() {
     [apiAsyncImages, aspect, createPlaceholder, placeImageOnCanvas, pushHistory, removePlaceholder],
   );
 
+  /* GPU 专业抠图（BiRefNet）；503/失败时降级到 doImageEdit remove-bg */
+  const doGpuMatting = useCallback(
+    async (src: string) => {
+      const imageB64 = await srcToDataUrl(src);
+      const placeholderId = createPlaceholder("GPU 抠图");
+      try {
+        const payload = await apiAsyncImages<{
+          image?: { public_url?: string; has_alpha?: boolean };
+          backend?: string;
+        }>("/matting", { image_b64: imageB64 });
+        const url = String(payload.data?.image?.public_url || "").trim();
+        if (!url) throw new Error("GPU 抠图未返回图片");
+        removePlaceholder(placeholderId);
+        await placeImageOnCanvas(url, "remove-bg-gpu");
+        pushHistory({ kind: "remove-bg-gpu", prompt: "GPU BiRefNet matting", outputs: [{ url }] });
+        return { urls: [url], degraded: false as const };
+      } catch (error) {
+        removePlaceholder(placeholderId);
+        const message = error instanceof Error ? error.message : String(error);
+        // 503 / not configured / network → fall back to GPT remove-bg path
+        if (/503|not configured|GPU ComfyUI|fetch failed|Failed to fetch|timed out|超时/i.test(message)) {
+          const urls = await doImageEdit({
+            src,
+            instruction: "完整保留主体，把背景替换为纯白色（#FFFFFF）纯净平涂，无阴影无渐变，主体边缘干净利落，主体本身完全不变",
+            kind: "remove-bg",
+            transparent: true,
+          });
+          return { urls, degraded: true as const };
+        }
+        throw error;
+      }
+    },
+    [apiAsyncImages, createPlaceholder, doImageEdit, placeImageOnCanvas, pushHistory, removePlaceholder],
+  );
+
+  /* GPU 语义拆层（SAM2）；失败时不破坏原有拆分图层能力 */
+  const doGpuSegment = useCallback(
+    async (src: string) => {
+      const imageB64 = await srcToDataUrl(src);
+      const placeholderId = createPlaceholder("智能拆层");
+      try {
+        const payload = await apiAsyncImages<{
+          segments?: Array<{ id?: string; cutout_url?: string | null; mask_url?: string | null }>;
+          overlay_url?: string | null;
+          backend?: string;
+        }>("/segment", { image_b64: imageB64, max_segments: 8 });
+        const data = payload.data || {};
+        const urls: string[] = [];
+        if (data.overlay_url) urls.push(String(data.overlay_url));
+        for (const segment of data.segments || []) {
+          const cutout = String(segment.cutout_url || "").trim();
+          const mask = String(segment.mask_url || "").trim();
+          if (cutout && !urls.includes(cutout)) urls.push(cutout);
+          else if (mask && !urls.includes(mask)) urls.push(mask);
+        }
+        const unique = Array.from(new Set(urls.filter(Boolean)));
+        if (!unique.length) throw new Error("GPU 拆层未返回图层");
+        removePlaceholder(placeholderId);
+        for (const url of unique.slice(0, 8)) {
+          await placeImageOnCanvas(url, "segment-gpu");
+        }
+        pushHistory({
+          kind: "segment-gpu",
+          prompt: "GPU SAM2 segment",
+          outputs: unique.map((url) => ({ url })),
+        });
+        return { urls: unique, count: unique.length, degraded: false as const };
+      } catch (error) {
+        removePlaceholder(placeholderId);
+        throw error;
+      }
+    },
+    [apiAsyncImages, createPlaceholder, placeImageOnCanvas, pushHistory, removePlaceholder],
+  );
+
   /* ---------- 真 mask inpaint：edits 优先，降级为参考图重绘；两条路径都做像素级合成（mask 外原图无损） ---------- */
 
   const initMaskEditor = useCallback(async (src: string) => {
@@ -2592,14 +2667,18 @@ export default function Home() {
                 onClick={() =>
                   void runAction("去除背景", async () => {
                     pushMessage({ role: "user", text: "Remove BG 去除背景" });
-                    const urls = await doImageEdit({
-                      src: selection.images[0],
-                      instruction: "完整保留主体，把背景替换为纯白色（#FFFFFF）纯净平涂，无阴影无渐变，主体边缘干净利落，主体本身完全不变",
-                      kind: "remove-bg",
-                      transparent: true,
-                    });
-                    pushMessage({ role: "assistant", kind: "去背景", images: urls });
-                    setContextChips(urls.slice(0, 2));
+                    const result = await doGpuMatting(selection.images[0]);
+                    if (result.degraded) {
+                      pushMessage({
+                        role: "assistant",
+                        kind: "去背景",
+                        text: "GPU 抠图暂不可用，已用普通方案处理",
+                        images: result.urls,
+                      });
+                    } else {
+                      pushMessage({ role: "assistant", kind: "去背景", images: result.urls });
+                    }
+                    setContextChips(result.urls.slice(0, 2));
                   })
                 }
               >
@@ -3421,7 +3500,7 @@ export default function Home() {
                 <img src={elementDialog.src} alt="selected" />
               </div>
             ) : null}
-            {elementOp !== "layers" ? (
+            {elementOp !== "layers" && elementOp !== "smart-split" ? (
               <label>
                 目标元素
                 <input
@@ -3441,6 +3520,7 @@ export default function Home() {
                   { id: "replace", label: "替换为" },
                   { id: "free", label: "自由指令" },
                   { id: "layers", label: "拆分图层" },
+                  { id: "smart-split", label: "智能拆层" },
                 ] as const
               ).map((op) => (
                 <button key={op.id} type="button" className={elementOp === op.id ? "on" : ""} onClick={() => setElementOp(op.id)}>
@@ -3448,7 +3528,7 @@ export default function Home() {
                 </button>
               ))}
             </div>
-            {elementOp !== "remove" && elementOp !== "layers" ? (
+            {elementOp !== "remove" && elementOp !== "layers" && elementOp !== "smart-split" ? (
               <label>
                 {elementOp === "recolor" ? "目标颜色" : elementOp === "replace" ? "替换成什么" : "指令"}
                 <input
@@ -3461,12 +3541,18 @@ export default function Home() {
               </label>
             ) : null}
             <div className="dialogFooter">
-              <span>{elementOp === "layers" ? "按颜色拆成独立图层，落画布后可单独拖动/删除" : "只动指定元素，其余保持原样"}</span>
+              <span>
+                {elementOp === "layers"
+                  ? "按颜色拆成独立图层，落画布后可单独拖动/删除"
+                  : elementOp === "smart-split"
+                    ? "GPU 语义分割：输出 overlay/mask，失败不影响其他编辑"
+                    : "只动指定元素，其余保持原样"}
+              </span>
               <button
                 className="darkButton"
                 type="button"
                 disabled={
-                  elementOp === "layers"
+                  elementOp === "layers" || elementOp === "smart-split"
                     ? false
                     : !elementTarget.trim() || (elementOp !== "remove" && !elementValue.trim())
                 }
@@ -3474,6 +3560,32 @@ export default function Home() {
                   const src = elementDialog.src;
                   if (!src) return;
                   setElementDialog({ open: false });
+                  if (elementOp === "smart-split") {
+                    void runAction("智能拆层", async () => {
+                      pushMessage({ role: "user", text: "智能拆层 / 语义分割" });
+                      try {
+                        const result = await doGpuSegment(src);
+                        pushMessage({
+                          role: "assistant",
+                          kind: "智能拆层",
+                          text: `已拆出 ${result.count} 个分割结果（overlay/mask），可在画布上单独编辑。`,
+                          images: result.urls.slice(0, 4),
+                        });
+                        setContextChips(result.urls.slice(0, 2));
+                      } catch (error) {
+                        const message = error instanceof Error ? error.message : String(error);
+                        pushMessage({
+                          role: "assistant",
+                          kind: "智能拆层",
+                          text: /503|not configured|GPU/i.test(message)
+                            ? "GPU 拆层暂不可用，可改用「拆分图层」颜色方案。"
+                            : `智能拆层失败：${message}`,
+                          error: message,
+                        });
+                      }
+                    });
+                    return;
+                  }
                   if (elementOp === "layers") {
                     void runAction("拆分图层", async () => {
                       pushMessage({ role: "user", text: "拆分图层" });

@@ -12,7 +12,7 @@ export async function GET(request: Request) {
     openapi: "3.1.0",
     info: {
       title: "Youngtuo Visual Studio API",
-      version: "1.1.0",
+      version: "1.2.0",
     },
     servers: [{ url: publicBaseUrl }],
     security: [{ bearerAuth: [] }],
@@ -228,6 +228,115 @@ export async function GET(request: Request) {
             content: { "application/json": { schema: { $ref: "#/components/schemas/AgentChatRequest" } } },
           },
           responses: { "200": { description: "Assistant message with optional tool_calls" } },
+        },
+      },
+      "/image-jobs/{job_id}": {
+        get: {
+          summary: "Poll async image job status (matting/segment/images/inpaint etc.)",
+          parameters: [{ name: "job_id", in: "path", required: true, schema: { type: "string" } }],
+          responses: {
+            "200": { description: "Job state: running | done | failed" },
+            "404": { description: "Job not found" },
+          },
+        },
+      },
+      "/inpaint": {
+        post: {
+          summary: "Mask inpaint via images/edits (async recommended)",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["image_b64", "mask_b64"],
+                  properties: {
+                    image_b64: { type: "string" },
+                    mask_b64: { type: "string" },
+                    instruction: { type: "string" },
+                    size: { type: "string", examples: ["1024x1024"] },
+                    async: { type: "boolean", default: true },
+                  },
+                },
+              },
+            },
+          },
+          responses: { "200": { description: "Accepted job or completed inpaint" } },
+        },
+      },
+      "/ocr-lines": {
+        post: {
+          summary: "OCR text lines with bounding boxes for local font restyle",
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { type: "object", properties: { image_b64: { type: "string" } } } } },
+          },
+          responses: { "200": { description: "OCR lines" } },
+        },
+      },
+      "/canvas-snapshots/{project_id}": {
+        get: {
+          summary: "Load a canvas cloud snapshot",
+          parameters: [{ name: "project_id", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "200": { description: "Snapshot JSON" }, "404": { description: "Not found" } },
+        },
+        put: {
+          summary: "Save a canvas cloud snapshot",
+          parameters: [{ name: "project_id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { type: "object" } } },
+          },
+          responses: { "200": { description: "Saved" } },
+        },
+      },
+      "/matting": {
+        post: {
+          summary: "GPU BiRefNet background matting (async by default; poll /image-jobs)",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    image_b64: { type: "string", description: "PNG/JPEG data URL or base64" },
+                    image_url: { type: "string", description: "Remote image URL (image/* only, ≤12MB)" },
+                    async: { type: "boolean", default: true },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            "200": { description: "Accepted job_id or completed matting result" },
+            "503": { description: "GPU_COMFY_BASE_URL not configured" },
+          },
+        },
+      },
+      "/segment": {
+        post: {
+          summary: "GPU SAM2 semantic segmentation (async by default; poll /image-jobs)",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    image_b64: { type: "string" },
+                    image_url: { type: "string" },
+                    max_segments: { type: "integer", minimum: 1, maximum: 16, default: 8 },
+                    async: { type: "boolean", default: true },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            "200": { description: "Accepted job_id or completed segment result" },
+            "503": { description: "GPU_COMFY_BASE_URL not configured" },
+          },
         },
       },
     },

@@ -1,3 +1,4 @@
+import { gpuComfyHostOnly, isGpuComfyConfigured } from "../_lib/comfy-gpu";
 import {
   imageFallbackModels,
   imageGenerationConcurrency,
@@ -33,6 +34,8 @@ export async function GET() {
     image_key_set: Boolean(process.env.IMAGE_OPENAI_API_KEY || process.env.OPENAI_API_KEY),
     api_token_configured: Boolean(process.env.VIDEO_API_TOKEN),
     video_proxy_configured: Boolean(process.env.VIDEO_API_PROXY_BASE_URL),
+    gpu_comfy_configured: isGpuComfyConfigured(),
+    gpu_comfy_base_url_host: gpuComfyHostOnly() || null,
   });
 }
 

@@ -26,3 +26,9 @@
 - weiaidesign 的生图是异步任务（Cloudflare 100s 限制），所以 chatflow 用"提交→回 job id→对话查询"，smoke 用固定两轮 sleep+查询（低画质一般 30-60s 内完成；没完成会提示 PENDING+job id）
 - Dify code 节点无网络，仅用于 sleep/解析
 - DSL 按 Dify 0.15/1.x 的 0.1.5 schema 手写（参照 `ai/geobuild/dify/` 包格式）；若导入报 schema 错，按 yml 里的节点结构在 UI 手工重建，图很小（console 12 节点 / smoke 9 节点）
+- **GPU 抠图/分割不进 Dify 编排**：专业抠图（BiRefNet）与语义分割（SAM2）由 weiaidesign 服务端代理：
+  - `POST https://weiaidesign.com/api/v1/matting`
+  - `POST https://weiaidesign.com/api/v1/segment`
+  - 再轮询 `GET /api/v1/image-jobs/{job_id}`
+  - ComfyUI 固定入口 `https://comfy.youngtuo.win` 仅服务端使用（`GPU_COMFY_BASE_URL`），**不要**在 Dify 里直连 ComfyUI
+- smoke/health 可观察 `gpu_comfy_configured` / `gpu_comfy_base_url_host` 字段判断 GPU 能力是否在线；大图处理逻辑仍在产品代码

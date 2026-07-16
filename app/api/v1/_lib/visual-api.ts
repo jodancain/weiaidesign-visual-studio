@@ -108,6 +108,35 @@ function imagePublicUrl(request: Request, imageId: string, filename: string) {
   return `${apiBaseUrl(request)}/generated-images/${encodeURIComponent(imageId)}/${encodeURIComponent(filename)}`;
 }
 
+/** Persist a generated/processed image buffer and return public URLs (GPU matting/segment etc.). */
+export async function saveGeneratedImageBuffer(
+  request: Request,
+  buffer: Buffer,
+  filenamePrefix: string,
+  extension = "png",
+) {
+  const imageId = `img-${randomUUID()}`;
+  const safePrefix = String(filenamePrefix || "image")
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48) || "image";
+  const safeExt = String(extension || "png").replace(/[^a-z0-9]/gi, "").toLowerCase() || "png";
+  const filename = `${safePrefix}.${safeExt}`;
+  const runDir = join(imageOutputDir, imageId);
+  await mkdir(runDir, { recursive: true });
+  const outputPath = join(runDir, filename);
+  await writeFile(outputPath, buffer);
+  const publicUrl = imagePublicUrl(request, imageId, filename);
+  return {
+    image_id: imageId,
+    public_url: publicUrl,
+    download_url: publicUrl,
+    output_path: outputPath,
+    size: buffer.length,
+    mime_type: mimeForFilename(filename),
+  };
+}
+
 async function fetchJson(url: string, options: FetchJsonOptions = {}) {
   const timeoutMs = options.timeoutMs || 120000;
   const controller = new AbortController();
