@@ -224,13 +224,46 @@ type OaiMessage =
   | { role: "assistant"; content?: string | null; tool_calls?: OaiToolCall[] }
   | { role: "tool"; tool_call_id: string; content: string };
 
-type AgentSession = { id: string; title: string; ts: number; messages: ChatMessage[]; oai: OaiMessage[] };
+type AgentSession = {
+  id: string;
+  title: string;
+  ts: number;
+  messages: ChatMessage[];
+  oai: OaiMessage[];
+  /** Owning project; missing on legacy sessions → treated as default */
+  projectId?: string;
+};
 
 function sessionTitleOf(messages: ChatMessage[]) {
   const first = messages.find((m) => m.role === "user") as { text?: string } | undefined;
   const text = (first?.text || "").replace(/\s+/g, " ").trim();
   if (!text) return "New chat";
   return text.length > 24 ? `${text.slice(0, 24)}…` : text;
+}
+
+/* projectId helpers use literal "default" — DEFAULT_PROJECT_ID const is declared later */
+function sessionProjectIdOf(session: Pick<AgentSession, "projectId"> | null | undefined): string {
+  const id = String(session?.projectId || "").trim();
+  return id || "default";
+}
+
+function normalizeAgentSessions(raw: unknown): AgentSession[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((s): s is AgentSession => Boolean(s && typeof s === "object" && typeof (s as AgentSession).id === "string"))
+    .map((s) => ({
+      id: String(s.id),
+      title: String(s.title || "New chat"),
+      ts: Number(s.ts) || Date.now(),
+      messages: Array.isArray(s.messages) ? s.messages : [],
+      oai: Array.isArray(s.oai) ? s.oai : [],
+      projectId: sessionProjectIdOf(s),
+    }));
+}
+
+function sessionsForProject(sessions: AgentSession[], projectId: string): AgentSession[] {
+  const pid = projectId || "default";
+  return sessions.filter((s) => sessionProjectIdOf(s) === pid);
 }
 
 /* assistant 文本渲染：3 行以上编号列表升级为 Lovart 式任务清单卡 */
@@ -819,6 +852,53 @@ export default function Home() {
     };
   }, [editor, activeProjectId, saveCanvasToCloud]);
 
+  /**
+   * Save current chat under leaving project, then restore target project's latest session (or empty).
+   * Must run in the same event-handler turn as setActiveProjectId so React batches final state
+   * (avoids stamping old messages with the new projectId).
+   */
+  const bindSessionToProjectSwitch = useCallback(
+    (fromProjectId: string, toProjectId: string, prevSessions: AgentSession[]) => {
+      let next = prevSessions;
+      if (messages.length) {
+        const rest = prevSessions.filter((s) => s.id !== sessionId);
+        next = [
+          {
+            id: sessionId,
+            projectId: fromProjectId || DEFAULT_PROJECT_ID,
+            title: sessionTitleOf(messages),
+            ts: Date.now(),
+            messages,
+            oai: oaiHistoryRef.current,
+          },
+          ...rest,
+        ];
+      }
+      next = normalizeAgentSessions(next).slice(0, 40);
+      try {
+        localStorage.setItem("lovartSessions", JSON.stringify(next));
+      } catch {
+        /* ignore quota */
+      }
+      setPastSessions(next);
+
+      const forTarget = sessionsForProject(next, toProjectId);
+      // Prefer latest for target that is not the session we just left empty-bound
+      const last = forTarget.find((s) => s.messages?.length) || forTarget[0];
+      if (last?.messages?.length) {
+        setSessionId(last.id);
+        setMessages(last.messages);
+        oaiHistoryRef.current = last.oai || [];
+      } else {
+        setSessionId(uid());
+        setMessages([]);
+        oaiHistoryRef.current = [];
+      }
+      setContextChips([]);
+    },
+    [messages, sessionId],
+  );
+
   const switchProject = useCallback(
     (id: string) => {
       if (id === activeProjectId) {
@@ -827,14 +907,16 @@ export default function Home() {
       }
       // Flush title edit for the leaving project before remount.
       const leavingName = projectName.trim() || "Untitled";
+      const leavingProjectId = activeProjectId;
       setProjects((prev) => {
         const next = prev.map((p) => (p.id === activeProjectId ? { ...p, name: leavingName, ts: Date.now() } : p));
         writeProjectsToStorage(next, id);
         return next;
       });
+      // Session first, then project id — same turn, batched.
+      bindSessionToProjectSwitch(leavingProjectId, id, pastSessions);
       setEditor(null);
       setSelection({ ids: [], images: [], box: null });
-      setContextChips([]);
       setShapeCount(0);
       setSyncStatus("local");
       setActiveProjectId(id);
@@ -842,25 +924,26 @@ export default function Home() {
       setProjectName(target?.name || "Untitled");
       setExportMenu(false);
     },
-    [activeProjectId, projectName, projects],
+    [activeProjectId, bindSessionToProjectSwitch, pastSessions, projectName, projects],
   );
 
   const createProject = useCallback(() => {
     const id = uid().replace(/[^a-z0-9-]/gi, "").toLowerCase() || `p${Date.now().toString(36)}`;
     const name = `项目 ${projects.length + 1}`;
     const entry: ProjectMeta = { id, name, ts: Date.now() };
+    const leavingProjectId = activeProjectId;
     const next = [...projects.map((p) => (p.id === activeProjectId ? { ...p, name: projectName.trim() || "Untitled" } : p)), entry];
     writeProjectsToStorage(next, id);
     setProjects(next);
+    bindSessionToProjectSwitch(leavingProjectId, id, pastSessions);
     setEditor(null);
     setSelection({ ids: [], images: [], box: null });
-    setContextChips([]);
     setShapeCount(0);
     setSyncStatus("local");
     setActiveProjectId(id);
     setProjectName(name);
     setExportMenu(false);
-  }, [activeProjectId, projectName, projects]);
+  }, [activeProjectId, bindSessionToProjectSwitch, pastSessions, projectName, projects]);
 
   const deleteActiveProject = useCallback(() => {
     if (activeProjectId === DEFAULT_PROJECT_ID) {
@@ -872,19 +955,20 @@ export default function Home() {
       return;
     }
     if (!window.confirm(`删除项目「${projectName}」？画布本地数据不会自动清理，仅从列表移除。`)) return;
+    const leavingProjectId = activeProjectId;
     const next = projects.filter((p) => p.id !== activeProjectId);
     const fallback = next.find((p) => p.id === DEFAULT_PROJECT_ID) || next[0];
     writeProjectsToStorage(next, fallback.id);
     setProjects(next);
+    bindSessionToProjectSwitch(leavingProjectId, fallback.id, pastSessions);
     setEditor(null);
     setSelection({ ids: [], images: [], box: null });
-    setContextChips([]);
     setShapeCount(0);
     setSyncStatus("local");
     setActiveProjectId(fallback.id);
     setProjectName(fallback.name);
     setExportMenu(false);
-  }, [activeProjectId, projectName, projects]);
+  }, [activeProjectId, bindSessionToProjectSwitch, pastSessions, projectName, projects]);
 
   /* ------------------------------ boot ------------------------------ */
 
@@ -916,9 +1000,16 @@ export default function Home() {
       /* ignore corrupt brand kit */
     }
     try {
-      const saved = JSON.parse(localStorage.getItem("lovartSessions") || "[]") as AgentSession[];
+      const saved = normalizeAgentSessions(JSON.parse(localStorage.getItem("lovartSessions") || "[]"));
+      // migrate-write so legacy sessions without projectId stick as "default"
+      try {
+        localStorage.setItem("lovartSessions", JSON.stringify(saved.slice(0, 40)));
+      } catch {
+        /* ignore */
+      }
       setPastSessions(saved);
-      const last = saved[0];
+      const forActive = sessionsForProject(saved, bootProjects.activeId);
+      const last = forActive[0];
       if (last?.messages?.length) {
         setSessionId(last.id);
         setMessages(last.messages);
@@ -954,18 +1045,33 @@ export default function Home() {
     localStorage.setItem("lovartHistory", JSON.stringify(history.slice(0, 60)));
   }, [history]);
 
-  /* 会话持久化：当前会话始终占列表第一位（刷新后自动恢复） */
+  /* 会话持久化：当前会话带 projectId，始终靠前（刷新后按项目恢复） */
   useEffect(() => {
     if (!tokenLoaded) return;
     setPastSessions((prev) => {
       const rest = prev.filter((s) => s.id !== sessionId);
       const next = messages.length
-        ? [{ id: sessionId, title: sessionTitleOf(messages), ts: Date.now(), messages, oai: oaiHistoryRef.current }, ...rest]
+        ? [
+            {
+              id: sessionId,
+              projectId: activeProjectId || DEFAULT_PROJECT_ID,
+              title: sessionTitleOf(messages),
+              ts: Date.now(),
+              messages,
+              oai: oaiHistoryRef.current,
+            },
+            ...rest,
+          ]
         : prev;
-      localStorage.setItem("lovartSessions", JSON.stringify(next.slice(0, 20)));
-      return next.slice(0, 20);
+      const normalized = normalizeAgentSessions(next).slice(0, 40);
+      try {
+        localStorage.setItem("lovartSessions", JSON.stringify(normalized));
+      } catch {
+        /* ignore */
+      }
+      return normalized;
     });
-  }, [messages, sessionId, tokenLoaded]);
+  }, [activeProjectId, messages, sessionId, tokenLoaded]);
 
   /* Tab 快捷键：选中图片时打开 Quick Edit（Lovart 同款） */
   useEffect(() => {
@@ -2844,6 +2950,29 @@ export default function Home() {
                 type="button"
                 aria-label="new chat"
                 onClick={() => {
+                  // Flush current non-empty session under active project, then empty chat for same project.
+                  if (messages.length) {
+                    setPastSessions((prev) => {
+                      const rest = prev.filter((s) => s.id !== sessionId);
+                      const next = normalizeAgentSessions([
+                        {
+                          id: sessionId,
+                          projectId: activeProjectId || DEFAULT_PROJECT_ID,
+                          title: sessionTitleOf(messages),
+                          ts: Date.now(),
+                          messages,
+                          oai: oaiHistoryRef.current,
+                        },
+                        ...rest,
+                      ]).slice(0, 40);
+                      try {
+                        localStorage.setItem("lovartSessions", JSON.stringify(next));
+                      } catch {
+                        /* ignore */
+                      }
+                      return next;
+                    });
+                  }
                   setMessages([]);
                   oaiHistoryRef.current = [];
                   setSessionId(uid());
@@ -3232,13 +3361,15 @@ export default function Home() {
                 <X size={16} />
               </button>
             </div>
-            {pastSessions.length ? (
-              <div className="sessionList">
-                {pastSessions.map((session) => (
+            {sessionsForProject(pastSessions, activeProjectId).length ? (
+              <div className="sessionList" data-project-id={activeProjectId}>
+                {sessionsForProject(pastSessions, activeProjectId).map((session) => (
                   <button
                     key={session.id}
                     type="button"
                     className={session.id === sessionId ? "sessionItem on" : "sessionItem"}
+                    data-session-id={session.id}
+                    data-project-id={sessionProjectIdOf(session)}
                     onClick={() => {
                       setSessionId(session.id);
                       setMessages(session.messages);
