@@ -22,7 +22,9 @@ export async function POST(request: Request) {
     const data = await createStandaloneImages(payload, request);
     return jsonCors({ status: 200, message: "success", data });
   } catch (error) {
-    return jsonCors({ detail: error instanceof Error ? error.message : String(error) }, { status: 500 });
+    const message = error instanceof Error ? error.message : String(error);
+    const isValidation = /is required|required$/i.test(message);
+    return jsonCors({ detail: message }, { status: isValidation ? 400 : 500 });
   }
 }
 

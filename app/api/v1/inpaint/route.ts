@@ -18,10 +18,37 @@ function decodeDataUrl(value: string): { buffer: Buffer; mime: string } | null {
   return null;
 }
 
+/** Minimal PNG/JPEG dimension reader (no deps). Returns null if unrecognized. */
+function readImageSize(buffer: Buffer): { w: number; h: number } | null {
+  if (buffer.length > 24 && buffer[0] === 0x89 && buffer[1] === 0x50) {
+    return { w: buffer.readUInt32BE(16), h: buffer.readUInt32BE(20) };
+  }
+  if (buffer.length > 4 && buffer[0] === 0xff && buffer[1] === 0xd8) {
+    let offset = 2;
+    while (offset + 9 < buffer.length) {
+      if (buffer[offset] !== 0xff) break;
+      const marker = buffer[offset + 1];
+      const size = buffer.readUInt16BE(offset + 2);
+      if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+        return { h: buffer.readUInt16BE(offset + 5), w: buffer.readUInt16BE(offset + 7) };
+      }
+      offset += 2 + size;
+    }
+  }
+  return null;
+}
+
 async function runInpaint(payload: Record<string, unknown>) {
   const image = decodeDataUrl(String(payload.image_b64 || ""));
   const mask = decodeDataUrl(String(payload.mask_b64 || ""));
   if (!image || !mask) throw new Error("image_b64 and mask_b64 (PNG data URLs) are required");
+  const imageSize = readImageSize(image.buffer);
+  const maskSize = readImageSize(mask.buffer);
+  if (imageSize && maskSize && (imageSize.w !== maskSize.w || imageSize.h !== maskSize.h)) {
+    throw new Error(
+      `mask size (${maskSize.w}x${maskSize.h}) must match image size (${imageSize.w}x${imageSize.h}) — the relay returns an opaque 502 otherwise`,
+    );
+  }
 
   const instruction = String(payload.instruction || "").trim() || "移除遮罩区域内的内容，按周围内容自然补全";
   const size = String(payload.size || "1024x1024");
