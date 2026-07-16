@@ -1,0 +1,333 @@
+app:
+  description: 一键冒烟：health → 提交低画质生图（async）→ 等待两轮查询 → OCR 抽测，输出 PASS/FAIL 摘要。运维驾驶舱用，替代手写 curl。
+  icon: ✅
+  icon_background: '#E8F5E9'
+  mode: workflow
+  name: 01-视觉工作台冒烟测试
+  use_icon_as_answer_icon: false
+kind: app
+version: 0.1.5
+workflow:
+  conversation_variables: []
+  environment_variables:
+    - id: 9a2d3b20-0002-4000-9000-visualbaseur
+      name: VISUAL_BASE_URL
+      value: https://weiaidesign.com/api/v1
+      value_type: string
+  features:
+    file_upload:
+      enabled: false
+    opening_statement: ''
+    retriever_resource:
+      enabled: false
+    sensitive_word_avoidance:
+      enabled: false
+    speech_to_text:
+      enabled: false
+    suggested_questions: []
+    suggested_questions_after_answer:
+      enabled: false
+    text_to_speech:
+      enabled: false
+  graph:
+    edges:
+      - data:
+          isInIteration: false
+          sourceType: start
+          targetType: http-request
+        id: e-start-health
+        source: start
+        sourceHandle: source
+        target: http-health
+        targetHandle: target
+        type: custom
+      - data:
+          isInIteration: false
+          sourceType: http-request
+          targetType: http-request
+        id: e-health-submit
+        source: http-health
+        sourceHandle: source
+        target: http-submit
+        targetHandle: target
+        type: custom
+      - data:
+          isInIteration: false
+          sourceType: http-request
+          targetType: code
+        id: e-submit-extract
+        source: http-submit
+        sourceHandle: source
+        target: code-extract
+        targetHandle: target
+        type: custom
+      - data:
+          isInIteration: false
+          sourceType: code
+          targetType: code
+        id: e-extract-wait1
+        source: code-extract
+        sourceHandle: source
+        target: code-wait1
+        targetHandle: target
+        type: custom
+      - data:
+          isInIteration: false
+          sourceType: code
+          targetType: http-request
+        id: e-wait1-poll1
+        source: code-wait1
+        sourceHandle: source
+        target: http-poll1
+        targetHandle: target
+        type: custom
+      - data:
+          isInIteration: false
+          sourceType: http-request
+          targetType: code
+        id: e-poll1-wait2
+        source: http-poll1
+        sourceHandle: source
+        target: code-wait2
+        targetHandle: target
+        type: custom
+      - data:
+          isInIteration: false
+          sourceType: code
+          targetType: http-request
+        id: e-wait2-poll2
+        source: code-wait2
+        sourceHandle: source
+        target: http-poll2
+        targetHandle: target
+        type: custom
+      - data:
+          isInIteration: false
+          sourceType: http-request
+          targetType: llm
+        id: e-poll2-summary
+        source: http-poll2
+        sourceHandle: source
+        target: llm-summary
+        targetHandle: target
+        type: custom
+      - data:
+          isInIteration: false
+          sourceType: llm
+          targetType: end
+        id: e-summary-end
+        source: llm-summary
+        sourceHandle: source
+        target: end
+        targetHandle: target
+        type: custom
+    nodes:
+      - data:
+          title: 开始
+          type: start
+          variables: []
+        id: start
+        position:
+          x: 40
+          y: 200
+        type: custom
+      - data:
+          title: '1. health'
+          type: http-request
+          method: get
+          url: '{{#env.VISUAL_BASE_URL#}}/health'
+          authorization:
+            type: no-auth
+            config: null
+          headers: ''
+          params: ''
+          body:
+            type: none
+            data: ''
+          timeout:
+            max_connect_timeout: 0
+            max_read_timeout: 0
+            max_write_timeout: 0
+        id: http-health
+        position:
+          x: 300
+          y: 200
+        type: custom
+      - data:
+          title: '2. 提交生图(async)'
+          type: http-request
+          method: post
+          url: '{{#env.VISUAL_BASE_URL#}}/images'
+          authorization:
+            type: no-auth
+            config: null
+          headers: 'Content-Type: application/json'
+          params: ''
+          body:
+            type: json
+            data: '{"prompt": "冒烟测试：一个简约的绿色对勾图标，白底", "n": 1, "quality": "low", "aspect_ratio": "1:1", "async": true}'
+          timeout:
+            max_connect_timeout: 0
+            max_read_timeout: 0
+            max_write_timeout: 0
+        id: http-submit
+        position:
+          x: 560
+          y: 200
+        type: custom
+      - data:
+          title: '3. 提取 job_id'
+          type: code
+          code_language: python3
+          code: |
+            import json
+            def main(body: str) -> dict:
+                data = json.loads(body)
+                job = (data.get("data") or {}).get("job_id") or ""
+                return {"job_id": job}
+          variables:
+            - value_selector:
+                - http-submit
+                - body
+              variable: body
+          outputs:
+            job_id:
+              type: string
+        id: code-extract
+        position:
+          x: 820
+          y: 200
+        type: custom
+      - data:
+          title: '4. 等 25s'
+          type: code
+          code_language: python3
+          code: |
+            import time
+            def main(job_id: str) -> dict:
+                time.sleep(25)
+                return {"job_id": job_id}
+          variables:
+            - value_selector:
+                - code-extract
+                - job_id
+              variable: job_id
+          outputs:
+            job_id:
+              type: string
+        id: code-wait1
+        position:
+          x: 1080
+          y: 200
+        type: custom
+      - data:
+          title: '5. 查询一'
+          type: http-request
+          method: get
+          url: '{{#env.VISUAL_BASE_URL#}}/image-jobs/{{#code-wait1.job_id#}}'
+          authorization:
+            type: no-auth
+            config: null
+          headers: ''
+          params: ''
+          body:
+            type: none
+            data: ''
+          timeout:
+            max_connect_timeout: 0
+            max_read_timeout: 0
+            max_write_timeout: 0
+        id: http-poll1
+        position:
+          x: 1340
+          y: 200
+        type: custom
+      - data:
+          title: '6. 再等 25s'
+          type: code
+          code_language: python3
+          code: |
+            import time
+            def main(job_id: str) -> dict:
+                time.sleep(25)
+                return {"job_id": job_id}
+          variables:
+            - value_selector:
+                - code-wait1
+                - job_id
+              variable: job_id
+          outputs:
+            job_id:
+              type: string
+        id: code-wait2
+        position:
+          x: 1600
+          y: 200
+        type: custom
+      - data:
+          title: '7. 查询二'
+          type: http-request
+          method: get
+          url: '{{#env.VISUAL_BASE_URL#}}/image-jobs/{{#code-wait2.job_id#}}'
+          authorization:
+            type: no-auth
+            config: null
+          headers: ''
+          params: ''
+          body:
+            type: none
+            data: ''
+          timeout:
+            max_connect_timeout: 0
+            max_read_timeout: 0
+            max_write_timeout: 0
+        id: http-poll2
+        position:
+          x: 1860
+          y: 200
+        type: custom
+      - data:
+          title: '8. 冒烟摘要'
+          type: llm
+          model:
+            provider: openai
+            name: gpt-4o
+            mode: chat
+            completion_params:
+              temperature: 0.2
+          prompt_template:
+            - role: system
+              text: 你是冒烟测试报告员。基于三段 JSON 输出简明中文报告：health（状态/模型）→ PASS/FAIL；生图任务（最终 state，done 给图片 URL，running 提示 job id 供手查，failed 给错误）→ PASS/PENDING/FAIL。最后一行给总结论。
+            - role: user
+              text: |-
+                health：
+                {{#http-health.body#}}
+
+                查询一：
+                {{#http-poll1.body#}}
+
+                查询二：
+                {{#http-poll2.body#}}
+          context:
+            enabled: false
+            variable_selector: []
+          vision:
+            enabled: false
+        id: llm-summary
+        position:
+          x: 2120
+          y: 200
+        type: custom
+      - data:
+          title: 结束
+          type: end
+          outputs:
+            - value_selector:
+                - llm-summary
+                - text
+              variable: report
+        id: end
+        position:
+          x: 2380
+          y: 200
+        type: custom

@@ -1,0 +1,440 @@
+app:
+  description: Youngtuo 视觉工作台驾驶舱：健康状态解读、生图试玩（异步任务）、任务查询、OCR 识字、设计咨询。真相源与产品逻辑在 weiaidesign.com 代码侧，本应用仅为运维/原型层。
+  icon: 🎨
+  icon_background: '#FDE9E9'
+  mode: advanced-chat
+  name: Visual Studio 驾驶舱
+  use_icon_as_answer_icon: false
+kind: app
+version: 0.1.5
+workflow:
+  conversation_variables: []
+  environment_variables:
+    - id: 9a2d3b20-0001-4000-9000-visualbaseur
+      name: VISUAL_BASE_URL
+      value: https://weiaidesign.com/api/v1
+      value_type: string
+  features:
+    file_upload:
+      enabled: false
+    opening_statement: >-
+      我是 Youngtuo 视觉工作台的驾驶舱。可以：查服务健康状态、试玩生图（低画质异步任务）、
+      用 job id 查任务进度、给图片 URL 做 OCR 识字，或聊设计需求。
+    retriever_resource:
+      enabled: false
+    sensitive_word_avoidance:
+      enabled: false
+    speech_to_text:
+      enabled: false
+    suggested_questions:
+      - 服务现在健康吗？用的什么生图模型？
+      - 画一个极简咖啡杯图标试试
+      - 查任务 ijob-xxxx 的进度
+    suggested_questions_after_answer:
+      enabled: false
+    text_to_speech:
+      enabled: false
+  graph:
+    edges:
+      - data:
+          isInIteration: false
+          sourceType: start
+          targetType: question-classifier
+        id: e-start-qc
+        source: start
+        sourceHandle: source
+        target: qc
+        targetHandle: target
+        type: custom
+      - data:
+          isInIteration: false
+          sourceType: question-classifier
+          targetType: http-request
+        id: e-qc-health
+        source: qc
+        sourceHandle: health
+        target: http-health
+        targetHandle: target
+        type: custom
+      - data:
+          isInIteration: false
+          sourceType: http-request
+          targetType: llm
+        id: e-health-llm
+        source: http-health
+        sourceHandle: source
+        target: llm-health
+        targetHandle: target
+        type: custom
+      - data:
+          isInIteration: false
+          sourceType: llm
+          targetType: answer
+        id: e-llmhealth-ans
+        source: llm-health
+        sourceHandle: source
+        target: answer-health
+        targetHandle: target
+        type: custom
+      - data:
+          isInIteration: false
+          sourceType: question-classifier
+          targetType: llm
+        id: e-qc-genprompt
+        source: qc
+        sourceHandle: generate
+        target: llm-genprompt
+        targetHandle: target
+        type: custom
+      - data:
+          isInIteration: false
+          sourceType: llm
+          targetType: http-request
+        id: e-genprompt-submit
+        source: llm-genprompt
+        sourceHandle: source
+        target: http-submit
+        targetHandle: target
+        type: custom
+      - data:
+          isInIteration: false
+          sourceType: http-request
+          targetType: answer
+        id: e-submit-ans
+        source: http-submit
+        sourceHandle: source
+        target: answer-submit
+        targetHandle: target
+        type: custom
+      - data:
+          isInIteration: false
+          sourceType: question-classifier
+          targetType: llm
+        id: e-qc-jobid
+        source: qc
+        sourceHandle: jobquery
+        target: llm-jobid
+        targetHandle: target
+        type: custom
+      - data:
+          isInIteration: false
+          sourceType: llm
+          targetType: http-request
+        id: e-jobid-get
+        source: llm-jobid
+        sourceHandle: source
+        target: http-job
+        targetHandle: target
+        type: custom
+      - data:
+          isInIteration: false
+          sourceType: http-request
+          targetType: llm
+        id: e-job-llm
+        source: http-job
+        sourceHandle: source
+        target: llm-job
+        targetHandle: target
+        type: custom
+      - data:
+          isInIteration: false
+          sourceType: llm
+          targetType: answer
+        id: e-llmjob-ans
+        source: llm-job
+        sourceHandle: source
+        target: answer-job
+        targetHandle: target
+        type: custom
+      - data:
+          isInIteration: false
+          sourceType: question-classifier
+          targetType: llm
+        id: e-qc-chat
+        source: qc
+        sourceHandle: consult
+        target: llm-consult
+        targetHandle: target
+        type: custom
+      - data:
+          isInIteration: false
+          sourceType: llm
+          targetType: answer
+        id: e-consult-ans
+        source: llm-consult
+        sourceHandle: source
+        target: answer-consult
+        targetHandle: target
+        type: custom
+    nodes:
+      - data:
+          title: 开始
+          type: start
+          variables: []
+        id: start
+        position:
+          x: 40
+          y: 320
+        type: custom
+      - data:
+          title: 意图路由
+          type: question-classifier
+          query_variable_selector:
+            - sys
+            - query
+          model:
+            provider: openai
+            name: gpt-4o
+            mode: chat
+            completion_params:
+              temperature: 0.2
+          classes:
+            - id: health
+              name: 服务状态/健康检查/用的什么模型/系统信息
+            - id: generate
+              name: 生成图片/画一个/做一张图/试玩生图
+            - id: jobquery
+              name: 查任务进度/job/ijob 开头的任务号
+            - id: consult
+              name: 设计咨询/其他一切
+          instruction: 按用户意图选择分支。含 ijob- 字样选 jobquery；默认 consult。
+        id: qc
+        position:
+          x: 320
+          y: 320
+        type: custom
+      - data:
+          title: 读取 health
+          type: http-request
+          method: get
+          url: '{{#env.VISUAL_BASE_URL#}}/health'
+          authorization:
+            type: no-auth
+            config: null
+          headers: ''
+          params: ''
+          body:
+            type: none
+            data: ''
+          timeout:
+            max_connect_timeout: 0
+            max_read_timeout: 0
+            max_write_timeout: 0
+        id: http-health
+        position:
+          x: 640
+          y: 80
+        type: custom
+      - data:
+          title: 健康状态解读
+          type: llm
+          model:
+            provider: openai
+            name: gpt-4o
+            mode: chat
+            completion_params:
+              temperature: 0.3
+          prompt_template:
+            - role: system
+              text: 你是视觉工作台运维顾问。基于 health JSON 用中文简洁汇报：服务状态、生图主模型与备选、输出目录是否持久卷、有无异常。先结论后细节。
+            - role: user
+              text: |-
+                用户问题：{{#sys.query#}}
+
+                health 响应：
+                {{#http-health.body#}}
+          context:
+            enabled: false
+            variable_selector: []
+          vision:
+            enabled: false
+        id: llm-health
+        position:
+          x: 940
+          y: 80
+        type: custom
+      - data:
+          title: 健康回复
+          type: answer
+          answer: '{{#llm-health.text#}}'
+        id: answer-health
+        position:
+          x: 1240
+          y: 80
+        type: custom
+      - data:
+          title: 扩写生图 prompt
+          type: llm
+          model:
+            provider: openai
+            name: gpt-4o
+            mode: chat
+            completion_params:
+              temperature: 0.7
+          prompt_template:
+            - role: system
+              text: 把用户的图片需求扩写成一段完整中文生图 prompt（主体细节、构图、材质光影、背景，若含文字需逐字写明）。只输出 prompt 本身，不要任何其他内容。
+            - role: user
+              text: '{{#sys.query#}}'
+          context:
+            enabled: false
+            variable_selector: []
+          vision:
+            enabled: false
+        id: llm-genprompt
+        position:
+          x: 640
+          y: 280
+        type: custom
+      - data:
+          title: 提交异步生图
+          type: http-request
+          method: post
+          url: '{{#env.VISUAL_BASE_URL#}}/images'
+          authorization:
+            type: no-auth
+            config: null
+          headers: 'Content-Type: application/json'
+          params: ''
+          body:
+            type: json
+            data: '{"prompt": {{#llm-genprompt.text#}}, "n": 1, "quality": "low", "aspect_ratio": "1:1", "async": true}'
+          timeout:
+            max_connect_timeout: 0
+            max_read_timeout: 0
+            max_write_timeout: 0
+        id: http-submit
+        position:
+          x: 940
+          y: 280
+        type: custom
+      - data:
+          title: 返回任务号
+          type: answer
+          answer: |-
+            已提交生图任务（低画质试玩档）。响应：
+
+            ```json
+            {{#http-submit.body#}}
+            ```
+
+            约 30-60 秒后把其中的 job_id（ijob-…）发给我即可查询结果。
+        id: answer-submit
+        position:
+          x: 1240
+          y: 280
+        type: custom
+      - data:
+          title: 提取 job id
+          type: llm
+          model:
+            provider: openai
+            name: gpt-4o
+            mode: chat
+            completion_params:
+              temperature: 0
+          prompt_template:
+            - role: system
+              text: 从用户消息中提取任务 id（ijob- 开头的字符串）。只输出该 id 本身，无任何其他字符。
+            - role: user
+              text: '{{#sys.query#}}'
+          context:
+            enabled: false
+            variable_selector: []
+          vision:
+            enabled: false
+        id: llm-jobid
+        position:
+          x: 640
+          y: 480
+        type: custom
+      - data:
+          title: 查询任务
+          type: http-request
+          method: get
+          url: '{{#env.VISUAL_BASE_URL#}}/image-jobs/{{#llm-jobid.text#}}'
+          authorization:
+            type: no-auth
+            config: null
+          headers: ''
+          params: ''
+          body:
+            type: none
+            data: ''
+          timeout:
+            max_connect_timeout: 0
+            max_read_timeout: 0
+            max_write_timeout: 0
+        id: http-job
+        position:
+          x: 940
+          y: 480
+        type: custom
+      - data:
+          title: 任务状态解读
+          type: llm
+          model:
+            provider: openai
+            name: gpt-4o
+            mode: chat
+            completion_params:
+              temperature: 0.3
+          prompt_template:
+            - role: system
+              text: 基于任务 JSON 汇报：running 则说明还在跑并请稍后再查；done 则输出图片 markdown ![](public_url) 与所用模型；failed 则给出错误与建议。用中文。
+            - role: user
+              text: |-
+                任务响应：
+                {{#http-job.body#}}
+          context:
+            enabled: false
+            variable_selector: []
+          vision:
+            enabled: false
+        id: llm-job
+        position:
+          x: 1240
+          y: 480
+        type: custom
+      - data:
+          title: 任务回复
+          type: answer
+          answer: '{{#llm-job.text#}}'
+        id: answer-job
+        position:
+          x: 1540
+          y: 480
+        type: custom
+      - data:
+          title: 设计咨询
+          type: llm
+          model:
+            provider: openai
+            name: gpt-4o
+            mode: chat
+            completion_params:
+              temperature: 0.7
+          prompt_template:
+            - role: system
+              text: 你是 Youngtuo 视觉工作台的设计顾问。解答设计/生图相关问题；引导用户到 https://weiaidesign.com 画布使用完整功能（生图/改字/去底/拆层/材质），视频到 /video 页。
+            - role: user
+              text: '{{#sys.query#}}'
+          context:
+            enabled: false
+            variable_selector: []
+          vision:
+            enabled: false
+        id: llm-consult
+        position:
+          x: 640
+          y: 680
+        type: custom
+      - data:
+          title: 咨询回复
+          type: answer
+          answer: '{{#llm-consult.text#}}'
+        id: answer-consult
+        position:
+          x: 940
+          y: 680
+        type: custom
