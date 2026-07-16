@@ -486,6 +486,87 @@ async function compositeTargetWithSwatch(targetSrc: string, materialSrc: string)
 const uid = () => Math.random().toString(36).slice(2, 10);
 
 /* ------------------------------------------------------------------ */
+/* multi-project canvas metadata (localStorage)                        */
+/* ------------------------------------------------------------------ */
+
+type ProjectMeta = { id: string; name: string; ts: number };
+
+const DEFAULT_PROJECT_ID = "default";
+const DEFAULT_PERSISTENCE_KEY = "lovart-visual-canvas-v3";
+const PROJECTS_STORAGE_KEY = "lovartProjects";
+const ACTIVE_PROJECT_STORAGE_KEY = "lovartActiveProjectId";
+const LEGACY_PROJECT_NAME_KEY = "lovartProjectName";
+
+function persistenceKeyFor(projectId: string): string {
+  return projectId === DEFAULT_PROJECT_ID ? DEFAULT_PERSISTENCE_KEY : `lovart-canvas-${projectId}`;
+}
+
+function defaultProjectList(name = "Untitled"): ProjectMeta[] {
+  return [{ id: DEFAULT_PROJECT_ID, name, ts: Date.now() }];
+}
+
+function readProjectsFromStorage(): { projects: ProjectMeta[]; activeId: string; name: string } {
+  const legacyName = (() => {
+    try {
+      return localStorage.getItem(LEGACY_PROJECT_NAME_KEY) || "Untitled";
+    } catch {
+      return "Untitled";
+    }
+  })();
+  let projects: ProjectMeta[] = [];
+  try {
+    const raw = JSON.parse(localStorage.getItem(PROJECTS_STORAGE_KEY) || "null");
+    if (Array.isArray(raw)) {
+      projects = raw
+        .filter((p): p is ProjectMeta => p && typeof p === "object" && typeof p.id === "string")
+        .map((p) => ({
+          id: String(p.id).slice(0, 40),
+          name: String(p.name || "Untitled").trim() || "Untitled",
+          ts: Number(p.ts) || Date.now(),
+        }));
+    }
+  } catch {
+    projects = [];
+  }
+  if (!projects.length) {
+    projects = defaultProjectList(legacyName);
+    try {
+      localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(projects));
+    } catch {
+      /* ignore */
+    }
+  }
+  if (!projects.some((p) => p.id === DEFAULT_PROJECT_ID)) {
+    projects = [{ id: DEFAULT_PROJECT_ID, name: legacyName, ts: Date.now() }, ...projects];
+  }
+  let activeId = DEFAULT_PROJECT_ID;
+  try {
+    activeId = localStorage.getItem(ACTIVE_PROJECT_STORAGE_KEY) || DEFAULT_PROJECT_ID;
+  } catch {
+    activeId = DEFAULT_PROJECT_ID;
+  }
+  if (!projects.some((p) => p.id === activeId)) activeId = DEFAULT_PROJECT_ID;
+  try {
+    localStorage.setItem(ACTIVE_PROJECT_STORAGE_KEY, activeId);
+  } catch {
+    /* ignore */
+  }
+  const active = projects.find((p) => p.id === activeId) || projects[0];
+  return { projects, activeId, name: active?.name || legacyName };
+}
+
+function writeProjectsToStorage(projects: ProjectMeta[], activeId: string) {
+  try {
+    localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(projects));
+    localStorage.setItem(ACTIVE_PROJECT_STORAGE_KEY, activeId);
+    const active = projects.find((p) => p.id === activeId);
+    if (active) localStorage.setItem(LEGACY_PROJECT_NAME_KEY, active.name);
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* page                                                                */
 /* ------------------------------------------------------------------ */
 
@@ -563,11 +644,14 @@ export default function Home() {
   const [materialSwap, setMaterialSwap] = useState(false);
   const [materialNote, setMaterialNote] = useState("");
   const [exportMenu, setExportMenu] = useState(false);
+  const [projects, setProjects] = useState<ProjectMeta[]>(() => defaultProjectList());
+  const [activeProjectId, setActiveProjectId] = useState(DEFAULT_PROJECT_ID);
   const [projectName, setProjectName] = useState("Untitled");
 
   const [countdown, setCountdown] = useState("00040000");
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const titleInputRef = useRef<HTMLInputElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
   const placeCounter = useRef(0);
@@ -579,6 +663,83 @@ export default function Home() {
     selectionRef.current = selection;
   }, [selection]);
 
+  const renameActiveProject = useCallback(
+    (rawName: string) => {
+      const name = rawName.trim() || "Untitled";
+      setProjectName(name);
+      setProjects((prev) => {
+        const next = prev.map((p) => (p.id === activeProjectId ? { ...p, name, ts: Date.now() } : p));
+        writeProjectsToStorage(next, activeProjectId);
+        return next;
+      });
+    },
+    [activeProjectId],
+  );
+
+  const switchProject = useCallback(
+    (id: string) => {
+      if (id === activeProjectId) {
+        setExportMenu(false);
+        return;
+      }
+      // Flush title edit for the leaving project before remount.
+      const leavingName = projectName.trim() || "Untitled";
+      setProjects((prev) => {
+        const next = prev.map((p) => (p.id === activeProjectId ? { ...p, name: leavingName, ts: Date.now() } : p));
+        writeProjectsToStorage(next, id);
+        return next;
+      });
+      setEditor(null);
+      setSelection({ ids: [], images: [], box: null });
+      setContextChips([]);
+      setShapeCount(0);
+      setActiveProjectId(id);
+      const target = projects.find((p) => p.id === id);
+      setProjectName(target?.name || "Untitled");
+      setExportMenu(false);
+    },
+    [activeProjectId, projectName, projects],
+  );
+
+  const createProject = useCallback(() => {
+    const id = uid().replace(/[^a-z0-9-]/gi, "").toLowerCase() || `p${Date.now().toString(36)}`;
+    const name = `项目 ${projects.length + 1}`;
+    const entry: ProjectMeta = { id, name, ts: Date.now() };
+    const next = [...projects.map((p) => (p.id === activeProjectId ? { ...p, name: projectName.trim() || "Untitled" } : p)), entry];
+    writeProjectsToStorage(next, id);
+    setProjects(next);
+    setEditor(null);
+    setSelection({ ids: [], images: [], box: null });
+    setContextChips([]);
+    setShapeCount(0);
+    setActiveProjectId(id);
+    setProjectName(name);
+    setExportMenu(false);
+  }, [activeProjectId, projectName, projects]);
+
+  const deleteActiveProject = useCallback(() => {
+    if (activeProjectId === DEFAULT_PROJECT_ID) {
+      window.alert("默认项目不可删除");
+      return;
+    }
+    if (projects.length <= 1) {
+      window.alert("至少保留一个项目");
+      return;
+    }
+    if (!window.confirm(`删除项目「${projectName}」？画布本地数据不会自动清理，仅从列表移除。`)) return;
+    const next = projects.filter((p) => p.id !== activeProjectId);
+    const fallback = next.find((p) => p.id === DEFAULT_PROJECT_ID) || next[0];
+    writeProjectsToStorage(next, fallback.id);
+    setProjects(next);
+    setEditor(null);
+    setSelection({ ids: [], images: [], box: null });
+    setContextChips([]);
+    setShapeCount(0);
+    setActiveProjectId(fallback.id);
+    setProjectName(fallback.name);
+    setExportMenu(false);
+  }, [activeProjectId, projectName, projects]);
+
   /* ------------------------------ boot ------------------------------ */
 
   useEffect(() => {
@@ -589,7 +750,11 @@ export default function Home() {
     } catch {
       setHistory([]);
     }
-    setProjectName(localStorage.getItem("lovartProjectName") || "Untitled");
+    const bootProjects = readProjectsFromStorage();
+    setProjects(bootProjects.projects);
+    setActiveProjectId(bootProjects.activeId);
+    setProjectName(bootProjects.name);
+    writeProjectsToStorage(bootProjects.projects, bootProjects.activeId);
     try {
       const savedKit = JSON.parse(localStorage.getItem("lovartBrandKit") || "null") as BrandKit | null;
       if (savedKit && typeof savedKit === "object") {
@@ -1619,7 +1784,7 @@ export default function Home() {
           return `修改完成，已放到画布。链接：\n${urls.join("\n")}`;
         }
         case "image_to_video": {
-          return "视频功能已迁移到独立页面 /video（右上角\"视频\"入口）。请告诉用户到那里上传首帧图并描述运动即可提交任务。";
+          return "视频功能已迁移到独立页面 /video（画布右上角「视频」入口，或直接打开 /video）。请明确告诉用户：去 /video 上传首帧图并描述运动即可提交图生视频任务；本对话无法直接提交视频 job。";
         }
         case "vectorize_selected": {
           const ok = await vectorizeSelected();
@@ -1963,8 +2128,9 @@ export default function Home() {
         >
           <div className="tldrawHost">
             <Tldraw
+              key={activeProjectId}
               hideUi
-              persistenceKey="lovart-visual-canvas-v3"
+              persistenceKey={persistenceKeyFor(activeProjectId)}
               assetUrls={FONT_ASSET_URLS}
               onMount={(instance) => setEditor(instance)}
             />
@@ -2065,20 +2231,23 @@ export default function Home() {
                 <span>Lō</span>
               </button>
               <input
+                ref={titleInputRef}
                 className="titleInput"
                 value={projectName}
                 aria-label="project title"
                 onChange={(event) => setProjectName(event.target.value)}
-                onBlur={() => {
-                  const name = projectName.trim() || "Untitled";
-                  setProjectName(name);
-                  localStorage.setItem("lovartProjectName", name);
+                onBlur={() => renameActiveProject(projectName)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    (event.target as HTMLInputElement).blur();
+                  }
                 }}
               />
               <button className="ghostIcon" type="button" aria-label="theme">
                 <Palette size={15} />
               </button>
-              <button className="ghostIcon" type="button" aria-label="more" onClick={() => setExportMenu((v) => !v)}>
+              <button className="ghostIcon" type="button" aria-label="projects and export" onClick={() => setExportMenu((v) => !v)}>
                 <ChevronDown size={15} />
               </button>
               <a className="videoEntry" href="/video" title="图生视频（独立页面）">
@@ -2086,6 +2255,39 @@ export default function Home() {
               </a>
               {exportMenu ? (
                 <div className="exportMenu" onMouseLeave={() => setExportMenu(false)}>
+                  <div className="exportMenuSection">项目</div>
+                  {projects.map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      className={p.id === activeProjectId ? "exportMenuItem active" : "exportMenuItem"}
+                      onClick={() => switchProject(p.id)}
+                    >
+                      {p.name}
+                      {p.id === activeProjectId ? " · 当前" : ""}
+                    </button>
+                  ))}
+                  <button type="button" className="exportMenuItem" onClick={createProject}>
+                    <Plus size={14} /> 新建项目
+                  </button>
+                  <button
+                    type="button"
+                    className="exportMenuItem"
+                    onClick={() => {
+                      setExportMenu(false);
+                      requestAnimationFrame(() => {
+                        titleInputRef.current?.focus();
+                        titleInputRef.current?.select();
+                      });
+                    }}
+                  >
+                    <SquarePen size={14} /> 重命名
+                  </button>
+                  <button type="button" className="exportMenuItem danger" onClick={deleteActiveProject}>
+                    <X size={14} /> 删除当前项目
+                  </button>
+                  <div className="exportMenuDivider" />
+                  <div className="exportMenuSection">导出</div>
                   <button
                     type="button"
                     onClick={() => {

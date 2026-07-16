@@ -198,7 +198,9 @@ button {
   font-size: 15px;
   font-weight: 600;
   color: var(--ink);
-  width: 90px;
+  width: 120px;
+  min-width: 90px;
+  max-width: 200px;
   outline: none;
 }
 
@@ -227,7 +229,9 @@ button {
   position: absolute;
   top: 40px;
   left: 40px;
-  min-width: 220px;
+  min-width: 240px;
+  max-height: min(70vh, 480px);
+  overflow-y: auto;
   background: var(--white);
   border: 1px solid var(--panel-line);
   border-radius: 14px;
@@ -238,7 +242,23 @@ button {
   z-index: 60;
 }
 
-.exportMenu button {
+.exportMenuSection {
+  padding: 8px 12px 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--soft-ink);
+}
+
+.exportMenuDivider {
+  height: 1px;
+  margin: 6px 8px;
+  background: var(--panel-line);
+}
+
+.exportMenu button,
+.exportMenu .exportMenuItem {
   display: flex;
   align-items: center;
   gap: 9px;
@@ -248,10 +268,50 @@ button {
   font-weight: 500;
   color: var(--ink);
   text-align: left;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  width: 100%;
 }
 
-.exportMenu button:hover {
+.exportMenu button:hover,
+.exportMenu .exportMenuItem:hover {
   background: var(--paper);
+}
+
+.exportMenu .exportMenuItem.active {
+  background: rgba(47, 139, 237, 0.12);
+  color: #1a6fc4;
+  font-weight: 600;
+}
+
+.exportMenu .exportMenuItem.danger {
+  color: #c0392b;
+}
+
+.syncStatusIcon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  color: var(--soft-ink);
+}
+
+.syncStatusIcon.synced {
+  color: #2f8b5b;
+}
+
+.syncStatusIcon.saving {
+  color: #2f8bed;
+}
+
+.syncStatusIcon.local {
+  color: var(--soft-ink);
+}
+
+.syncStatusIcon.error {
+  color: #c0392b;
 }
 
 .creditCluster {
