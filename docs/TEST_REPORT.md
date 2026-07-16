@@ -100,3 +100,70 @@
 4. **E2E 遮挡**：首屏 Voice Mode 弹层会挡点击；关闭 `aria-label=Close` / Got it 后可点 dock。  
 5. **D4**：工具名为 `image_to_video`；本轮 JSON 未强制包含 `/video` 字面路径，按工具语义 PASS。  
 6. **磁盘**：本机 Data 卷约 5GB 可用；Playwright 浏览器装失败后使用 `channel: "chrome"` + 缓存 chromium-1228。
+
+---
+
+## GPU 能力实拍（BiRefNet/SAM2）
+
+- **被测**: https://weiaidesign.com · `gpu_comfy_configured=true` · host `comfy.youngtuo.win`
+- **执行者**: Grok CLI（只测不改产品逻辑）
+- **执行日**: 2026-07-16
+- **底图**: `img-ecbc7473-…/image-01.jpg`（SLOW DOWN 木牌，1536×1024 JPEG）
+- **脚本**: `scripts/verify-gpu-prod.mjs`、`scripts/e2e-gpu-matting.mjs`
+
+### 总览
+
+| 项 | 结果 | 证据 |
+|----|------|------|
+| G1 health GPU 开关 | **PASS** | `gpu_comfy_configured=true` |
+| G2 BiRefNet matting | **PASS** | job `ijob-6cd2c335-…` · **27.5s** · PNG colorType=6 · 四角 alpha=0 · 中心 alpha=255 |
+| G3 SAM2 segment | **PASS**（产物数） | job `ijob-e5351637-…` · **15.5s** · segments[]=1 · **唯一产物 URL=2**（overlay+mask） |
+| G4 本地 UI 去底 | **PASS** | `next dev` + `__studioPlaceImage` → 选中 → 点「去底」→ job done · shapes 1→2 · pipeline=`gpu-matting`（非 flood-fill） |
+
+### G2 matting 明细
+
+| 字段 | 内容 |
+|------|------|
+| 请求 | `POST /api/v1/matting` · `image_b64` dataURL · 默认 async |
+| job | `ijob-6cd2c335-285c-4695-84b4-8ac7ba12cf35` |
+| 产物 | https://weiaidesign.com/api/v1/generated-images/img-29c41f71-3b15-474f-a65b-d675a9cbb400/matting.png |
+| 耗时 | 27509 ms |
+| IHDR | 1536×1024 · bitDepth=8 · **colorType=6 (RGBA)** |
+| 四角 alpha | tl=tr=bl=br=**0** |
+| 中心 alpha | max=**255** mean=255 |
+| 留样 | `docs/test-samples/gpu-matting-2026-07-16T22-35-33.png`（2.88MB） |
+
+### G3 segment 明细
+
+| 字段 | 内容 |
+|------|------|
+| 请求 | `POST /api/v1/segment` · `max_segments:8` · 默认 async |
+| job | `ijob-e5351637-96f0-4eb0-84ac-5ca4c057b999` |
+| backend | `comfyui-sam2` |
+| segments[] | 1（`segment-1` label=mask） |
+| 产物 URL | overlay + mask（cutout 回落为 overlay 同 URL）→ **product_count=2 ≥2** |
+| overlay | https://weiaidesign.com/api/v1/generated-images/img-a47435be-6d44-46a5-ba24-a5c5f1245ae0/segment-overlay.png |
+| mask | https://weiaidesign.com/api/v1/generated-images/img-1d914099-637c-4908-8f1c-b1ae82b1f027/segment-mask-1.png |
+| 耗时 | 15543 ms |
+| 留样 | `gpu-segment-overlay-*.png` · `gpu-segment-1-mask-*.png` · `gpu-segment-1-cutout-*.png` |
+| 说明 | 当前 Comfy 工作流 SaveImage 输出 combined mask + overlay，非 per-instance 多 mask 文件；断言按**唯一分割产物 URL ≥2**，不强改产品逻辑 |
+
+### G4 本地 UI E2E
+
+| 字段 | 内容 |
+|------|------|
+| 环境 | `next dev` @ `http://127.0.0.1:3000` · `GPU_COMFY_BASE_URL=https://comfy.youngtuo.win` · `gpu_comfy_configured=true` |
+| 脚本 | `scripts/e2e-gpu-matting.mjs`（Playwright channel=chrome） |
+| 步骤 | place 底图 → selectionBar「去底」→ POST `/matting` → poll `/image-jobs` |
+| job | `ijob-3d82d13d-e888-4491-9862-f7c76083c30c` |
+| 产物 URL | `http://127.0.0.1:3000/api/v1/generated-images/img-bb8a1c03-…/matting.png` |
+| 画布 | shapes 1→2（原图 + 透明抠图） |
+| 管线 | **gpu-matting**（确认走 BiRefNet，非旧 flood-fill / 非 degraded GPT） |
+
+### 其它留样
+
+| 文件 | 说明 |
+|------|------|
+| `gpu-base-2026-07-16T22-35-33.jpg` | 实拍底图副本 |
+| `gpu-verify-2026-07-16T22-35-33.json` | 完整机器可读报告 |
+

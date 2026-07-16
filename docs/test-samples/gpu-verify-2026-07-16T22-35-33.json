@@ -1,0 +1,95 @@
+{
+  "ok": true,
+  "base": "https://weiaidesign.com",
+  "stamp": "2026-07-16T22-35-33",
+  "base_image": "https://weiaidesign.com/api/v1/generated-images/img-ecbc7473-8e5c-476f-b507-991bd8ab9023/image-01.jpg",
+  "matting": {
+    "pass": true,
+    "job_id": "ijob-6cd2c335-285c-4695-84b4-8ac7ba12cf35",
+    "elapsed_ms": 27509,
+    "public_url": "https://weiaidesign.com/api/v1/generated-images/img-29c41f71-3b15-474f-a65b-d675a9cbb400/matting.png",
+    "bytes": 2877826,
+    "ihdr": {
+      "width": 1536,
+      "height": 1024,
+      "bitDepth": 8,
+      "colorType": 6
+    },
+    "alpha": {
+      "width": 1536,
+      "height": 1024,
+      "mode": "RGBA",
+      "colorType_expected_for_rgba": 6,
+      "corners_alpha": {
+        "tl": 0,
+        "tr": 0,
+        "bl": 0,
+        "br": 0
+      },
+      "corners_all_zero": true,
+      "center_alpha_max": 255,
+      "center_alpha_mean": 255,
+      "edge_mid_alphas": [
+        0,
+        0,
+        0,
+        254
+      ],
+      "has_transparency": true
+    },
+    "sample": "docs/test-samples/gpu-matting-2026-07-16T22-35-33.png",
+    "assertions": {
+      "colorType6": true,
+      "corners_alpha_0": true,
+      "center_alpha_gt0": true
+    }
+  },
+  "segment": {
+    "pass": true,
+    "job_id": "ijob-e5351637-96f0-4eb0-84ac-5ca4c057b999",
+    "elapsed_ms": 15543,
+    "segment_count": 1,
+    "overlay_url": "https://weiaidesign.com/api/v1/generated-images/img-a47435be-6d44-46a5-ba24-a5c5f1245ae0/segment-overlay.png",
+    "segments": [
+      {
+        "id": "segment-1",
+        "label": "mask",
+        "mask_url": "https://weiaidesign.com/api/v1/generated-images/img-1d914099-637c-4908-8f1c-b1ae82b1f027/segment-mask-1.png",
+        "cutout_url": "https://weiaidesign.com/api/v1/generated-images/img-a47435be-6d44-46a5-ba24-a5c5f1245ae0/segment-overlay.png"
+      }
+    ],
+    "samples": [
+      {
+        "kind": "overlay",
+        "url": "https://weiaidesign.com/api/v1/generated-images/img-a47435be-6d44-46a5-ba24-a5c5f1245ae0/segment-overlay.png",
+        "path": "docs/test-samples/gpu-segment-overlay-2026-07-16T22-35-33.png",
+        "bytes": 53411
+      },
+      {
+        "kind": "cutout_url",
+        "url": "https://weiaidesign.com/api/v1/generated-images/img-a47435be-6d44-46a5-ba24-a5c5f1245ae0/segment-overlay.png",
+        "path": "docs/test-samples/gpu-segment-1-cutout-2026-07-16T22-35-33.png",
+        "bytes": 53411,
+        "segment_id": "segment-1"
+      },
+      {
+        "kind": "mask_url",
+        "url": "https://weiaidesign.com/api/v1/generated-images/img-1d914099-637c-4908-8f1c-b1ae82b1f027/segment-mask-1.png",
+        "path": "docs/test-samples/gpu-segment-1-mask-2026-07-16T22-35-33.png",
+        "bytes": 13502,
+        "segment_id": "segment-1"
+      }
+    ],
+    "assertions": {
+      "product_count_gte_2": true,
+      "segment_array_length": 1,
+      "note": "SAM2 combined mask+overlay; pass by unique product URLs ≥2"
+    },
+    "product_count": 2,
+    "product_urls": [
+      "https://weiaidesign.com/api/v1/generated-images/img-1d914099-637c-4908-8f1c-b1ae82b1f027/segment-mask-1.png",
+      "https://weiaidesign.com/api/v1/generated-images/img-a47435be-6d44-46a5-ba24-a5c5f1245ae0/segment-overlay.png"
+    ]
+  },
+  "errors": []
+}
