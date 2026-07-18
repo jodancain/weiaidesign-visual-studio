@@ -935,6 +935,71 @@ button {
   border-color: var(--blue);
 }
 
+.designMemoryEntry {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fafafa;
+  text-align: left;
+}
+
+.designMemoryEntry:hover {
+  background: #f4f4f6;
+  border-color: #d7d9de;
+}
+
+.designMemoryIcon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  color: #30333a;
+  background: #eef0f4;
+  flex: 0 0 auto;
+}
+
+.designMemoryIcon.large {
+  width: 38px;
+  height: 38px;
+  border-radius: 9px;
+}
+
+.designMemoryEntryText {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+}
+
+.designMemoryEntryText strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.designMemoryEntryText em {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 500;
+}
+
+.designMemoryState {
+  font-size: 10px;
+  line-height: 1;
+  font-weight: 800;
+  color: #9a9ea6;
+}
+
+.designMemoryState.on {
+  color: #23734d;
+}
+
 .inlineLabel {
   font-size: 12px;
   font-weight: 700;
@@ -1300,6 +1365,120 @@ button {
   border-color: var(--blue);
 }
 
+.designMemoryDialog {
+  width: min(760px, 94vw);
+  max-height: min(780px, 90vh);
+  overflow-y: auto;
+}
+
+.designMemoryHeader {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding-right: 34px;
+}
+
+.designMemoryHeader h2 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.designMemoryHeader p {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.designMemoryToggle {
+  display: inline-flex !important;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 7px !important;
+  margin: 0 !important;
+  color: var(--soft-ink);
+  cursor: pointer;
+}
+
+.designMemoryToggle input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.designMemoryToggle span {
+  position: relative;
+  width: 34px;
+  height: 20px;
+  border-radius: 999px;
+  background: #d8dbe1;
+  transition: background 0.15s ease;
+}
+
+.designMemoryToggle span::after {
+  content: "";
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  left: 2px;
+  top: 2px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(15, 16, 20, 0.2);
+  transition: transform 0.15s ease;
+}
+
+.designMemoryToggle input:checked + span {
+  background: #26272b;
+}
+
+.designMemoryToggle input:checked + span::after {
+  transform: translateX(14px);
+}
+
+.designMemoryGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 12px;
+  margin-top: 8px;
+}
+
+.designMemoryGrid label {
+  min-width: 0;
+}
+
+.designMemoryGrid textarea {
+  width: 100%;
+  min-height: 88px;
+  resize: vertical;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 9px 10px;
+  color: var(--ink);
+  background: #fafafa;
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1.5;
+  outline: none;
+}
+
+.designMemoryGrid textarea:focus {
+  border-color: #26272b;
+  background: #fff;
+}
+
+.designMemoryWide {
+  grid-column: 1 / -1;
+}
+
+.designMemoryWide textarea {
+  min-height: 72px;
+}
+
+.designMemoryFooter {
+  justify-content: space-between;
+}
+
 .dialogPreview {
   margin-top: 12px;
   border-radius: 12px;
@@ -1565,6 +1744,21 @@ button {
 
   .historyDrawer {
     width: 100vw;
+  }
+
+  .designMemoryDialog {
+    width: calc(100vw - 20px);
+    max-width: none;
+    max-height: calc(100vh - 20px);
+    padding: 16px;
+  }
+
+  .designMemoryGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .designMemoryWide {
+    grid-column: auto;
   }
 }
 

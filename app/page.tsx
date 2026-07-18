@@ -6,6 +6,7 @@ import {
   ArrowUp,
   AudioLines,
   BookOpen,
+  Brain,
   ChevronDown,
   Circle,
   Clapperboard,
@@ -102,6 +103,61 @@ type BrandKit = {
 };
 
 const EMPTY_BRAND_KIT: BrandKit = { name: "", palette: [], styleWords: "", logoRef: "", fontHint: "" };
+
+type DesignMemory = {
+  enabled: boolean;
+  profile: string;
+  brands: string;
+  visualStyle: string;
+  logoRules: string;
+  collaborationRules: string;
+  workflow: string;
+  avoid: string;
+  updatedAt: number;
+};
+
+const DESIGN_MEMORY_STORAGE_KEY = "weiaiDesignMemoryV1";
+const EMPTY_DESIGN_MEMORY: DesignMemory = {
+  enabled: false,
+  profile: "",
+  brands: "",
+  visualStyle: "",
+  logoRules: "",
+  collaborationRules: "",
+  workflow: "",
+  avoid: "",
+  updatedAt: 0,
+};
+
+function normalizeDesignMemory(raw: unknown): DesignMemory {
+  const value = raw && typeof raw === "object" ? (raw as Partial<DesignMemory>) : {};
+  return {
+    enabled: Boolean(value.enabled),
+    profile: String(value.profile || "").slice(0, 4000),
+    brands: String(value.brands || "").slice(0, 4000),
+    visualStyle: String(value.visualStyle || "").slice(0, 4000),
+    logoRules: String(value.logoRules || "").slice(0, 4000),
+    collaborationRules: String(value.collaborationRules || "").slice(0, 4000),
+    workflow: String(value.workflow || "").slice(0, 4000),
+    avoid: String(value.avoid || "").slice(0, 4000),
+    updatedAt: Number(value.updatedAt) || 0,
+  };
+}
+
+function designMemoryToPromptText(memory: DesignMemory): string {
+  if (!memory.enabled) return "";
+  const sections = [
+    memory.profile.trim() ? `设计身份与目标：${memory.profile.trim()}` : "",
+    memory.brands.trim() ? `品牌与项目：${memory.brands.trim()}` : "",
+    memory.visualStyle.trim() ? `长期视觉偏好：${memory.visualStyle.trim()}` : "",
+    memory.logoRules.trim() ? `Logo 规则：${memory.logoRules.trim()}` : "",
+    memory.collaborationRules.trim() ? `联名与规范：${memory.collaborationRules.trim()}` : "",
+    memory.workflow.trim() ? `创作与交付习惯：${memory.workflow.trim()}` : "",
+    memory.avoid.trim() ? `长期避免项：${memory.avoid.trim()}` : "",
+  ].filter(Boolean);
+  if (!sections.length) return "";
+  return ["【个人设计记忆】", ...sections, "仅应用与当前任务相关的条目；本次用户明确指令始终优先。"].join("\n");
+}
 
 function brandKitToPromptText(kit: BrandKit): string {
   const parts: string[] = [];
@@ -619,10 +675,14 @@ export default function Home() {
   const [aspect, setAspect] = useState("1:1");
   const [count, setCount] = useState(2);
   const [brandKit, setBrandKit] = useState<BrandKit>(EMPTY_BRAND_KIT);
+  const [designMemory, setDesignMemory] = useState<DesignMemory>(EMPTY_DESIGN_MEMORY);
+  const [designMemoryDraft, setDesignMemoryDraft] = useState<DesignMemory>(EMPTY_DESIGN_MEMORY);
+  const [showDesignMemory, setShowDesignMemory] = useState(false);
   const [audience, setAudience] = useState("");
   const [negativePrompt, setNegativePrompt] = useState("");
   const [references, setReferences] = useState<string[]>([]);
   const brandText = useMemo(() => brandKitToPromptText(brandKit), [brandKit]);
+  const designMemoryText = useMemo(() => designMemoryToPromptText(designMemory), [designMemory]);
 
   const [busy, setBusy] = useState(false);
   const [busyLabel, setBusyLabel] = useState("");
@@ -1000,6 +1060,14 @@ export default function Home() {
       /* ignore corrupt brand kit */
     }
     try {
+      const savedMemory = normalizeDesignMemory(JSON.parse(localStorage.getItem(DESIGN_MEMORY_STORAGE_KEY) || "null"));
+      setDesignMemory(savedMemory);
+      setDesignMemoryDraft(savedMemory);
+    } catch {
+      setDesignMemory(EMPTY_DESIGN_MEMORY);
+      setDesignMemoryDraft(EMPTY_DESIGN_MEMORY);
+    }
+    try {
       const saved = normalizeAgentSessions(JSON.parse(localStorage.getItem("lovartSessions") || "[]"));
       // migrate-write so legacy sessions without projectId stick as "default"
       try {
@@ -1374,6 +1442,17 @@ export default function Home() {
     }
   }, []);
 
+  const saveDesignMemory = useCallback(() => {
+    const next = normalizeDesignMemory({ ...designMemoryDraft, updatedAt: Date.now() });
+    setDesignMemory(next);
+    try {
+      localStorage.setItem(DESIGN_MEMORY_STORAGE_KEY, JSON.stringify(next));
+    } catch {
+      /* private mode — keep in-memory only */
+    }
+    setShowDesignMemory(false);
+  }, [designMemoryDraft]);
+
   const onBrandLogoUpload = useCallback(
     async (file: File | null) => {
       if (!file) return;
@@ -1557,6 +1636,7 @@ export default function Home() {
             raw_prompt: params.kind === "agent" ? effectivePrompt : undefined,
             style: params.kind === "agent" ? undefined : style,
             brand: brandLine,
+            design_memory: params.kind === "agent" ? undefined : designMemoryText || undefined,
             audience: params.kind === "agent" ? undefined : audience,
             negative_prompt: params.kind === "agent" ? undefined : negativePrompt,
             aspect_ratio: params.aspect || aspect,
@@ -1584,7 +1664,7 @@ export default function Home() {
         removePlaceholder(placeholderId);
       }
     },
-    [apiAsyncImages, aspect, audience, brandKit.logoRef, brandText, count, createPlaceholder, negativePrompt, placeImageOnCanvas, pushHistory, removePlaceholder, style],
+    [apiAsyncImages, aspect, audience, brandKit.logoRef, brandText, count, createPlaceholder, designMemoryText, negativePrompt, placeImageOnCanvas, pushHistory, removePlaceholder, style],
   );
 
   const doFontRestyle = useCallback(
@@ -2167,6 +2247,17 @@ export default function Home() {
                       hasLogo: Boolean(brandKit.logoRef),
                     }
                   : undefined,
+              design_memory: designMemoryText
+                ? {
+                    profile: designMemory.profile,
+                    brands: designMemory.brands,
+                    visualStyle: designMemory.visualStyle,
+                    logoRules: designMemory.logoRules,
+                    collaborationRules: designMemory.collaborationRules,
+                    workflow: designMemory.workflow,
+                    avoid: designMemory.avoid,
+                  }
+                : undefined,
             },
           }),
         });
@@ -2208,7 +2299,7 @@ export default function Home() {
     } finally {
       setAgentBusy(false);
     }
-  }, [agentBusy, aspect, audience, brandKit, brandText, contextChips, count, execAgentTool, negativePrompt, prompt, pushMessage, shapeCount, style, token]);
+  }, [agentBusy, aspect, audience, brandKit, brandText, contextChips, count, designMemory, designMemoryText, execAgentTool, negativePrompt, prompt, pushMessage, shapeCount, style, token]);
 
   /* --------------------------- ui handlers -------------------------- */
 
@@ -3216,6 +3307,27 @@ export default function Home() {
                           </button>
                         ))}
                       </div>
+                      <button
+                        className="designMemoryEntry"
+                        data-testid="design-memory-open"
+                        type="button"
+                        onClick={() => {
+                          setDesignMemoryDraft(designMemory);
+                          setShowAgentMenu(false);
+                          setShowDesignMemory(true);
+                        }}
+                      >
+                        <span className="designMemoryIcon">
+                          <Brain size={16} />
+                        </span>
+                        <span className="designMemoryEntryText">
+                          <strong>个人设计记忆</strong>
+                          <em>{designMemoryText ? "已启用" : designMemory.enabled ? "空白" : "未启用"}</em>
+                        </span>
+                        <span className={designMemoryText ? "designMemoryState on" : "designMemoryState"}>
+                          {designMemoryText ? "ON" : "OFF"}
+                        </span>
+                      </button>
                       <div className="inlineLabel">Brand Kit</div>
                       <label>
                         品牌名
@@ -3429,6 +3541,110 @@ export default function Home() {
               ))}
             </div>
           </div>
+        </div>
+      ) : null}
+
+      {/* private, browser-local design memory */}
+      {showDesignMemory ? (
+        <div className="modalScrim" onClick={() => setShowDesignMemory(false)}>
+          <section
+            className="taskDialog designMemoryDialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="design-memory-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button className="dialogClose" type="button" aria-label="关闭设计记忆" onClick={() => setShowDesignMemory(false)}>
+              <X size={16} />
+            </button>
+            <header className="designMemoryHeader">
+              <span className="designMemoryIcon large">
+                <Brain size={19} />
+              </span>
+              <div>
+                <h2 id="design-memory-title">个人设计记忆</h2>
+                <p>当前浏览器</p>
+              </div>
+              <label className="designMemoryToggle">
+                <input
+                  data-testid="design-memory-enabled"
+                  type="checkbox"
+                  checked={designMemoryDraft.enabled}
+                  onChange={(event) => setDesignMemoryDraft((prev) => ({ ...prev, enabled: event.target.checked }))}
+                />
+                <span aria-hidden="true" />
+                启用
+              </label>
+            </header>
+
+            <div className="designMemoryGrid">
+              <label>
+                设计身份
+                <textarea
+                  data-testid="design-memory-profile"
+                  value={designMemoryDraft.profile}
+                  onChange={(event) => setDesignMemoryDraft((prev) => ({ ...prev, profile: event.target.value }))}
+                />
+              </label>
+              <label>
+                品牌与项目
+                <textarea
+                  data-testid="design-memory-brands"
+                  value={designMemoryDraft.brands}
+                  onChange={(event) => setDesignMemoryDraft((prev) => ({ ...prev, brands: event.target.value }))}
+                />
+              </label>
+              <label>
+                视觉偏好
+                <textarea
+                  data-testid="design-memory-style"
+                  value={designMemoryDraft.visualStyle}
+                  onChange={(event) => setDesignMemoryDraft((prev) => ({ ...prev, visualStyle: event.target.value }))}
+                />
+              </label>
+              <label>
+                Logo 规则
+                <textarea
+                  data-testid="design-memory-logo"
+                  value={designMemoryDraft.logoRules}
+                  onChange={(event) => setDesignMemoryDraft((prev) => ({ ...prev, logoRules: event.target.value }))}
+                />
+              </label>
+              <label>
+                联名规范
+                <textarea
+                  data-testid="design-memory-collaboration"
+                  value={designMemoryDraft.collaborationRules}
+                  onChange={(event) => setDesignMemoryDraft((prev) => ({ ...prev, collaborationRules: event.target.value }))}
+                />
+              </label>
+              <label>
+                创作习惯
+                <textarea
+                  data-testid="design-memory-workflow"
+                  value={designMemoryDraft.workflow}
+                  onChange={(event) => setDesignMemoryDraft((prev) => ({ ...prev, workflow: event.target.value }))}
+                />
+              </label>
+              <label className="designMemoryWide">
+                避免项
+                <textarea
+                  data-testid="design-memory-avoid"
+                  value={designMemoryDraft.avoid}
+                  onChange={(event) => setDesignMemoryDraft((prev) => ({ ...prev, avoid: event.target.value }))}
+                />
+              </label>
+            </div>
+
+            <div className="dialogFooter designMemoryFooter">
+              <button className="ghostButton" type="button" onClick={() => setDesignMemoryDraft(EMPTY_DESIGN_MEMORY)}>
+                清空
+              </button>
+              <button className="darkButton" data-testid="design-memory-save" type="button" onClick={saveDesignMemory}>
+                保存
+              </button>
+            </div>
+          </section>
         </div>
       ) : null}
 

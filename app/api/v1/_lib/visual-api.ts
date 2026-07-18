@@ -406,6 +406,7 @@ function standaloneImagePrompt(payload: Record<string, unknown>, index: number, 
   if (!prompt) return "";
   const style = String(payload.style || payload.visual_style || "").trim();
   const brand = String(payload.brand || payload.brand_kit || "").trim();
+  const designMemory = String(payload.design_memory || "").trim();
   const format = String(payload.format || payload.asset_type || "").trim();
   const audience = String(payload.audience || "").trim();
   const negative = String(payload.negative_prompt || "").trim();
@@ -414,6 +415,7 @@ function standaloneImagePrompt(payload: Record<string, unknown>, index: number, 
     `Brief: ${prompt}`,
     style ? `Visual style: ${style}` : "",
     brand ? `Brand rules: ${brand}` : "",
+    designMemory ? `Persistent design memory (apply only when relevant; the current brief wins):\n${designMemory}` : "",
     format ? `Asset format: ${format}` : "",
     audience ? `Audience: ${audience}` : "",
     count > 1 ? `Variation ${index} of ${count}: keep the same core idea but change composition, staging, and detail.` : "",
