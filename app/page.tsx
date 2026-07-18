@@ -284,6 +284,61 @@ type OaiMessage =
   | { role: "assistant"; content?: string | null; tool_calls?: OaiToolCall[] }
   | { role: "tool"; tool_call_id: string; content: string };
 
+type DesignPlan = {
+  title: string;
+  summary: string;
+  action: "generate" | "edit" | "restyle_text" | "material" | "video" | "vectorize" | "export" | "answer";
+  decisions: string[];
+  finalPrompt: string;
+  negativePrompt: string;
+};
+
+const DESIGN_PLAN_ACTIONS = new Set<DesignPlan["action"]>([
+  "generate",
+  "edit",
+  "restyle_text",
+  "material",
+  "video",
+  "vectorize",
+  "export",
+  "answer",
+]);
+
+function normalizeDesignPlan(raw: unknown, fallbackBrief: string): DesignPlan {
+  const value = raw && typeof raw === "object" ? (raw as Partial<DesignPlan>) : {};
+  const action = DESIGN_PLAN_ACTIONS.has(value.action as DesignPlan["action"])
+    ? (value.action as DesignPlan["action"])
+    : "generate";
+  const decisions = Array.isArray(value.decisions)
+    ? value.decisions.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 6)
+    : [];
+  return {
+    title: String(value.title || "前置设计方案").trim().slice(0, 40),
+    summary: String(value.summary || "已结合对话上下文、画布与默认设计规范整理执行方向。").trim().slice(0, 800),
+    action,
+    decisions: decisions.length >= 3
+      ? decisions
+      : ["锁定当前任务目标与交付用途", "遵守默认设计 Skill 与相关品牌规范", "明确构图、配色、文字和材质光影", "排除长期避免项后再执行"],
+    finalPrompt: String(value.finalPrompt || fallbackBrief).trim().slice(0, 12000),
+    negativePrompt: String(value.negativePrompt || "").trim().slice(0, 3000),
+  };
+}
+
+function designPlanToVisibleText(plan: DesignPlan) {
+  return [
+    plan.summary,
+    ...plan.decisions.map((decision, index) => `${index + 1}. ${decision}`),
+    "执行方向已锁定，下一步按此方案调用工具。",
+  ].join("\n");
+}
+
+function agentModelForText(text: string) {
+  if (/@GPT-5\.4/i.test(text)) return "cx/gpt-5.4";
+  if (/@GLM-5\.2/i.test(text)) return "cbcn/glm-5.2";
+  if (/@Kimi/i.test(text)) return "cbcn/kimi-k2.7";
+  return undefined;
+}
+
 type AgentSession = {
   id: string;
   title: string;
@@ -1624,6 +1679,7 @@ export default function Home() {
       kind?: string;
       transparent?: boolean;
       imageModel?: string;
+      negativePrompt?: string;
     }) => {
       const refs = [...(params.refs || [])];
       // Direct gen: append brand logo as extra reference when present
@@ -1642,7 +1698,7 @@ export default function Home() {
             brand: brandLine,
             design_memory: params.kind === "agent" ? undefined : designMemoryText || undefined,
             audience: params.kind === "agent" ? undefined : audience,
-            negative_prompt: params.kind === "agent" ? undefined : negativePrompt,
+            negative_prompt: params.negativePrompt || (params.kind === "agent" ? undefined : negativePrompt),
             aspect_ratio: params.aspect || aspect,
             n: Math.max(1, Math.min(4, params.count || count)),
             ...(params.quality ? { quality: params.quality } : {}),
@@ -2134,6 +2190,76 @@ export default function Home() {
 
   /* --------------------------- agent loop --------------------------- */
 
+  const buildAgentCanvasState = useCallback(
+    (plan?: DesignPlan) => {
+      const sel = selectionRef.current;
+      return {
+        selectedImageCount: sel.images.length,
+        canvasShapeCount: shapeCount,
+        referenceImageCount: references.length,
+        lastGeneratedImages: contextChips,
+        defaults: { style, aspect, count, brand: brandText, audience, negativePrompt },
+        brand_kit:
+          brandKit.name || brandKit.palette.length || brandKit.styleWords || brandKit.fontHint || brandKit.logoRef
+            ? {
+                name: brandKit.name,
+                palette: brandKit.palette,
+                styleWords: brandKit.styleWords,
+                fontHint: brandKit.fontHint,
+                hasLogo: Boolean(brandKit.logoRef),
+              }
+            : undefined,
+        design_memory: designMemoryText
+          ? {
+              mode: "default_skill",
+              overridePolicy: "Only an explicit instruction in the current request may override the corresponding rule; silence is not an override.",
+              profile: designMemory.profile,
+              brands: designMemory.brands,
+              visualStyle: designMemory.visualStyle,
+              logoRules: designMemory.logoRules,
+              collaborationRules: designMemory.collaborationRules,
+              workflow: designMemory.workflow,
+              avoid: designMemory.avoid,
+            }
+          : undefined,
+        design_plan: plan
+          ? {
+              title: plan.title,
+              action: plan.action,
+              summary: plan.summary,
+              decisions: plan.decisions,
+              finalPrompt: plan.finalPrompt,
+              negativePrompt: plan.negativePrompt,
+            }
+          : undefined,
+      };
+    },
+    [aspect, audience, brandKit, brandText, contextChips, count, designMemory, designMemoryText, negativePrompt, references.length, shapeCount, style],
+  );
+
+  const requestDesignPlan = useCallback(
+    async (sourceText: string) => {
+      const rawResponse = await fetch("/api/agent-chat", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          mode: "plan",
+          messages: oaiHistoryRef.current,
+          model: agentModelForText(sourceText),
+          canvas_state: buildAgentCanvasState(),
+        }),
+      });
+      const response = (await rawResponse.json().catch(() => ({}))) as {
+        detail?: string;
+        data?: { plan?: unknown };
+      };
+      if (!rawResponse.ok) throw new Error(response?.detail || `前置设计规划失败 ${rawResponse.status}`);
+      if (!response.data?.plan) throw new Error("前置设计规划未返回方案");
+      return normalizeDesignPlan(response.data.plan, sourceText);
+    },
+    [buildAgentCanvasState, token],
+  );
+
   const execAgentTool = useCallback(
     async (name: string, args: Record<string, unknown>) => {
       const sel = selectionRef.current;
@@ -2158,6 +2284,7 @@ export default function Home() {
             aspect: args.aspect ? String(args.aspect) : undefined,
             count: args.count ? Number(args.count) : 1,
             quality: args.quality ? String(args.quality) : undefined,
+            negativePrompt: args.negative_prompt ? String(args.negative_prompt) : undefined,
             transparent: Boolean(args.transparent_background),
             refs: agentRefs.length ? agentRefs : undefined,
             kind: "agent",
@@ -2215,6 +2342,7 @@ export default function Home() {
   const sendToAgent = useCallback(async () => {
     const text = prompt.trim();
     if (!text || agentBusy) return;
+    const requestedModel = agentModelForText(text);
     setPrompt("");
     setShowMentionMenu(false);
     setError("");
@@ -2222,49 +2350,28 @@ export default function Home() {
     oaiHistoryRef.current.push({ role: "user", content: text });
     setAgentBusy(true);
     try {
+      const planActionId = pushMessage({ role: "action", label: "design_plan", done: false });
+      let plan: DesignPlan;
+      try {
+        plan = await requestDesignPlan(text);
+      } catch (planError) {
+        setMessages((prev) => prev.filter((message) => message.id !== planActionId));
+        throw planError;
+      }
+      setMessages((prev) => prev.map((message) => (message.id === planActionId && message.role === "action" ? { ...message, done: true } : message)));
+      const visiblePlan = designPlanToVisibleText(plan);
+      pushMessage({ role: "assistant", kind: "前置设计方案", text: visiblePlan });
+      oaiHistoryRef.current.push({ role: "assistant", content: visiblePlan });
+
       for (let round = 0; round < AGENT_MAX_ROUNDS; round += 1) {
-        const sel = selectionRef.current;
         const rawResponse = await fetch("/api/agent-chat", {
           method: "POST",
           headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
           body: JSON.stringify({
+            mode: "execute",
             messages: oaiHistoryRef.current,
-            model: /@GPT-5\.4/i.test(prompt)
-              ? "cx/gpt-5.4"
-              : /@GLM-5\.2/i.test(prompt)
-                ? "cbcn/glm-5.2"
-                : /@Kimi/i.test(prompt)
-                  ? "cbcn/kimi-k2.7"
-                  : undefined,
-            canvas_state: {
-              selectedImageCount: sel.images.length,
-              canvasShapeCount: shapeCount,
-              lastGeneratedImages: contextChips,
-              defaults: { style, aspect, count, brand: brandText, audience, negativePrompt },
-              brand_kit:
-                brandKit.name || brandKit.palette.length || brandKit.styleWords || brandKit.fontHint || brandKit.logoRef
-                  ? {
-                      name: brandKit.name,
-                      palette: brandKit.palette,
-                      styleWords: brandKit.styleWords,
-                      fontHint: brandKit.fontHint,
-                      hasLogo: Boolean(brandKit.logoRef),
-                    }
-                  : undefined,
-              design_memory: designMemoryText
-                ? {
-                    mode: "default_skill",
-                    overridePolicy: "Only an explicit instruction in the current request may override the corresponding rule; silence is not an override.",
-                    profile: designMemory.profile,
-                    brands: designMemory.brands,
-                    visualStyle: designMemory.visualStyle,
-                    logoRules: designMemory.logoRules,
-                    collaborationRules: designMemory.collaborationRules,
-                    workflow: designMemory.workflow,
-                    avoid: designMemory.avoid,
-                  }
-                : undefined,
-            },
+            model: requestedModel,
+            canvas_state: buildAgentCanvasState(plan),
           }),
         });
         const response = (await rawResponse.json().catch(() => ({}))) as {
@@ -2305,7 +2412,7 @@ export default function Home() {
     } finally {
       setAgentBusy(false);
     }
-  }, [agentBusy, aspect, audience, brandKit, brandText, contextChips, count, designMemory, designMemoryText, execAgentTool, negativePrompt, prompt, pushMessage, shapeCount, style, token]);
+  }, [agentBusy, buildAgentCanvasState, execAgentTool, prompt, pushMessage, requestDesignPlan, token]);
 
   /* --------------------------- ui handlers -------------------------- */
 
@@ -2335,12 +2442,32 @@ export default function Home() {
   const generateVariation = useCallback(() => {
     const refs = selection.images.length ? selection.images : references;
     const text = prompt.trim() || "生成同主题变体，保持风格一致";
-    void runAction("生成变体", async () => {
+    const actionKind = selection.images.length ? "生成变体" : "生成图片";
+    void runAction(actionKind, async () => {
       pushMessage({ role: "user", text });
-      const urls = await doGenerateImages({ prompt: text, refs, kind: "variation" });
-      pushMessage({ role: "assistant", kind: "生成变体", images: urls });
+      oaiHistoryRef.current.push({ role: "user", content: text });
+      const planActionId = pushMessage({ role: "action", label: "design_plan", done: false });
+      let plan: DesignPlan;
+      try {
+        plan = await requestDesignPlan(text);
+      } catch (planError) {
+        setMessages((prev) => prev.filter((message) => message.id !== planActionId));
+        throw planError;
+      }
+      setMessages((prev) => prev.map((message) => (message.id === planActionId && message.role === "action" ? { ...message, done: true } : message)));
+      const visiblePlan = designPlanToVisibleText(plan);
+      pushMessage({ role: "assistant", kind: "前置设计方案", text: visiblePlan });
+      oaiHistoryRef.current.push({ role: "assistant", content: visiblePlan });
+      const urls = await doGenerateImages({
+        prompt: plan.finalPrompt || text,
+        negativePrompt: plan.negativePrompt,
+        refs,
+        kind: "variation",
+      });
+      pushMessage({ role: "assistant", kind: actionKind, images: urls });
+      oaiHistoryRef.current.push({ role: "assistant", content: `已按前置设计方案完成${actionKind}，生成 ${urls.length} 张图片。` });
     });
-  }, [doGenerateImages, prompt, pushMessage, references, runAction, selection.images]);
+  }, [doGenerateImages, prompt, pushMessage, references, requestDesignPlan, runAction, selection.images]);
 
   /* 打开改字：预览转 dataURL（修裂图）+ 视觉识别行字（Lovart Edit Text 式逐行编辑） */
   const initFontDialog = useCallback(
@@ -4139,6 +4266,7 @@ export default function Home() {
 
 function actionLabel(name: string) {
   const labels: Record<string, string> = {
+    design_plan: "分析需求并制定方案",
     generate_images: "生成图片",
     restyle_lettering: "同风格改字",
     transfer_material: "材质复刻",

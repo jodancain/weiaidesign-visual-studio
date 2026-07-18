@@ -12,7 +12,7 @@ export async function GET(request: Request) {
     openapi: "3.1.0",
     info: {
       title: "Youngtuo Visual Studio API",
-      version: "1.2.2",
+      version: "1.3.0",
     },
     servers: [{ url: publicBaseUrl }],
     security: [{ bearerAuth: [] }],
@@ -89,13 +89,20 @@ export async function GET(request: Request) {
           type: "object",
           required: ["messages"],
           properties: {
+            mode: {
+              type: "string",
+              enum: ["plan", "execute"],
+              default: "execute",
+              description: "Use plan for a context-aware design brief before calling execute with the returned plan in canvas_state.design_plan.",
+            },
+            model: { type: "string", description: "Optional planning/chat model override" },
             messages: {
               type: "array",
               items: {
                 type: "object",
                 required: ["role", "content"],
                 properties: {
-                  role: { type: "string", enum: ["user", "assistant", "tool"] },
+                  role: { type: "string", enum: ["system", "user", "assistant", "tool"] },
                   content: { type: "string" },
                   tool_call_id: { type: "string" },
                   name: { type: "string" },
@@ -104,8 +111,23 @@ export async function GET(request: Request) {
             },
             canvas_state: {
               type: "object",
-              description: "Optional current canvas selection and scene state for tool planning.",
+              description: "Current canvas, Brand Kit, default design skill, and optional locked design_plan.",
             },
+          },
+        },
+        DesignPlan: {
+          type: "object",
+          required: ["title", "summary", "action", "decisions", "finalPrompt", "negativePrompt"],
+          properties: {
+            title: { type: "string" },
+            summary: { type: "string" },
+            action: {
+              type: "string",
+              enum: ["generate", "edit", "restyle_text", "material", "video", "vectorize", "export", "answer"],
+            },
+            decisions: { type: "array", items: { type: "string" } },
+            finalPrompt: { type: "string", description: "Expanded prompt locked for the execute phase" },
+            negativePrompt: { type: "string" },
           },
         },
       },
@@ -225,13 +247,17 @@ export async function GET(request: Request) {
       },
       "/agent-chat": {
         post: {
-          summary: "Lovart-style planning agent with tool calls for the canvas",
+          summary: "Two-phase context-aware design planning and canvas tool execution",
           servers: [{ url: agentBaseUrl }],
           requestBody: {
             required: true,
             content: { "application/json": { schema: { $ref: "#/components/schemas/AgentChatRequest" } } },
           },
-          responses: { "200": { description: "Assistant message with optional tool_calls" } },
+          responses: {
+            "200": {
+              description: "mode=plan returns data.plan; mode=execute returns data.message with optional tool_calls",
+            },
+          },
         },
       },
       "/image-jobs/{job_id}": {
