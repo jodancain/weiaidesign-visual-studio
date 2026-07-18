@@ -328,7 +328,7 @@ function designPlanToVisibleText(plan: DesignPlan) {
   return [
     plan.summary,
     ...plan.decisions.map((decision, index) => `${index + 1}. ${decision}`),
-    "执行方向已锁定，下一步按此方案调用工具。",
+    plan.action === "answer" ? "本轮只确认设计方向，不调用生成工具。" : "执行方向已锁定，下一步按此方案调用工具。",
   ].join("\n");
 }
 
@@ -2363,7 +2363,7 @@ export default function Home() {
       pushMessage({ role: "assistant", kind: "前置设计方案", text: visiblePlan });
       oaiHistoryRef.current.push({ role: "assistant", content: visiblePlan });
 
-      for (let round = 0; round < AGENT_MAX_ROUNDS; round += 1) {
+      for (let round = 0; plan.action !== "answer" && round < AGENT_MAX_ROUNDS; round += 1) {
         const rawResponse = await fetch("/api/agent-chat", {
           method: "POST",
           headers: { "content-type": "application/json", authorization: `Bearer ${token}` },

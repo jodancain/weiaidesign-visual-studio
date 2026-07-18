@@ -48,6 +48,8 @@ const DESIGN_PLAN_ACTIONS = new Set<DesignPlan["action"]>([
   "answer",
 ]);
 
+const ANSWER_ONLY_PATTERN = /(?:不要|无需|不需要|先不|暂不).{0,8}(?:生成|出图|做图)|只(?:给|要|做|分析).{0,8}(?:方案|分析|建议|方向|提示词)|(?:方案|分析|建议|方向).{0,8}(?:即可|就行)/i;
+
 function cleanPlanText(value: unknown, max: number) {
   return String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
 }
@@ -65,7 +67,11 @@ function parseDesignPlan(raw: string, fallbackBrief: string): DesignPlan {
     }
   }
   const actionValue = cleanPlanText(value.action, 32) as DesignPlan["action"];
-  const action = DESIGN_PLAN_ACTIONS.has(actionValue) ? actionValue : "generate";
+  const action = ANSWER_ONLY_PATTERN.test(fallbackBrief)
+    ? "answer"
+    : DESIGN_PLAN_ACTIONS.has(actionValue)
+      ? actionValue
+      : "generate";
   const decisions = Array.isArray(value.decisions)
     ? value.decisions.map((item) => cleanPlanText(item, 500)).filter(Boolean).slice(0, 6)
     : [];
