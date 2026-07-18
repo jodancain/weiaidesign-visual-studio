@@ -415,7 +415,9 @@ function standaloneImagePrompt(payload: Record<string, unknown>, index: number, 
     `Brief: ${prompt}`,
     style ? `Visual style: ${style}` : "",
     brand ? `Brand rules: ${brand}` : "",
-    designMemory ? `Persistent design memory (apply only when relevant; the current brief wins):\n${designMemory}` : "",
+    designMemory
+      ? `Default personal design skill (mandatory unless the current brief explicitly overrides a specific rule; silence is not an override):\n${designMemory}`
+      : "",
     format ? `Asset format: ${format}` : "",
     audience ? `Audience: ${audience}` : "",
     count > 1 ? `Variation ${index} of ${count}: keep the same core idea but change composition, staging, and detail.` : "",

@@ -12,7 +12,7 @@ export async function GET(request: Request) {
     openapi: "3.1.0",
     info: {
       title: "Youngtuo Visual Studio API",
-      version: "1.2.1",
+      version: "1.2.2",
     },
     servers: [{ url: publicBaseUrl }],
     security: [{ bearerAuth: [] }],
@@ -34,7 +34,10 @@ export async function GET(request: Request) {
             quality: { type: "string", enum: ["low", "medium", "high"] },
             style: { type: "string" },
             brand: { type: "string" },
-            design_memory: { type: "string", description: "Optional user-approved design preferences applied when relevant" },
+            design_memory: {
+              type: "string",
+              description: "User-approved default design skill; applied unless the current request explicitly overrides a specific rule",
+            },
             audience: { type: "string" },
             negative_prompt: { type: "string" },
             reference_images: {

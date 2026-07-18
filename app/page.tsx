@@ -156,7 +156,11 @@ function designMemoryToPromptText(memory: DesignMemory): string {
     memory.avoid.trim() ? `长期避免项：${memory.avoid.trim()}` : "",
   ].filter(Boolean);
   if (!sections.length) return "";
-  return ["【个人设计记忆】", ...sections, "仅应用与当前任务相关的条目；本次用户明确指令始终优先。"].join("\n");
+  return [
+    "【默认个人设计 Skill】",
+    ...sections,
+    "以上是默认必须遵守的设计规范。未提及不代表取消；只有用户在本次任务中明确要求修改或偏离某条规则时，才覆盖对应规则。品牌专属规则仅在任务涉及该品牌时启用。",
+  ].join("\n");
 }
 
 function brandKitToPromptText(kit: BrandKit): string {
@@ -2249,6 +2253,8 @@ export default function Home() {
                   : undefined,
               design_memory: designMemoryText
                 ? {
+                    mode: "default_skill",
+                    overridePolicy: "Only an explicit instruction in the current request may override the corresponding rule; silence is not an override.",
                     profile: designMemory.profile,
                     brands: designMemory.brands,
                     visualStyle: designMemory.visualStyle,
@@ -3321,8 +3327,8 @@ export default function Home() {
                           <Brain size={16} />
                         </span>
                         <span className="designMemoryEntryText">
-                          <strong>个人设计记忆</strong>
-                          <em>{designMemoryText ? "已启用" : designMemory.enabled ? "空白" : "未启用"}</em>
+                          <strong>个人设计 Skill</strong>
+                          <em>{designMemoryText ? "默认执行" : designMemory.enabled ? "空白" : "未启用"}</em>
                         </span>
                         <span className={designMemoryText ? "designMemoryState on" : "designMemoryState"}>
                           {designMemoryText ? "ON" : "OFF"}
@@ -3562,8 +3568,8 @@ export default function Home() {
                 <Brain size={19} />
               </span>
               <div>
-                <h2 id="design-memory-title">个人设计记忆</h2>
-                <p>当前浏览器</p>
+                <h2 id="design-memory-title">个人设计 Skill</h2>
+                <p>当前浏览器 · 默认执行</p>
               </div>
               <label className="designMemoryToggle">
                 <input
