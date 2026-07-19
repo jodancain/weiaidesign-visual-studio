@@ -395,6 +395,11 @@ function extractReferenceImages(payload: Record<string, unknown>) {
   return refs;
 }
 
+/** Primary logo/mark deliverable (not incidental logo-on-poster wording). */
+function isLogoMarkBrief(text: string) {
+  return /(?:logo|标志|徽标|商标|字母标|品牌标|\bicon\b|\bmark\b|图标)/i.test(text);
+}
+
 function standaloneImagePrompt(payload: Record<string, unknown>, index: number, count: number) {
   const rawPrompt = String(payload.raw_prompt || "").trim();
   if (rawPrompt) {
@@ -410,6 +415,29 @@ function standaloneImagePrompt(payload: Record<string, unknown>, index: number, 
   const format = String(payload.format || payload.asset_type || "").trim();
   const audience = String(payload.audience || "").trim();
   const negative = String(payload.negative_prompt || "").trim();
+  const logoMark = isLogoMarkBrief(prompt) || isLogoMarkBrief(format);
+  if (logoMark) {
+    return [
+      "Create one production-ready flat vector logo mark.",
+      `Brief: ${prompt}`,
+      style ? `Visual style: ${style}` : "",
+      brand ? `Brand rules: ${brand}` : "",
+      designMemory
+        ? `Default personal design skill (mandatory unless the current brief explicitly overrides a specific rule; silence is not an override):\n${designMemory}`
+        : "",
+      format ? `Asset format: ${format}` : "Asset format: flat vector logo mark",
+      audience ? `Audience: ${audience}` : "",
+      "Spec: flat vector logo mark, solid single-color or limited flat colors, negative space, minimal geometry, smooth clean curves, generous whitespace, pure white background, centered composition.",
+      "Do NOT use material, texture, lighting, shadows, 3D, gradient, photorealism, decorative ornament, or serif flourishes.",
+      count > 1
+        ? `Variation ${index} of ${count}: keep the same structural concept but change geometry, stroke weight, and negative-space treatment.`
+        : "",
+      "No watermark, no UI chrome, no extra logos unless specified.",
+      negative ? `Avoid: ${negative}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
   return [
     "Create one production-ready visual asset.",
     `Brief: ${prompt}`,

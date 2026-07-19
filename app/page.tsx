@@ -2278,12 +2278,27 @@ export default function Home() {
             ...(args.use_selected_reference ? sel.images.slice(0, 2) : []),
             ...(brandKit.logoRef ? [brandKit.logoRef] : []),
           ];
+          /* Logo mark floor: prompt rules ask high/count=3; soft-enforce if model omits them. */
+          const logoMarkBrief = /(?:logo|标志|徽标|商标|字母标|品牌标|\bicon\b|\bmark\b|图标)/i.test(
+            `${lastUserText}\n${String(args.prompt || "")}`,
+          );
+          const requestedCount = args.count != null ? Number(args.count) : NaN;
+          const count = logoMarkBrief
+            ? Math.max(3, Math.min(4, Number.isFinite(requestedCount) && requestedCount > 0 ? requestedCount : 3))
+            : Number.isFinite(requestedCount) && requestedCount > 0
+              ? requestedCount
+              : 1;
+          const quality = logoMarkBrief
+            ? String(args.quality || "high")
+            : args.quality
+              ? String(args.quality)
+              : undefined;
           const urls = await doGenerateImages({
             imageModel,
             prompt: String(args.prompt || ""),
             aspect: args.aspect ? String(args.aspect) : undefined,
-            count: args.count ? Number(args.count) : 1,
-            quality: args.quality ? String(args.quality) : undefined,
+            count,
+            quality,
             negativePrompt: args.negative_prompt ? String(args.negative_prompt) : undefined,
             transparent: Boolean(args.transparent_background),
             refs: agentRefs.length ? agentRefs : undefined,
