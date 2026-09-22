@@ -209,7 +209,7 @@ function chatUpstreams(): ChatUpstream[] {
   const list: ChatUpstream[] = [];
   const agentBase = (env.AGENT_LLM_BASE_URL || "").replace(/\/+$/, "");
   const agentKey = env.AGENT_LLM_API_KEY || "";
-  const agentModels = (env.AGENT_LLM_MODELS || "ezr/claude-sonnet-5,ezr/gpt-5.5,ezr/kimi-k2.7-code,cx/gpt-5.4")
+  const agentModels = (env.AGENT_LLM_MODELS || "claude-sonnet-5,gpt-5.5,kimi-k2.7-code")
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);

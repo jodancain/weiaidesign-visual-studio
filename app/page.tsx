@@ -333,9 +333,9 @@ function designPlanToVisibleText(plan: DesignPlan) {
 }
 
 function agentModelForText(text: string) {
-  if (/@Sonnet-5/i.test(text)) return "ezr/claude-sonnet-5";
-  if (/@GPT-5\.5/i.test(text)) return "ezr/gpt-5.5";
-  if (/@Kimi/i.test(text)) return "ezr/kimi-k2.7-code";
+  if (/@Sonnet-5/i.test(text)) return "claude-sonnet-5";
+  if (/@GPT-5\.5/i.test(text)) return "gpt-5.5";
+  if (/@Kimi/i.test(text)) return "kimi-k2.7-code";
   return undefined;
 }
 
