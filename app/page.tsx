@@ -333,9 +333,9 @@ function designPlanToVisibleText(plan: DesignPlan) {
 }
 
 function agentModelForText(text: string) {
-  if (/@GPT-5\.4/i.test(text)) return "cx/gpt-5.4";
-  if (/@GLM-5\.2/i.test(text)) return "cbcn/glm-5.2";
-  if (/@Kimi/i.test(text)) return "cbcn/kimi-k2.7";
+  if (/@Sonnet-5/i.test(text)) return "ezr/claude-sonnet-5";
+  if (/@GPT-5\.5/i.test(text)) return "ezr/gpt-5.5";
+  if (/@Kimi/i.test(text)) return "ezr/kimi-k2.7-code";
   return undefined;
 }
 
@@ -3363,11 +3363,11 @@ export default function Home() {
                     @Image-1.5 <em>稳定</em>
                   </button>
                   <div className="mentionGroup">对话模型</div>
-                  <button type="button" onClick={() => applyMention("@GPT-5.4")}>
-                    @GPT-5.4 <em>默认 · 最强规划</em>
+                  <button type="button" onClick={() => applyMention("@Sonnet-5")}>
+                    @Sonnet-5 <em>默认 · 最强规划</em>
                   </button>
-                  <button type="button" onClick={() => applyMention("@GLM-5.2")}>
-                    @GLM-5.2 <em>中文强</em>
+                  <button type="button" onClick={() => applyMention("@GPT-5.5")}>
+                    @GPT-5.5 <em>中文强</em>
                   </button>
                   <button type="button" onClick={() => applyMention("@Kimi")}>
                     @Kimi <em>K2.7 长上下文</em>

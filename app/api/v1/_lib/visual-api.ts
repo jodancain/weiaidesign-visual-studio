@@ -17,8 +17,8 @@ type FetchJsonOptions = RequestInit & {
 
 const env = process.env;
 
-export const imageModel = env.IMAGE_OPENAI_MODEL || "gpt-image-1.5";
-export const imageFallbackModels = (env.IMAGE_OPENAI_FALLBACK_MODELS || "gpt-image-1")
+export const imageModel = env.IMAGE_OPENAI_MODEL || "gpt-image-2";
+export const imageFallbackModels = (env.IMAGE_OPENAI_FALLBACK_MODELS || "gpt-image-1.5,gpt-image-2.5-flare,gpt-image-2.5-sunburst")
   .split(",")
   .map((item) => item.trim())
   .filter(Boolean);
@@ -167,12 +167,18 @@ function sleep(ms: number) {
 
 async function imagePayloadToBuffer(item: { b64_json?: string; url?: string }) {
   if (item.b64_json) return Buffer.from(item.b64_json, "base64");
-  if (!item.url) throw new Error("image generation returned unsupported payload");
+  
+  // ezr.sh sometimes returns nested url for OSS (wan2.7-image-pro etc.) but fetchJson already extracts it to `url` or `b64_json` if we format it right.
+  // Wait, fetchJson parses { data?: Array<{ b64_json?: string; url?: string }> }.
+  // If it's wan, the url is already in item.url because our test showed `d['data'][0]['url']` exists.
+  const url = item.url;
+
+  if (!url) throw new Error("image generation returned unsupported payload");
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 60000);
   try {
-    const response = await fetch(item.url, { signal: controller.signal });
+    const response = await fetch(url, { signal: controller.signal });
     if (!response.ok) throw new Error(`image download failed: ${response.status}`);
     return Buffer.from(await response.arrayBuffer());
   } finally {
