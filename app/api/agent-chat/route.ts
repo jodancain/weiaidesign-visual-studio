@@ -47,6 +47,9 @@ type DesignPlan = {
   decisions: string[];
   finalPrompt: string;
   negativePrompt: string;
+  imageModelHint?: "gpt-image-2" | "seedream-4-5";
+  imageModelConfidence?: number;
+  brandCompliant?: boolean | null;
 };
 
 const DESIGN_PLAN_ACTIONS = new Set<DesignPlan["action"]>([
@@ -104,6 +107,76 @@ function parseDesignPlan(raw: string, fallbackBrief: string): DesignPlan {
     finalPrompt: cleanPlanText(value.finalPrompt ?? value.final_prompt, 12000) || fallbackBrief,
     negativePrompt: cleanPlanText(value.negativePrompt ?? value.negative_prompt, 3000),
   };
+}
+
+/* ---------- Jev (TypeSafe System One) 结构化决策辅助：选生图模型 + 校验 Brand Kit 合规 ----------
+   只做判断型任务（Choice/Noul），不做文本生成；失败静默降级，不阻断主流程。 */
+type JevChoiceAnswer = { type: "choice"; choice: string; confidence: number; probabilities: Record<string, number> };
+type JevNoulAnswer = { type: "noul"; noul: number };
+
+async function callJev(state: string, questions: Record<string, unknown>): Promise<Record<string, unknown> | null> {
+  const apiKey = env.TYPESAFE_API_KEY || "";
+  if (!apiKey || !state.trim()) return null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12000);
+  try {
+    const response = await fetch("https://api.typesafe.ai/v1/systemone", {
+      method: "POST",
+      headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ state, model: "jev-latest", questions }),
+      signal: controller.signal,
+    });
+    if (!response.ok) return null;
+    const data = (await response.json()) as { answers?: Record<string, unknown> };
+    return data.answers || null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/* 只有生图/编辑类 action 才需要选模型和校验合规；answer/video/export 等跳过，省 token。 */
+const IMAGE_ACTIONS = new Set<DesignPlan["action"]>(["generate", "edit", "restyle_text", "material"]);
+
+async function enrichPlanWithJev(plan: DesignPlan, brandKit: unknown): Promise<DesignPlan> {
+  if (!IMAGE_ACTIONS.has(plan.action) || !plan.finalPrompt) return plan;
+
+  const brandKitRecord = brandKit && typeof brandKit === "object" ? (brandKit as Record<string, unknown>) : {};
+  const hasBrandRules = Boolean(
+    brandKitRecord.name || (Array.isArray(brandKitRecord.palette) && brandKitRecord.palette.length) || brandKitRecord.styleWords,
+  );
+
+  const questions: Record<string, unknown> = {
+    image_model: {
+      type: "choice",
+      instructions: "根据这个设计方案的 finalPrompt，选择最合适的图片生成模型",
+      criteria: {
+        "gpt-image-2": "适合精确文字渲染、写实质感、logo/图标、产品图、高文字准确度和高保真需求",
+        "seedream-4-5": "适合风格化插画、艺术化处理、非写实概念图、绘画感强的视觉风格",
+      },
+    },
+  };
+  if (hasBrandRules) {
+    questions.brand_compliant = {
+      type: "noul",
+      instructions: `finalPrompt 是否遵守了品牌规范（品牌信息：${cleanPlanText(JSON.stringify(brandKitRecord), 500)}）`,
+    };
+  }
+
+  const answers = await callJev(`设计方案 finalPrompt：${plan.finalPrompt}`, questions);
+  if (!answers) return plan;
+
+  const modelAnswer = answers.image_model as JevChoiceAnswer | undefined;
+  if (modelAnswer?.type === "choice" && (modelAnswer.choice === "gpt-image-2" || modelAnswer.choice === "seedream-4-5")) {
+    plan.imageModelHint = modelAnswer.choice;
+    plan.imageModelConfidence = modelAnswer.confidence;
+  }
+  const brandAnswer = answers.brand_compliant as JevNoulAnswer | undefined;
+  if (brandAnswer?.type === "noul") {
+    plan.brandCompliant = brandAnswer.noul >= 0.6;
+  }
+  return plan;
 }
 
 const TOOLS = [
@@ -294,7 +367,8 @@ export async function POST(request: Request) {
         }
         if (mode === "plan") {
           const content = String((message as { content?: unknown }).content || "");
-          const plan = parseDesignPlan(content, cleanPlanText(fallbackBrief?.content, 12000));
+          let plan = parseDesignPlan(content, cleanPlanText(fallbackBrief?.content, 12000));
+          plan = await enrichPlanWithJev(plan, (payload.canvas_state as Record<string, unknown> | undefined)?.brand_kit);
           return jsonCors({ status: 200, message: "success", data: { plan, model } });
         }
         return jsonCors({ status: 200, message: "success", data: { message, model } });

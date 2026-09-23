@@ -76,6 +76,23 @@ function imageSize(aspect: string) {
   return "1024x1536";
 }
 
+/** Seedream (ByteDance) requires >=3,686,400px total; gpt-image's 1024/1536 sizes are rejected. */
+function isSeedreamModel(model: string) {
+  return /^seedream[-_]/i.test(String(model || "").trim());
+}
+
+function seedreamImageSize(aspect: string) {
+  if (aspect === "16:9") return "2560x1440";
+  if (aspect === "9:16") return "1440x2560";
+  if (aspect === "3:2") return "2496x1664";
+  if (aspect === "2:3") return "1664x2496";
+  return "2048x2048";
+}
+
+function imageSizeForModel(aspect: string, model: string) {
+  return isSeedreamModel(model) ? seedreamImageSize(aspect) : imageSize(aspect);
+}
+
 function imageExtension() {
   const value = String(imageOutputFormat || "png").toLowerCase();
   if (value === "jpeg") return "jpg";
@@ -210,7 +227,7 @@ async function generateImage(prompt: string, aspect: string, outPath: string, qu
         body: JSON.stringify({
           model,
           prompt,
-          size: imageSize(aspect),
+          size: imageSizeForModel(aspect, model),
           n: 1,
           ...((qualityOverride || imageQuality) ? { quality: qualityOverride || imageQuality } : {}),
           ...(transparent
@@ -255,7 +272,7 @@ async function editImageWithReference(prompt: string, aspect: string, outPath: s
         const form = new FormData();
         form.append("model", model);
         form.append("prompt", prompt);
-        form.append("size", imageSize(aspect));
+        form.append("size", imageSizeForModel(aspect, model));
         form.append("n", "1");
         if (withFidelity) form.append("input_fidelity", "high");
         if (qualityOverride || imageQuality) form.append("quality", qualityOverride || imageQuality);

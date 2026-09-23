@@ -291,6 +291,9 @@ type DesignPlan = {
   decisions: string[];
   finalPrompt: string;
   negativePrompt: string;
+  imageModelHint?: "gpt-image-2" | "seedream-4-5";
+  imageModelConfidence?: number;
+  brandCompliant?: boolean | null;
 };
 
 const DESIGN_PLAN_ACTIONS = new Set<DesignPlan["action"]>([
@@ -321,15 +324,28 @@ function normalizeDesignPlan(raw: unknown, fallbackBrief: string): DesignPlan {
       : ["锁定当前任务目标与交付用途", "遵守默认设计 Skill 与相关品牌规范", "明确构图、配色、文字和材质光影", "排除长期避免项后再执行"],
     finalPrompt: String(value.finalPrompt || fallbackBrief).trim().slice(0, 12000),
     negativePrompt: String(value.negativePrompt || "").trim().slice(0, 3000),
+    imageModelHint: value.imageModelHint === "gpt-image-2" || value.imageModelHint === "seedream-4-5" ? value.imageModelHint : undefined,
+    imageModelConfidence: typeof value.imageModelConfidence === "number" ? value.imageModelConfidence : undefined,
+    brandCompliant: typeof value.brandCompliant === "boolean" ? value.brandCompliant : null,
   };
 }
 
 function designPlanToVisibleText(plan: DesignPlan) {
+  const modelNote = plan.imageModelHint
+    ? `模型推荐：${plan.imageModelHint === "seedream-4-5" ? "Seedream（风格化）" : "GPT-Image-2（精确/写实）"}${
+        plan.imageModelConfidence != null ? ` · 置信度 ${Math.round(plan.imageModelConfidence * 100)}%` : ""
+      }`
+    : "";
+  const brandNote = plan.brandCompliant === false ? "⚠️ 品牌合规校验未通过，已在扩写时重新对齐色板/风格词。" : "";
   return [
     plan.summary,
     ...plan.decisions.map((decision, index) => `${index + 1}. ${decision}`),
+    modelNote,
+    brandNote,
     plan.action === "answer" ? "本轮只确认设计方向，不调用生成工具。" : "执行方向已锁定，下一步按此方案调用工具。",
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function agentModelForText(text: string) {
@@ -817,6 +833,7 @@ export default function Home() {
   const placeCounter = useRef(0);
   const recognitionRef = useRef<{ stop: () => void } | null>(null);
   const oaiHistoryRef = useRef<OaiMessage[]>([]);
+  const currentPlanRef = useRef<DesignPlan | null>(null);
   const selectionRef = useRef(selection);
   const skipAutosaveRef = useRef(false);
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -2273,7 +2290,9 @@ export default function Home() {
             ? "gpt-image-2"
             : /@Image-1\.5/i.test(lastUserText)
               ? "gpt-image-1.5"
-              : undefined;
+              : /@Seedream/i.test(lastUserText)
+                ? "seedream-4-5"
+                : currentPlanRef.current?.imageModelHint;
           const agentRefs = [
             ...(args.use_selected_reference ? sel.images.slice(0, 2) : []),
             ...(brandKit.logoRef ? [brandKit.logoRef] : []),
@@ -2478,6 +2497,7 @@ export default function Home() {
         negativePrompt: plan.negativePrompt,
         refs,
         kind: "variation",
+        imageModel: plan.imageModelHint,
       });
       pushMessage({ role: "assistant", kind: actionKind, images: urls });
       oaiHistoryRef.current.push({ role: "assistant", content: `已按前置设计方案完成${actionKind}，生成 ${urls.length} 张图片。` });
@@ -3361,6 +3381,9 @@ export default function Home() {
                   </button>
                   <button type="button" onClick={() => applyMention("@Image-1.5")}>
                     @Image-1.5 <em>稳定</em>
+                  </button>
+                  <button type="button" onClick={() => applyMention("@Seedream")}>
+                    @Seedream <em>风格化/插画强</em>
                   </button>
                   <div className="mentionGroup">对话模型</div>
                   <button type="button" onClick={() => applyMention("@Sonnet-5")}>
