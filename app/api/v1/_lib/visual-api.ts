@@ -93,6 +93,16 @@ function imageSizeForModel(aspect: string, model: string) {
   return isSeedreamModel(model) ? seedreamImageSize(aspect) : imageSize(aspect);
 }
 
+/** Seedream rejects output_format/output_compression entirely (InvalidParameter); gpt-image needs them. */
+function outputFormatParamsForModel(model: string, transparent: boolean) {
+  if (isSeedreamModel(model)) return {} as Record<string, string | number>;
+  if (transparent) return { output_format: "png" };
+  return {
+    ...(imageOutputFormat ? { output_format: imageOutputFormat } : {}),
+    ...(imageOutputCompression > 0 ? { output_compression: imageOutputCompression } : {}),
+  };
+}
+
 function imageExtension() {
   const value = String(imageOutputFormat || "png").toLowerCase();
   if (value === "jpeg") return "jpg";
@@ -230,12 +240,7 @@ async function generateImage(prompt: string, aspect: string, outPath: string, qu
           size: imageSizeForModel(aspect, model),
           n: 1,
           ...((qualityOverride || imageQuality) ? { quality: qualityOverride || imageQuality } : {}),
-          ...(transparent
-            ? { output_format: "png" }
-            : {
-                ...(imageOutputFormat ? { output_format: imageOutputFormat } : {}),
-                ...(imageOutputCompression > 0 ? { output_compression: imageOutputCompression } : {}),
-              }),
+          ...outputFormatParamsForModel(model, transparent),
         }),
         timeoutMs: imageTimeoutSeconds * 1000,
       });
@@ -276,11 +281,13 @@ async function editImageWithReference(prompt: string, aspect: string, outPath: s
         form.append("n", "1");
         if (withFidelity) form.append("input_fidelity", "high");
         if (qualityOverride || imageQuality) form.append("quality", qualityOverride || imageQuality);
-        if (transparent) {
-          form.append("output_format", "png");
-        } else {
-          if (imageOutputFormat) form.append("output_format", imageOutputFormat);
-          if (imageOutputCompression > 0) form.append("output_compression", String(imageOutputCompression));
+        if (!isSeedreamModel(model)) {
+          if (transparent) {
+            form.append("output_format", "png");
+          } else {
+            if (imageOutputFormat) form.append("output_format", imageOutputFormat);
+            if (imageOutputCompression > 0) form.append("output_compression", String(imageOutputCompression));
+          }
         }
         const refsToSend = multi && validRefs.length > 1 ? validRefs : [validRefs[0]];
         if (refsToSend.length > 1) {
