@@ -1,0 +1,56 @@
+name: weiaidesign-dev
+
+services:
+  web:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: weiaidesign-dev-web
+    restart: unless-stopped
+    environment:
+      PORT: "18084"
+      HOSTNAME: "0.0.0.0"
+      NODE_ENV: production
+      VIDEO_API_TOKEN: ${VIDEO_API_TOKEN:?VIDEO_API_TOKEN is required}
+      PUBLIC_BASE_URL: http://127.0.0.1:${WEIAI_HOST_PORT:-18192}/api/v1
+      NEXT_PUBLIC_SITE_URL: http://127.0.0.1:${WEIAI_HOST_PORT:-18192}
+      NEXT_PUBLIC_API_BASE: /api/v1
+      IMAGE_OPENAI_BASE_URL: ${IMAGE_OPENAI_BASE_URL:-https://ezr.sh/v1}
+      IMAGE_OPENAI_API_KEY: ${IMAGE_OPENAI_API_KEY:-${EZR_API_KEY}}
+      IMAGE_OPENAI_MODEL: ${IMAGE_OPENAI_MODEL:-gpt-image-2}
+      IMAGE_OPENAI_FALLBACK_MODELS: ${IMAGE_OPENAI_FALLBACK_MODELS:-gpt-image-1.5,gpt-image-2.5-flare,gpt-image-2.5-sunburst}
+      IMAGE_OPENAI_TIMEOUT_SECONDS: ${IMAGE_OPENAI_TIMEOUT_SECONDS:-300}
+      IMAGE_OPENAI_QUALITY: ${IMAGE_OPENAI_QUALITY:-low}
+      IMAGE_OPENAI_OUTPUT_FORMAT: ${IMAGE_OPENAI_OUTPUT_FORMAT:-jpeg}
+      IMAGE_OPENAI_OUTPUT_COMPRESSION: ${IMAGE_OPENAI_OUTPUT_COMPRESSION:-70}
+      IMAGE_GENERATION_CONCURRENCY: ${IMAGE_GENERATION_CONCURRENCY:-1}
+      IMAGE_GENERATION_RETRIES: ${IMAGE_GENERATION_RETRIES:-3}
+      IMAGE_OUTPUT_DIR: /data/generated_images
+      AGENT_LLM_BASE_URL: ${AGENT_LLM_BASE_URL:-https://ezr.sh/v1}
+      AGENT_LLM_API_KEY: ${AGENT_LLM_API_KEY:-${EZR_API_KEY}}
+      AGENT_LLM_MODELS: ${AGENT_LLM_MODELS:-claude-sonnet-5,gpt-5.5,kimi-k2.7-code}
+      TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
+      VIDEO_API_PROXY_BASE_URL: ${VIDEO_API_PROXY_BASE_URL:-https://video.youngtuo.win/api/v1}
+      VIDEO_API_PROXY_TOKEN: ${VIDEO_API_PROXY_TOKEN:-${VIDEO_API_TOKEN}}
+      GPU_COMFY_BASE_URL: ${GPU_COMFY_BASE_URL:-https://comfy.youngtuo.win}
+      GPU_COMFY_TOKEN: ${GPU_COMFY_TOKEN:-}
+      GPU_COMFY_TIMEOUT_SECONDS: ${GPU_COMFY_TIMEOUT_SECONDS:-120}
+      GPU_COMFY_POLL_INTERVAL_MS: ${GPU_COMFY_POLL_INTERVAL_MS:-1500}
+      GPU_COMFY_POLL_ATTEMPTS: ${GPU_COMFY_POLL_ATTEMPTS:-120}
+    volumes:
+      - weiaidesign-dev-data:/data
+    ports:
+      - "${WEIAI_HOST_PORT:-18192}:18084"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:18084/api/v1/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 45s
+
+volumes:
+  weiaidesign-dev-data:
