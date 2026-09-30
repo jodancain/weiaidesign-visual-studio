@@ -69,11 +69,11 @@ export default function OntologyPage() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ brief: brief.trim(), audience, aspect_ratio: aspect }),
       });
-      const data = (await response.json()) as { detail?: string; data?: { review_url?: string } };
+      const data = (await response.json()) as { detail?: string; data?: { id?: string; review_url?: string } };
       if (!response.ok) throw new Error(data.detail || `HTTP ${response.status}`);
       setBrief("");
       await refresh();
-      if (data.data?.review_url) window.open(data.data.review_url, "_blank", "noopener");
+      if (data.data?.id) window.open(`${API_BASE}/ontology/${data.data.id}/review`, "_blank", "noopener");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {

@@ -223,9 +223,21 @@ R 负责 · A 批准 · S 支持 · I 被通知
 
 ![成片首 / 中 / 末帧：同一机位，行李架从无到有](./ontology-video-method/e2e-20260930-shot02-frames.jpg)
 
+### 11.5 三种路线同题对比（2026-09-30，生产环境）
+
+同一需求「深空灰 SU7 夜间展厅，同机位对比原车 / 装运动尾翼」、同一网关与运动提示，只换关键帧来源：① 自由生成（只给提示词）② 锚图本体（生产 `/api/v1/ontology`，claude-sonnet-5 起草，5 张锚图）③ 3D 白模重绘（SU7 车库 Three.js 同机位截两帧 → GPT-image 参考重绘 → 补间）。对比页（含三段成片与并排视频）：<https://yundongyl.cn/ontology-video/compare/>。
+
+![首帧 / 末帧：左① 中② 右③](./ontology-video-method/compare-20260930/grid-first-last.jpg)
+
+- ① 车不是 SU7，首尾两帧是两台不同的车——自由生成保不住对象同一性的实证。
+- ② 与 ③ 都保住同一性、画质相当；③ 几何来自 GLB 是真的，② 是参考编辑"像"出来的但不需要 3D 资产且人可逐张把关。两者可合并：车库截图当锚图喂进本体。
+- 三路共同问题：Seedance 把 "subtle push-in" 做成大幅推近，机位没锁住；下一步用 "locked-off static camera" 措辞复测。
+- 暴露的产品缺口已修：审核页可换镜头起止锚图（PATCH 接受 `start_anchor / end_anchor`）；生产 `review_url` 曾指向容器内 origin，改用 `PUBLIC_BASE_URL`。
+- 网关任务在内存：容器重建导致一次任务丢失（① 重提），需落盘。
+
 ### 11.4 已知问题与未做
 
 1. **`AGENT_LLM_API_KEY` 在 router 上返回 401「无效的令牌」**（handoff env 版本），所有起草请求都静默回退到 relay 的 gpt-5.4-mini；本体质量可接受，但要用更强模型需先换 key。本体 JSON 的 `errors[0]` 会记录这次回退。
 2. 审核页无鉴权（人直接打开），生产若开 `REQUIRE_ACCESS_TOKEN=1` 则页内按钮需带 token，尚未处理。
 3. 未做：多镜头拼接成一条完整视频、字幕烧录、TTS；A / B 线（证据片段、手册图例作锚图）尚未接入。
-4. 生产部署未执行：当前生产在 Windows `ai` WSL `/home/qrrwi/dev/weiaidesign-web/`（非 git 目录），需人工同步并重建。
+4. ~~生产部署未执行~~ 2026-09-30 已按 `ops/windows/README-rebuild.md` 部署（WSL 源同步 → rsync 到 `C:\\Users\\qrrwi\\build\\weiaidesign-web` → 计划任务构建 → `up-web.ps1`），`weiaidesign.com/ontology` 与五个 API 均 200。生产 `AGENT_LLM_API_KEY` 有效（起草用 claude-sonnet-5），失效的只是 handoff env 副本。

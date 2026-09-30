@@ -7,8 +7,9 @@ md = markdown.Markdown(extensions=["tables", "fenced_code", "toc"], extension_co
 body = md.convert(src)
 # inline figures
 def inline(m):
-    alt, name = m.group(1), pathlib.Path(m.group(2)).name
-    path = HERE / name
+    alt, rel = m.group(1), m.group(2)
+    name = pathlib.Path(rel).name
+    path = HERE / rel
     if name.endswith(".svg"):
         return f'<figure class="fig">{path.read_text()}</figure>'
     b64 = base64.b64encode(path.read_bytes()).decode()

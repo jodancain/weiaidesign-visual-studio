@@ -496,6 +496,18 @@ export function applyReview(o: Ontology, body: Record<string, unknown>) {
     if (d.status === "approved" || d.status === "rejected" || d.status === "proposed") s.status = d.status;
     if (typeof d.caption === "string") s.caption = str(d.caption, 48);
     if (typeof d.motion_prompt === "string" && d.motion_prompt.trim()) s.motion_prompt = str(d.motion_prompt, 800);
+    const start = typeof d.start_anchor === "string" ? kebab(d.start_anchor, "") : s.start_anchor;
+    const end = typeof d.end_anchor === "string" ? kebab(d.end_anchor, "") : s.end_anchor;
+    if ((start !== s.start_anchor || end !== s.end_anchor) && start !== end && o.anchors.some((a) => a.id === start) && o.anchors.some((a) => a.id === end)) {
+      s.start_anchor = start;
+      s.end_anchor = end;
+      if (["queued", "running", "done", "failed"].includes(s.status)) {
+        s.status = "approved";
+        s.video_job_id = undefined;
+        s.video_url = undefined;
+        s.error = undefined;
+      }
+    }
   }
   if (typeof body.notes === "string") o.review.notes = str(body.notes, 2000);
   if (typeof body.reviewer === "string") o.review.reviewer = str(body.reviewer, 80);
@@ -703,9 +715,10 @@ ${linkAnchors.length ? `<div class="grid">${linkAnchors.map(anchorCard).join("")
     const a = anchorById.get(s.start_anchor);
     const b = anchorById.get(s.end_anchor);
     const th = (x?: Anchor) => x?.image ? `<img src="${esc(x.image.public_url)}" alt="">` : `<div class="ph">${esc(x?.label || "?")}</div>`;
+    const opts = (cur: string) => o.anchors.filter((x) => x.image).map((x) => `<option value="${esc(x.id)}" ${x.id === cur ? "selected" : ""}>${esc(x.label)}</option>`).join("");
     return `<div class="shot ${esc(s.status)}" data-shot="${esc(s.id)}">
   <div class="shead"><b>#${s.order} ${esc(s.title)}</b> <span class="st">${esc(statusZh[s.status] || s.status)}</span> <span class="muted">${s.duration_s}s</span></div>
-  <div class="frames"><div class="fr">${th(a)}<small>${esc(a?.label || s.start_anchor)}</small></div><div class="arrow">→ 补间 →</div><div class="fr">${th(b)}<small>${esc(b?.label || s.end_anchor)}</small></div></div>
+  <div class="frames"><div class="fr">${th(a)}<select class="sa">${opts(s.start_anchor)}</select></div><div class="arrow">→ 补间 →</div><div class="fr">${th(b)}<select class="ea">${opts(s.end_anchor)}</select></div></div>
   <label>字幕 <span class="tag ${s.caption_source}">${s.caption_source === "brief" ? "来自需求原文" : "AI 补写"}</span><input class="cap" value="${esc(s.caption)}" maxlength="48"></label>
   <label>运动提示 <textarea class="mp" rows="2">${esc(s.motion_prompt)}</textarea></label>
   ${s.video_url ? `<video src="${esc(s.video_url)}" controls playsinline></video><span class="muted" style="font-size:12px"><a href="${esc(s.video_url)}" target="_blank">打开视频</a>${s.drive_url ? ` · <a href="${esc(s.drive_url)}" target="_blank">Drive</a>` : ""}${s.video_model ? ` · ${esc(s.video_model)}` : ""}</span>` : ""}
@@ -736,7 +749,7 @@ table.attrs{width:100%;border-collapse:collapse;font-size:13.5px;margin:8px 0}ta
 .acts{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px}button{font:inherit;font-size:12.5px;padding:4px 10px;border-radius:7px;border:1px solid var(--line);background:#fff;cursor:pointer}button.ok{border-color:var(--ok);color:var(--ok)}button.no{border-color:var(--no);color:var(--no)}button.re{color:var(--blue)}button:disabled{opacity:.4;cursor:not-allowed}
 input.fb{flex:1;min-width:120px;font:inherit;font-size:12px;padding:4px 8px;border:1px solid var(--line);border-radius:7px}
 .shot{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:10px 0;background:#fff}.shot.approved{border-color:var(--ok)}.shot.rejected{border-color:var(--no);opacity:.75}.shot.done{border-color:var(--purple)}
-.frames{display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:center;margin:8px 0}.fr img,.fr .ph{width:100%;aspect-ratio:${o.aspect_ratio === "9:16" ? "9/16" : o.aspect_ratio === "1:1" ? "1/1" : "16/9"};object-fit:cover;border-radius:6px;background:var(--soft);display:flex;align-items:center;justify-content:center}.fr small{display:block;text-align:center;color:var(--muted);font-size:11.5px;margin-top:2px}.arrow{color:var(--muted);font-size:12px;white-space:nowrap}
+.frames{display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:center;margin:8px 0}.fr img,.fr .ph{width:100%;aspect-ratio:${o.aspect_ratio === "9:16" ? "9/16" : o.aspect_ratio === "1:1" ? "1/1" : "16/9"};object-fit:cover;border-radius:6px;background:var(--soft);display:flex;align-items:center;justify-content:center}.fr small{display:block;text-align:center;color:var(--muted);font-size:11.5px;margin-top:2px}.fr select{display:block;width:100%;margin-top:4px;font:inherit;font-size:12px;padding:3px 6px;border:1px solid var(--line);border-radius:6px;background:#fff;color:var(--fg)}.arrow{color:var(--muted);font-size:12px;white-space:nowrap}
 label{display:block;font-size:12.5px;color:var(--muted);margin:6px 0}input.cap,textarea.mp{display:block;width:100%;font:inherit;font-size:13px;padding:5px 8px;border:1px solid var(--line);border-radius:7px;margin-top:2px;color:var(--fg)}
 video{width:100%;max-height:420px;background:#000;border-radius:8px;margin:8px 0 2px}
 .bar{position:fixed;left:0;right:0;bottom:0;background:rgba(255,255,255,.96);backdrop-filter:blur(8px);border-top:1px solid var(--line);padding:10px 18px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:center}
@@ -747,7 +760,7 @@ video{width:100%;max-height:420px;background:#000;border-radius:8px;margin:8px 0
 <h1>${esc(o.title)} <span class="tag">${esc(statusZh[o.state] || o.state)}</span></h1>
 <p class="muted">${esc(o.summary)}</p>
 <div class="callout"><b>需求原文</b><br>${esc(o.brief)}<br><span class="muted">受众线 ${esc(o.audience)} · 画幅 ${esc(o.aspect_ratio)} · 模型 ${esc(o.llm_model || "")} · 锚图 ${o.progress.anchors_done}/${o.progress.anchors_total}</span></div>
-<div class="callout" style="border-left-color:var(--orange)"><b>怎么审</b>：① 每张锚图看「像不像同一个东西、有没有多余文字、构图能不能当关键帧」——通过或驳回，驳回可填意见后重生成；② 关系表核对对象之间的连接是否符合需求；③ 每个镜头看起止锚图是否成对、字幕是否属实（AI 补写的字幕请改成可核实的表述）；④ 全部通过后点「开始生成」，视频回来会显示在镜头卡片里。</div>
+<div class="callout" style="border-left-color:var(--orange)"><b>怎么审</b>：① 每张锚图看「像不像同一个东西、有没有多余文字、构图能不能当关键帧」——通过或驳回，驳回可填意见后重生成；② 关系表核对对象之间的连接是否符合需求；③ 每个镜头看起止锚图是否成对（下拉框可直接换锚图，保存后生效）、字幕是否属实（AI 补写的字幕请改成可核实的表述）；④ 全部通过后点「开始生成」，视频回来会显示在镜头卡片里。</div>
 ${o.style_bible ? `<p class="muted"><b>视觉总纲</b>：${esc(o.style_bible)}</p>` : ""}
 
 <h2>一、对象与属性锚图</h2>
@@ -775,7 +788,7 @@ ${errorsBlock}
   function say(t){msg.textContent=t;}
   function q(sel,root){return Array.prototype.slice.call((root||document).querySelectorAll(sel));}
   async function patch(body){
-    q('.shot').forEach(function(el){var id=el.dataset.shot; shots[id]=Object.assign(shots[id]||{}, {caption:el.querySelector('.cap').value, motion_prompt:el.querySelector('.mp').value});});
+    q('.shot').forEach(function(el){var id=el.dataset.shot; shots[id]=Object.assign(shots[id]||{}, {caption:el.querySelector('.cap').value, motion_prompt:el.querySelector('.mp').value, start_anchor:el.querySelector('.sa').value, end_anchor:el.querySelector('.ea').value});});
     var r=await fetch(API+'/ontology/'+ID,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify(Object.assign({anchors:anchors,shots:shots,notes:document.getElementById('notes').value},body||{}))});
     if(!r.ok){say('保存失败 '+r.status);return null;}
     return r.json();

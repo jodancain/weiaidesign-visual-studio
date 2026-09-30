@@ -23,7 +23,7 @@ export async function POST(request: Request) {
     await saveOntology(ontology);
     const autoAnchors = payload.auto_anchors !== false;
     if (autoAnchors) startAnchorJob(ontology, request);
-    const origin = new URL(request.url).origin;
+    const apiBase = (process.env.PUBLIC_BASE_URL || `${new URL(request.url).origin}/api/v1`).replace(/\/+$/, "");
     return jsonCors({
       status: 201,
       message: "drafted",
@@ -36,8 +36,8 @@ export async function POST(request: Request) {
         anchors: ontology.anchors.length,
         shots: ontology.shots.length,
         errors: ontology.errors,
-        review_url: `${origin}/api/v1/ontology/${ontology.id}/review`,
-        json_url: `${origin}/api/v1/ontology/${ontology.id}`,
+        review_url: `${apiBase}/ontology/${ontology.id}/review`,
+        json_url: `${apiBase}/ontology/${ontology.id}`,
         anchors_started: autoAnchors,
       },
     }, { status: 201 });
