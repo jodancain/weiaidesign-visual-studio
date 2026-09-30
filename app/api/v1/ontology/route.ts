@@ -1,5 +1,5 @@
 import { jsonCors, optionsResponse, requireVideoToken } from "../_lib/visual-api";
-import { draftOntology, listOntologies, saveOntology, startAnchorJob, type Aspect, type Audience } from "../_lib/ontology";
+import { BLENDER_WORKER_URL, draftOntology, listBlenderModels, listOntologies, saveOntology, startAnchorJob, type Aspect, type Audience } from "../_lib/ontology";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,7 +19,8 @@ export async function POST(request: Request) {
   const audience = (["owner", "showroom", "accessory"].includes(String(payload.audience)) ? String(payload.audience) : "showroom") as Audience;
   const aspect_ratio = (["16:9", "9:16", "1:1"].includes(String(payload.aspect_ratio || payload.aspect)) ? String(payload.aspect_ratio || payload.aspect) : "16:9") as Aspect;
   try {
-    const ontology = await draftOntology({ brief: brief.slice(0, 4000), audience, aspect_ratio, model: String(payload.model || "") });
+    const render_backend = payload.render_backend === "blender" ? "blender" : "image";
+    const ontology = await draftOntology({ brief: brief.slice(0, 4000), audience, aspect_ratio, model: String(payload.model || ""), render_backend });
     await saveOntology(ontology);
     const autoAnchors = payload.auto_anchors !== false;
     if (autoAnchors) startAnchorJob(ontology, request);
@@ -39,6 +40,9 @@ export async function POST(request: Request) {
         review_url: `${apiBase}/ontology/${ontology.id}/review`,
         json_url: `${apiBase}/ontology/${ontology.id}`,
         anchors_started: autoAnchors,
+        render_backend: ontology.render_backend,
+        blender_states: ontology.blender?.states.length ?? 0,
+        blender_anchors: ontology.anchors.filter((a) => a.render).length,
       },
     }, { status: 201 });
   } catch (error) {
@@ -49,7 +53,7 @@ export async function POST(request: Request) {
 export async function GET(request: Request) {
   const authError = requireVideoToken(request);
   if (authError) return authError;
-  return jsonCors({ status: 200, data: { items: await listOntologies() } });
+  return jsonCors({ status: 200, data: { items: await listOntologies(), blender: { available: Boolean(BLENDER_WORKER_URL), models: BLENDER_WORKER_URL ? await listBlenderModels() : [] } } });
 }
 
 export async function OPTIONS() {

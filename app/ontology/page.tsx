@@ -42,12 +42,15 @@ export default function OntologyPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [items, setItems] = useState<Item[]>([]);
+  const [backend, setBackend] = useState<"image" | "blender">("image");
+  const [blender, setBlender] = useState<{ available: boolean; models: Array<{ name: string }> } | null>(null);
 
   async function refresh() {
     try {
       const response = await fetch(`${API_BASE}/ontology`);
-      const data = (await response.json()) as { data?: { items?: Item[] } };
+      const data = (await response.json()) as { data?: { items?: Item[]; blender?: { available: boolean; models: Array<{ name: string }> } } };
       setItems(data.data?.items || []);
+      if (data.data?.blender) setBlender(data.data.blender);
     } catch {
       /* list is best-effort */
     }
@@ -67,7 +70,7 @@ export default function OntologyPage() {
       const response = await fetch(`${API_BASE}/ontology`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ brief: brief.trim(), audience, aspect_ratio: aspect }),
+        body: JSON.stringify({ brief: brief.trim(), audience, aspect_ratio: aspect, render_backend: backend }),
       });
       const data = (await response.json()) as { detail?: string; data?: { id?: string; review_url?: string } };
       if (!response.ok) throw new Error(data.detail || `HTTP ${response.status}`);
@@ -113,6 +116,15 @@ export default function OntologyPage() {
               {a.label}
             </button>
           ))}
+        </div>
+
+        <div className="videoModeTabs" role="tablist" aria-label="渲染后端">
+          <button type="button" role="tab" aria-selected={backend === "image"} className={backend === "image" ? "on" : ""} title="锚图由图像模型参考编辑生成" onClick={() => setBackend("image")}>
+            锚图：图像模型
+          </button>
+          <button type="button" role="tab" aria-selected={backend === "blender"} className={backend === "blender" ? "on" : ""} disabled={blender?.available === false} title={blender?.available === false ? "后端未配置 Blender worker" : `Blender 按本体搭摄影棚渲白模帧再重绘；可用模型：${(blender?.models || []).map((m) => m.name).join("、") || "无（用代理体）"}`} onClick={() => setBackend("blender")}>
+            锚图：Blender 白模 + 重绘
+          </button>
         </div>
 
         <textarea value={brief} onChange={(event) => setBrief(event.target.value)} placeholder="描述车型、精品配件、场景、想要的镜头与情绪；越具体，本体越准，锚图越省" rows={5} />

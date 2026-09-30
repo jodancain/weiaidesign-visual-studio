@@ -57,6 +57,18 @@ export type Anchor = {
   error?: string;
   feedback?: string;
   attempts: number;
+  /* Blender layer: camera grammar + active states; filled by the LLM when render_backend=blender */
+  render?: { camera: { azimuth_deg: number; elevation_deg: number; distance_factor: number; focal_mm: number; look_at: string }; states: string[] };
+  greybox?: { image_id: string; filename: string; public_url: string; path: string; camera?: unknown };
+};
+
+export type BlenderLayer = {
+  enabled: boolean;
+  scene: { preset: string; floor_reflective: boolean };
+  subject: { object_id: string; asset?: { name: string }; proxy?: { shape: string; dims_m: number[] }; up_axis: string; forward_axis: string; length_m: number; rotation_deg: number };
+  states: Array<{ id: string; label: string; ops: Array<Record<string, unknown>> }>;
+  worker_job_id?: string;
+  error?: string;
 };
 
 export type Shot = {
@@ -95,9 +107,27 @@ export type Ontology = {
   shots: Shot[];
   review: { decided_at?: number; reviewer?: string; notes?: string };
   llm_model?: string;
+  render_backend: "image" | "blender";
+  blender?: BlenderLayer;
   progress: { anchors_total: number; anchors_done: number };
   errors: string[];
 };
+
+export const BLENDER_WORKER_URL = (env.BLENDER_STORY_WORKER_URL || "").replace(/\/+$/, "");
+export const BLENDER_PRESETS = ["showroom_dark", "studio_white", "garage", "outdoor_overcast"] as const;
+export const BLENDER_LOOK_AT = ["center", "front", "rear", "roof", "wheel_front", "ground"] as const;
+export const BLENDER_PART_AT = ["rear-top", "roof-center", "front-bottom", "rear-bottom", "side-left", "side-right", "front-top"] as const;
+
+export async function listBlenderModels(): Promise<Array<{ name: string; bytes: number }>> {
+  if (!BLENDER_WORKER_URL) return [];
+  try {
+    const r = await fetch(`${BLENDER_WORKER_URL}/api/v1/models`, { signal: AbortSignal.timeout(8000) });
+    const d = (await r.json()) as { items?: Array<{ name: string; bytes: number }> };
+    return d.items || [];
+  } catch {
+    return [];
+  }
+}
 
 const LIMITS = {
   objects: 5,
@@ -188,6 +218,23 @@ const ONTOLOGY_SYSTEM = `你是「本体视频法」的本体设计师。用户�
   "shots": [{ "id": "shot-01", "order": 1, "title": "中文", "start_anchor": "anc-id", "end_anchor": "anc-id", "motion_prompt": "English", "caption": "中文", "caption_source": "brief|ai" }]
 }`;
 
+const BLENDER_SYSTEM_EXTRA = (models: string[]) => `
+【Blender 层】本次锚图不由图像模型自由画，而是先在 Blender 里按你给的参数搭一个摄影棚渲出白模帧，再重绘材质光影。所以你还要输出 "blender" 字段，并给主体对象的每一张锚图（identity / attribute / link 均可）加 "render" 字段。规则：
+- blender.scene.preset ∈ {${BLENDER_PRESETS.join(", ")}}；floor_reflective 布尔。
+- blender.subject.object_id = 主体对象 id。若可用模型列表里有匹配的资产文件（${models.length ? models.join(", ") : "无"}），用 asset.name 引用它；否则给 proxy {shape: box|cylinder, dims_m:[长,宽,高]} 用真实尺寸的代理体。up_axis 一般 "Y"，forward_axis 一般 "Z"（glTF 常见）；length_m 填该对象真实长度（米），rotation_deg 0。
+- blender.states：可切换的配置状态，每个 {id, label, ops[]}。ops 只能是：{"op":"hide"|"show","match":"<正则匹配部件名>"}、{"op":"add_part","name":"","shape":"box|cylinder","dims_m":[宽(横向),深(纵向),高],"at":"${BLENDER_PART_AT.join("|")}","offset_m":[0,0,0],"color":[r,g,b 0..1],"tilt_deg":0}、{"op":"rotate","match":"","axis":"X|Y|Z","deg":0}。不知道部件名时用 add_part 造代理配件（尾翼 = 在 rear-top 放一块 [1.4,0.28,0.06] 的黑色薄板，tilt_deg -8；行李架 = roof-center 两根 [1.2,0.06,0.06] 横杆）。
+- anchor.render.camera：{azimuth_deg 0..360（0=车头正前，35=前 3/4，90=正侧，145=后 3/4，180=正后）, elevation_deg -5..45, distance_factor 0.7..1.6（1.0=主体撑满画面 80%）, focal_mm 24..85, look_at ∈ {${BLENDER_LOOK_AT.join(", ")}}}；anchor.render.states = 该锚图激活的 state id 列表（可空）。
+- 「同机位对比」的两张锚图必须用完全相同的 camera，只改 states。"绕车"的角度锚图只改 azimuth_deg。
+- 有 render 的锚图，其 prompt 只写材质、漆色、光线、环境（重绘用），不要再写机位与构图。
+输出格式追加：
+"blender": {"scene": {"preset": "", "floor_reflective": true}, "subject": {"object_id": "", "asset": {"name": ""} 或 "proxy": {"shape": "box", "dims_m": [4.9,1.96,1.45]}, "up_axis": "Y", "forward_axis": "Z", "length_m": 4.9, "rotation_deg": 0}, "states": [{"id": "", "label": "中文", "ops": []}]}
+anchors 数组元素追加："render": {"camera": {"azimuth_deg": 35, "elevation_deg": 12, "distance_factor": 1.0, "focal_mm": 35, "look_at": "center"}, "states": []}`;
+
+function num(v: unknown, lo: number, hi: number, dflt: number) {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : dflt;
+}
+
 function str(v: unknown, max = 2000) {
   return String(v ?? "").replace(/\s+/g, " ").trim().slice(0, max);
 }
@@ -197,8 +244,9 @@ function kebab(v: unknown, fallback: string) {
 }
 
 /* Validate + repair the LLM draft into a well-formed Ontology. Anything unreferenced or invalid is dropped, and drops are logged. */
-export function normalizeDraft(raw: Record<string, unknown>, input: { brief: string; audience: Audience; aspect_ratio: Aspect }): Ontology {
+export function normalizeDraft(raw: Record<string, unknown>, input: { brief: string; audience: Audience; aspect_ratio: Aspect; render_backend?: "image" | "blender"; models?: string[] }): Ontology {
   const errors: string[] = [];
+  const wantBlender = input.render_backend === "blender";
   const objectTypes = new Set(["vehicle", "accessory", "actor", "environment", "prop"]);
   const linkTypes = new Set(["attached_to", "part_of", "located_in", "holds", "compares_with", "shows"]);
 
@@ -281,6 +329,22 @@ export function normalizeDraft(raw: Record<string, unknown>, input: { brief: str
       continue;
     }
     seen.add(id);
+    let render: Anchor["render"];
+    if (wantBlender && an.render && typeof an.render === "object") {
+      const r = an.render as Record<string, unknown>;
+      const c = (r.camera && typeof r.camera === "object" ? r.camera : {}) as Record<string, unknown>;
+      const lookAt = String(c.look_at || "center");
+      render = {
+        camera: {
+          azimuth_deg: num(c.azimuth_deg, 0, 360, 35),
+          elevation_deg: num(c.elevation_deg, -5, 45, 12),
+          distance_factor: num(c.distance_factor, 0.7, 1.6, 1.0),
+          focal_mm: num(c.focal_mm, 24, 85, 35),
+          look_at: (BLENDER_LOOK_AT as readonly string[]).includes(lookAt) ? lookAt : "center",
+        },
+        states: (Array.isArray(r.states) ? r.states : []).map((x) => kebab(x, "")).filter(Boolean),
+      };
+    }
     anchors.push({
       id,
       kind: kind as Anchor["kind"],
@@ -291,6 +355,7 @@ export function normalizeDraft(raw: Record<string, unknown>, input: { brief: str
       prompt,
       status: "pending",
       attempts: 0,
+      ...(render ? { render } : {}),
     });
   }
   // every object must have exactly one identity anchor; synthesize if the model forgot
@@ -359,6 +424,76 @@ export function normalizeDraft(raw: Record<string, unknown>, input: { brief: str
     keptAnchors = keptAnchors.slice(0, LIMITS.anchors);
   }
 
+  let blender: BlenderLayer | undefined;
+  if (wantBlender) {
+    const b = (raw.blender && typeof raw.blender === "object" ? raw.blender : {}) as Record<string, unknown>;
+    const sc = (b.scene && typeof b.scene === "object" ? b.scene : {}) as Record<string, unknown>;
+    const sj = (b.subject && typeof b.subject === "object" ? b.subject : {}) as Record<string, unknown>;
+    const primary = objects.find((x) => x.type === "vehicle") || objects[0];
+    const subjectId = objectIds.has(kebab(sj.object_id, "")) ? kebab(sj.object_id, "") : primary.id;
+    const assetName = str((sj.asset as Record<string, unknown> | undefined)?.name, 80);
+    const models = new Set(input.models || []);
+    const proxyRaw = (sj.proxy && typeof sj.proxy === "object" ? sj.proxy : {}) as Record<string, unknown>;
+    const dims = (Array.isArray(proxyRaw.dims_m) ? proxyRaw.dims_m : []).map((v) => num(v, 0.05, 30, 1)).slice(0, 3);
+    const stateIds = new Set<string>();
+    const states: BlenderLayer["states"] = [];
+    for (const [i, st] of (Array.isArray(b.states) ? b.states : []).slice(0, 8).entries()) {
+      const so = (st || {}) as Record<string, unknown>;
+      const sid = kebab(so.id, `state-${i + 1}`);
+      if (stateIds.has(sid)) continue;
+      const ops: Array<Record<string, unknown>> = [];
+      for (const op of (Array.isArray(so.ops) ? so.ops : []).slice(0, 6)) {
+        const oo = (op || {}) as Record<string, unknown>;
+        const kind = String(oo.op || "");
+        if (kind === "hide" || kind === "show") {
+          const match = str(oo.match, 120);
+          try { new RegExp(match); } catch { errors.push(`state ${sid}: bad regex dropped`); continue; }
+          if (match) ops.push({ op: kind, match });
+        } else if (kind === "add_part") {
+          const d = (Array.isArray(oo.dims_m) ? oo.dims_m : []).map((v) => num(v, 0.01, 5, 0.3)).slice(0, 3);
+          const at = String(oo.at || "roof-center");
+          ops.push({
+            op: "add_part", name: kebab(oo.name, sid), shape: oo.shape === "cylinder" ? "cylinder" : "box",
+            dims_m: d.length === 3 ? d : [1.0, 0.3, 0.1], at: (BLENDER_PART_AT as readonly string[]).includes(at) ? at : "roof-center",
+            offset_m: (Array.isArray(oo.offset_m) ? oo.offset_m : [0, 0, 0]).map((v) => num(v, -3, 3, 0)).slice(0, 3),
+            color: (Array.isArray(oo.color) ? oo.color : [0.05, 0.05, 0.05]).map((v) => num(v, 0, 1, 0.05)).slice(0, 3),
+            tilt_deg: num(oo.tilt_deg, -45, 45, 0),
+          });
+        } else if (kind === "rotate") {
+          const match = str(oo.match, 120);
+          try { new RegExp(match); } catch { continue; }
+          if (match) ops.push({ op: "rotate", match, axis: ["X", "Y", "Z"].includes(String(oo.axis).toUpperCase()) ? String(oo.axis).toUpperCase() : "Z", deg: num(oo.deg, -180, 180, 0) });
+        }
+      }
+      if (!ops.length) { errors.push(`state ${sid} dropped: no valid ops`); continue; }
+      stateIds.add(sid);
+      states.push({ id: sid, label: str(so.label, 40) || sid, ops });
+    }
+    // anchors: keep only known state ids; anchors of non-subject objects lose their render (only one subject in the studio)
+    for (const a of anchors) {
+      if (!a.render) continue;
+      const relatedSubject = a.object_id === subjectId || (a.kind === "link" && links.some((l) => l.id === a.link_id && (l.from === subjectId || l.to === subjectId)));
+      if (!relatedSubject) { delete a.render; continue; }
+      a.render.states = a.render.states.filter((sid) => stateIds.has(sid));
+    }
+    const preset = String(sc.preset || "showroom_dark");
+    blender = {
+      enabled: true,
+      scene: { preset: (BLENDER_PRESETS as readonly string[]).includes(preset) ? preset : "showroom_dark", floor_reflective: sc.floor_reflective !== false },
+      subject: {
+        object_id: subjectId,
+        ...(assetName && models.has(assetName) ? { asset: { name: assetName } } : { proxy: { shape: proxyRaw.shape === "cylinder" ? "cylinder" : "box", dims_m: dims.length === 3 ? dims : [4.9, 1.96, 1.45] } }),
+        up_axis: ["X", "Y", "Z"].includes(String(sj.up_axis).toUpperCase()) ? String(sj.up_axis).toUpperCase() : "Y",
+        forward_axis: ["X", "-X", "Y", "-Y", "Z", "-Z"].includes(String(sj.forward_axis).toUpperCase()) ? String(sj.forward_axis).toUpperCase() : "Z",
+        length_m: num(sj.length_m, 0.05, 30, 4.9),
+        rotation_deg: num(sj.rotation_deg, -180, 180, 0),
+      },
+      states,
+    };
+    if (assetName && !models.has(assetName)) errors.push(`blender asset ${assetName} not on worker; using proxy`);
+    if (!anchors.some((a) => a.render)) errors.push("blender requested but no anchor carries a render spec; anchors fall back to image generation");
+  }
+
   return {
     id: `onto-${randomUUID()}`,
     version: 1,
@@ -376,15 +511,20 @@ export function normalizeDraft(raw: Record<string, unknown>, input: { brief: str
     anchors: keptAnchors,
     shots,
     review: {},
+    render_backend: wantBlender ? "blender" : "image",
+    ...(blender ? { blender } : {}),
     progress: { anchors_total: keptAnchors.length, anchors_done: 0 },
     errors,
   };
 }
 
-export async function draftOntology(input: { brief: string; audience: Audience; aspect_ratio: Aspect; model?: string }) {
-  const user = `视频需求：\n${input.brief}\n\n受众线：${input.audience}（${AUDIENCE_HINT[input.audience]}）\n画幅：${input.aspect_ratio}`;
-  const { value, model, fallbacks } = await chatJson({ system: ONTOLOGY_SYSTEM, user, preferredModel: input.model, timeoutMs: 120000 });
-  const o = normalizeDraft(value, input);
+export async function draftOntology(input: { brief: string; audience: Audience; aspect_ratio: Aspect; model?: string; render_backend?: "image" | "blender" }) {
+  const blender = input.render_backend === "blender" && Boolean(BLENDER_WORKER_URL);
+  const models = blender ? (await listBlenderModels()).map((m) => m.name) : [];
+  const user = `视频需求：\n${input.brief}\n\n受众线：${input.audience}（${AUDIENCE_HINT[input.audience]}）\n画幅：${input.aspect_ratio}${blender ? `\n渲染后端：blender（可用模型文件：${models.join(", ") || "无"}）` : ""}`;
+  const { value, model, fallbacks } = await chatJson({ system: blender ? ONTOLOGY_SYSTEM + BLENDER_SYSTEM_EXTRA(models) : ONTOLOGY_SYSTEM, user, preferredModel: input.model, timeoutMs: 150000 });
+  const o = normalizeDraft(value, { ...input, render_backend: blender ? "blender" : "image", models });
+  if (input.render_backend === "blender" && !BLENDER_WORKER_URL) o.errors.unshift("render_backend=blender requested but BLENDER_STORY_WORKER_URL is not configured; used image backend");
   o.llm_model = model;
   if (fallbacks.length) o.errors.unshift(`llm fallback before ${model}: ${fallbacks.join(" | ").slice(0, 400)}`);
   return o;
@@ -401,6 +541,54 @@ function anchorPrompt(o: Ontology, a: Anchor) {
   if (a.feedback) parts.push(`Reviewer feedback to apply: ${a.feedback}`);
   parts.push("no text, no watermark, no UI");
   return parts.filter(Boolean).join("\n");
+}
+
+const GREYBOX_RESTYLE = "Photoreal restyle of the reference 3D render. CRITICAL: keep the exact camera angle, framing, subject position and size in frame, proportions and every visible part from the reference; do not zoom, crop, move or re-centre the subject; keep any attached accessory exactly where it is. Change ONLY materials, colours, lighting detail and environment surfaces as described.";
+
+/* One Blender run renders every target anchor that carries a render spec; results are stored as anchor.greybox. */
+async function renderGreyboxes(o: Ontology, targets: Anchor[], request: Request) {
+  const b = o.blender;
+  if (!b?.enabled || !BLENDER_WORKER_URL) return;
+  const withRender = targets.filter((a) => a.render);
+  if (!withRender.length) return;
+  const [w, h] = o.aspect_ratio === "9:16" ? [720, 1280] : o.aspect_ratio === "1:1" ? [1024, 1024] : [1280, 720];
+  const spec = {
+    scene: b.scene,
+    subject: {
+      ...(b.subject.asset ? { asset: { path: b.subject.asset.name } } : { proxy: b.subject.proxy }),
+      up_axis: b.subject.up_axis, forward_axis: b.subject.forward_axis, length_m: b.subject.length_m, rotation_deg: b.subject.rotation_deg,
+    },
+    states: b.states.map((st) => ({ id: st.id, ops: st.ops })),
+    anchors: withRender.map((a) => ({ id: a.id, camera: a.render!.camera, states: a.render!.states })),
+    resolution: [w, h], engine: "BLENDER_EEVEE", samples: 24, job_ref: o.id,
+  };
+  const submit = await fetch(`${BLENDER_WORKER_URL}/api/v1/ontology-render`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(spec), signal: AbortSignal.timeout(20000) });
+  const submitText = await submit.text();
+  if (!submit.ok) throw new Error(`blender worker ${submit.status}: ${submitText.slice(0, 300)}`);
+  const jobId = String((JSON.parse(submitText) as { job_id?: string }).job_id || "");
+  b.worker_job_id = jobId;
+  await saveOntology(o);
+  const deadline = Date.now() + Math.max(300, 60 * withRender.length) * 1000;
+  let last: Record<string, unknown> = {};
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 3000));
+    const poll = await fetch(`${BLENDER_WORKER_URL}/api/v1/ontology-render/${encodeURIComponent(jobId)}`, { signal: AbortSignal.timeout(60000) });
+    last = (await poll.json()) as Record<string, unknown>;
+    if (last.state === "complete" || last.state === "failed") break;
+  }
+  if (last.state !== "complete") throw new Error(`blender render ${String(last.state || "timeout")}: ${String(last.error || "")}`.slice(0, 300));
+  const images = (last.images || {}) as Record<string, { image_b64?: string; camera?: unknown }>;
+  for (const a of withRender) {
+    const img = images[a.id];
+    if (!img?.image_b64) { a.error = "greybox missing from worker result"; continue; }
+    const imageId = `img-${randomUUID()}`;
+    const filename = `greybox-${a.id}.png`;
+    const outPath = join(imageOutputDir, imageId, filename);
+    await mkdir(join(imageOutputDir, imageId), { recursive: true });
+    await writeFile(outPath, Buffer.from(img.image_b64, "base64"));
+    a.greybox = { image_id: imageId, filename, public_url: imagePublicUrl(request, imageId, filename), path: outPath, camera: img.camera };
+  }
+  await saveOntology(o);
 }
 
 async function referenceImagesFor(o: Ontology, a: Anchor): Promise<ReferenceImage[]> {
@@ -440,6 +628,16 @@ export function startAnchorJob(o: Ontology, request: Request, only?: string[]) {
         t.error = undefined;
         await saveOntology(o);
       }
+      if (o.blender?.enabled) {
+        try {
+          await renderGreyboxes(o, targets, request);
+          o.blender.error = undefined;
+        } catch (error) {
+          o.blender.error = error instanceof Error ? error.message : String(error);
+          o.errors.push(`blender: ${o.blender.error}; anchors fall back to image generation`);
+          await saveOntology(o);
+        }
+      }
       for (const t of targets) {
         const anchor = o.anchors.find((x) => x.id === t.id)!;
         anchor.attempts += 1;
@@ -447,11 +645,20 @@ export function startAnchorJob(o: Ontology, request: Request, only?: string[]) {
         const filename = `anchor-${anchor.id}.${imageOutputFormat === "png" ? "png" : "jpg"}`;
         const outPath = join(imageOutputDir, imageId, filename);
         try {
-          const refs = anchor.kind === "identity" ? [] : await referenceImagesFor(o, anchor);
-          const prompt = anchorPrompt(o, anchor);
-          const result = refs.length
-            ? await editImageWithReference(prompt, o.aspect_ratio, outPath, refs)
-            : await generateImage(prompt, o.aspect_ratio, outPath);
+          let result: { model: string };
+          if (anchor.greybox) {
+            // greybox first (geometry / framing), then the subject's already-restyled identity for materials
+            const refs: ReferenceImage[] = [{ buffer: await readFile(anchor.greybox.path), mimeType: "image/png", filename: anchor.greybox.filename }];
+            if (anchor.kind !== "identity") refs.push(...(await referenceImagesFor(o, anchor)).slice(0, 2));
+            const prompt = [GREYBOX_RESTYLE, o.style_bible, anchor.prompt, refs.length > 1 ? "The second reference shows the finished materials, paint and environment: match them exactly." : "", anchor.feedback ? `Reviewer feedback to apply: ${anchor.feedback}` : "", "no text, no watermark, no UI"].filter(Boolean).join("\n");
+            result = await editImageWithReference(prompt, o.aspect_ratio, outPath, refs, "medium");
+          } else {
+            const refs = anchor.kind === "identity" ? [] : await referenceImagesFor(o, anchor);
+            const prompt = anchorPrompt(o, anchor);
+            result = refs.length
+              ? await editImageWithReference(prompt, o.aspect_ratio, outPath, refs)
+              : await generateImage(prompt, o.aspect_ratio, outPath);
+          }
           anchor.image = { image_id: imageId, filename, public_url: imagePublicUrl(request, imageId, filename), path: outPath };
           anchor.model = result.model;
           anchor.status = "generated";
@@ -675,7 +882,8 @@ export function renderReviewHtml(o: Ontology, apiBase: string) {
 
   const anchorCard = (a: Anchor) => `
 <div class="anchor ${esc(a.status)}" data-anchor="${esc(a.id)}">
-  <div class="thumb">${a.image ? `<img src="${esc(a.image.public_url)}" alt="${esc(a.label)}" loading="lazy">` : `<div class="ph">${a.status === "generating" ? "生成中…" : a.status === "failed" ? "失败" : "待生成"}</div>`}</div>
+  <div class="thumb">${a.image ? `<img src="${esc(a.image.public_url)}" alt="${esc(a.label)}" loading="lazy">` : `<div class="ph">${a.status === "generating" ? "生成中…" : a.status === "failed" ? "失败" : "待生成"}</div>`}${a.greybox ? `<img class="gb" src="${esc(a.greybox.public_url)}" alt="greybox" title="Blender 白模帧" loading="lazy">` : ""}</div>
+  ${a.render ? `<div class="cam">📐 az ${a.render.camera.azimuth_deg}° · el ${a.render.camera.elevation_deg}° · ×${a.render.camera.distance_factor} · ${a.render.camera.focal_mm}mm · ${esc(a.render.camera.look_at)}${a.render.states.length ? ` · 状态 ${esc(a.render.states.join(", "))}` : ""}</div>` : ""}
   <div class="ainfo">
     <div class="alabel"><b>${esc(a.label)}</b> <span class="tag ${esc(a.kind)}">${a.kind === "identity" ? "身份" : a.kind === "attribute" ? `属性 ${esc(a.attribute?.key || "")}=${esc(a.attribute?.value || "")}` : "链接"}</span> <span class="st">${esc(statusZh[a.status] || a.status)}</span></div>
     <details><summary>prompt / 模型 ${a.model ? `· ${esc(a.model)}` : ""} ${a.attempts ? `· 第 ${a.attempts} 次` : ""}</summary><pre>${esc(a.prompt)}</pre>${a.error ? `<pre class="err">${esc(a.error)}</pre>` : ""}</details>
@@ -744,7 +952,7 @@ table.attrs{width:100%;border-collapse:collapse;font-size:13.5px;margin:8px 0}ta
 .pill{display:inline-block;padding:2px 9px;border:1px dashed var(--line);border-radius:12px;font-size:12px;margin:2px 2px}.pill.anchored{border-style:solid;border-color:var(--ok);color:var(--ok)}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;margin:10px 0}
 .anchor{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#fff}.anchor.approved{border-color:var(--ok);box-shadow:0 0 0 2px rgba(46,158,107,.18)}.anchor.rejected{border-color:var(--no);opacity:.75}.anchor.generating{border-style:dashed}
-.thumb{aspect-ratio:${o.aspect_ratio === "9:16" ? "9/16" : o.aspect_ratio === "1:1" ? "1/1" : "16/9"};background:var(--soft);display:flex;align-items:center;justify-content:center;max-height:360px}.thumb img{width:100%;height:100%;object-fit:contain}.ph{color:var(--muted);font-size:13px}
+.thumb{aspect-ratio:${o.aspect_ratio === "9:16" ? "9/16" : o.aspect_ratio === "1:1" ? "1/1" : "16/9"};background:var(--soft);display:flex;align-items:center;justify-content:center;max-height:360px}.thumb{position:relative}.thumb img{width:100%;height:100%;object-fit:contain}.thumb img.gb{position:absolute;right:6px;bottom:6px;width:34%;height:auto;border:2px solid #fff;border-radius:6px;box-shadow:0 2px 8px rgba(0,0,0,.35)}.ph{color:var(--muted);font-size:13px}.cam{font-size:11px;color:var(--muted);padding:4px 10px 0;font-family:ui-monospace,Menlo,monospace}
 .ainfo{padding:8px 10px}.alabel{font-size:13.5px}details{font-size:12px;color:var(--muted);margin:4px 0}pre{white-space:pre-wrap;word-break:break-word;background:var(--soft);padding:6px 8px;border-radius:6px;font-size:11.5px;margin:4px 0}pre.err{color:var(--no)}
 .acts{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px}button{font:inherit;font-size:12.5px;padding:4px 10px;border-radius:7px;border:1px solid var(--line);background:#fff;cursor:pointer}button.ok{border-color:var(--ok);color:var(--ok)}button.no{border-color:var(--no);color:var(--no)}button.re{color:var(--blue)}button:disabled{opacity:.4;cursor:not-allowed}
 input.fb{flex:1;min-width:120px;font:inherit;font-size:12px;padding:4px 8px;border:1px solid var(--line);border-radius:7px}
@@ -759,10 +967,18 @@ video{width:100%;max-height:420px;background:#000;border-radius:8px;margin:8px 0
 </style></head><body><div class="wrap">
 <h1>${esc(o.title)} <span class="tag">${esc(statusZh[o.state] || o.state)}</span></h1>
 <p class="muted">${esc(o.summary)}</p>
-<div class="callout"><b>需求原文</b><br>${esc(o.brief)}<br><span class="muted">受众线 ${esc(o.audience)} · 画幅 ${esc(o.aspect_ratio)} · 模型 ${esc(o.llm_model || "")} · 锚图 ${o.progress.anchors_done}/${o.progress.anchors_total}</span></div>
+<div class="callout"><b>需求原文</b><br>${esc(o.brief)}<br><span class="muted">受众线 ${esc(o.audience)} · 画幅 ${esc(o.aspect_ratio)} · 模型 ${esc(o.llm_model || "")} · 渲染后端 ${o.render_backend === "blender" ? "Blender 白模 + 重绘" : "图像模型"} · 锚图 ${o.progress.anchors_done}/${o.progress.anchors_total}</span></div>
 <div class="callout" style="border-left-color:var(--orange)"><b>怎么审</b>：① 每张锚图看「像不像同一个东西、有没有多余文字、构图能不能当关键帧」——通过或驳回，驳回可填意见后重生成；② 关系表核对对象之间的连接是否符合需求；③ 每个镜头看起止锚图是否成对（下拉框可直接换锚图，保存后生效）、字幕是否属实（AI 补写的字幕请改成可核实的表述）；④ 全部通过后点「开始生成」，视频回来会显示在镜头卡片里。</div>
 ${o.style_bible ? `<p class="muted"><b>视觉总纲</b>：${esc(o.style_bible)}</p>` : ""}
 
+${o.blender ? `<section class="blender"><h2>〇、Blender 层（摄影棚 · 主体 · 状态）</h2>
+<table class="attrs"><tbody>
+<tr><td><b>摄影棚预设</b></td><td><code>${esc(o.blender.scene.preset)}</code> · 反光地面 ${o.blender.scene.floor_reflective ? "开" : "关"}</td></tr>
+<tr><td><b>主体</b></td><td>${esc(objName(o.blender.subject.object_id))} · ${o.blender.subject.asset ? `资产 <code>${esc(o.blender.subject.asset.name)}</code>` : `代理体 <code>${esc(o.blender.subject.proxy?.shape || "box")} ${esc((o.blender.subject.proxy?.dims_m || []).join("×"))} m</code>`} · 上轴 ${esc(o.blender.subject.up_axis)} · 前向 ${esc(o.blender.subject.forward_axis)} · 长 ${o.blender.subject.length_m} m · 转 ${o.blender.subject.rotation_deg}°</td></tr>
+<tr><td><b>状态</b></td><td>${o.blender.states.map((st) => `<div><code>${esc(st.id)}</code> ${esc(st.label)}：${st.ops.map((op) => `<span class="pill anchored">${esc(String(op.op))}${op.match ? ` /${esc(String(op.match))}/` : ""}${op.name ? ` ${esc(String(op.name))}@${esc(String(op.at))} ${esc((op.dims_m as number[] || []).join("×"))}m` : ""}</span>`).join(" ")}</div>`).join("") || `<span class="muted">无</span>`}</td></tr>
+<tr><td><b>worker</b></td><td>${o.blender.worker_job_id ? `<code>${esc(o.blender.worker_job_id)}</code>` : "未渲染"}${o.blender.error ? `<pre class="err">${esc(o.blender.error)}</pre>` : ""}</td></tr>
+</tbody></table>
+<p class="muted">白模帧显示在每张锚图右下角小图；锚图 = 白模帧 + GPT-image 参考重绘。机位参数（📐）是 LLM 从有界语法里选的，不是自由坐标。</p></section>` : ""}
 <h2>一、对象与属性锚图</h2>
 ${objectSections}
 ${linkSection}
