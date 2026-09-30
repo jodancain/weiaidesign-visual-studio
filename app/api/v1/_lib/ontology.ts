@@ -28,9 +28,35 @@ export type OntologyObject = {
   id: string;
   type: "vehicle" | "accessory" | "actor" | "environment" | "prop";
   name: string;
+  handle?: string; // short English name used inside model-facing prompts
   description: string;
   identity_prompt: string;
   attributes: Array<{ key: string; label: string; values: Array<{ value: string; label: string; prompt: string }> }>;
+  /* actors only: who they are inside, how that reads on the face and body, and which expressions the shots may call */
+  psyche?: { temperament: string; attitude_to_threat: string; motivation: string; body_language: string; voice?: string };
+  expressions?: Array<{ key: string; label: string; prompt: string }>;
+};
+
+/* A visual effect is a first-class thing in the ontology: it has an owner, a shape family, a colour, a verb and a lifetime. */
+export type OntologyEffect = {
+  id: string;
+  owner: string; // object id (actor / environment)
+  kind: "projectile" | "aura" | "shield" | "burst" | "bind" | "environment" | "impact";
+  label: string;
+  colour: string;
+  prompt: string; // how it looks
+  motion: string; // how it moves / resolves
+  duration_s: number; // 0.5..6
+};
+
+/* Timed beat inside a shot: who does what, wearing which expression, with which effect. Compiled into motion_prompt. */
+export type ShotBeat = {
+  t: number; // seconds from shot start
+  actor?: string; // object id
+  expression?: string; // expression key of that actor
+  action: string; // English, one concrete physical action
+  effect?: string; // effect id
+  camera?: string; // optional camera note for this beat (kept minimal)
 };
 
 export type OntologyLink = {
@@ -101,6 +127,8 @@ export type Shot = {
   end_anchor: string;
   duration_s: number; // 4..12; >8 is sent as a single clip (gateway single_clip)
   motion_prompt: string;
+  beats?: ShotBeat[];
+  camera_move?: string; // the single dominant camera behaviour for the whole shot
   caption: string;
   caption_source: "brief" | "ai";
   status: ShotStatus;
@@ -126,6 +154,7 @@ export type Ontology = {
   style_bible: string;
   objects: OntologyObject[];
   links: OntologyLink[];
+  effects?: OntologyEffect[];
   anchors: Anchor[];
   shots: Shot[];
   review: { decided_at?: number; reviewer?: string; notes?: string };
@@ -226,6 +255,9 @@ const ONTOLOGY_SYSTEM = `你是「本体视频法」的本体设计师。用户�
 5. style_bible 是一句英文视觉总纲（镜头风格、色调、光线、镜头焦段），所有 prompt 默认遵守。
 6. motion_prompt 描述从起点锚图到终点锚图之间的运动（相机与主体），英文，${LIMITS.shotDuration} 秒以内可完成，不写文字叠层。
 7. caption 是中文字幕，≤ 24 字；能从用户需求原文直接得出的标 caption_source="brief"，你补写的标 "ai"。不编造参数、价格、性能数字。
+7b. 人物（type=actor）必须带 psyche（temperament 性格 / attitude_to_threat 面对威胁的态度 / motivation 动机 / body_language 身体语言，各一句英文）和 expressions（2–4 个表情枚举，每个 {key,label 中文,prompt 英文写眉眼嘴的具体状态}）。镜头节拍引用表情 key，锚图 prompt 里也写出该刻的表情。
+7c. 特效是一等对象：effects 数组，每条 {id, owner 对象 id, kind ∈ projectile|aura|shield|burst|bind|environment|impact, label 中文, colour 英文颜色, prompt 英文写形态材质光, motion 英文写它怎么运动怎么消散, duration_s}。锚图和节拍只能引用已定义的 effect id，不在 prompt 里临时发明新特效。
+7d. 每个镜头给 beats（3–5 拍）：{t 秒, actor 对象 id, expression 表情 key, action 一句具体物理动作, effect 特效 id}，以及 camera_move（整镜唯一的一种相机运动，英文）。motion_prompt 只写一句总述，节拍由服务端编译成时间戳提示。
 8. id 用短英文 kebab-case（如 obj-su7、attr、anc-su7-identity、anc-su7-color-red、lnk-rack-on-roof、shot-01）。
 9. 只输出 JSON 对象，不要 Markdown、不要解释。
 
@@ -234,11 +266,14 @@ const ONTOLOGY_SYSTEM = `你是「本体视频法」的本体设计师。用户�
   "title": "14 字内标题",
   "summary": "1-2 句中文摘要",
   "style_bible": "English visual bible",
-  "objects": [{ "id": "", "type": "vehicle|accessory|actor|environment|prop", "name": "中文名", "description": "中文一句", "identity_prompt": "English",
+  "objects": [{ "id": "", "type": "vehicle|accessory|actor|environment|prop", "name": "中文名", "handle": "English short name", "description": "中文一句", "identity_prompt": "English",
+                "psyche": { "temperament": "English", "attitude_to_threat": "English", "motivation": "English", "body_language": "English" }, "expressions": [{ "key": "", "label": "中文", "prompt": "English face" }],
                 "attributes": [{ "key": "", "label": "中文", "values": [{ "value": "", "label": "中文", "prompt": "English edit instruction" }] }] }],
   "links": [{ "id": "", "from": "obj-id", "to": "obj-id", "type": "attached_to|part_of|located_in|holds|compares_with|shows", "label": "中文", "qty": 1, "anchor_prompt": "English (optional)" }],
+  "effects": [{ "id": "fx-", "owner": "obj-id", "kind": "projectile|aura|shield|burst|bind|environment|impact", "label": "中文", "colour": "English", "prompt": "English look", "motion": "English motion & dissolve", "duration_s": 2 }],
   "anchors": [{ "id": "", "kind": "identity|attribute|link", "object_id": "obj-id", "link_id": "lnk-id", "attribute": { "key": "", "value": "" }, "label": "中文短标签", "prompt": "English full prompt" }],
-  "shots": [{ "id": "shot-01", "order": 1, "title": "中文", "start_anchor": "anc-id", "end_anchor": "anc-id", "motion_prompt": "English", "caption": "中文", "caption_source": "brief|ai" }]
+  "shots": [{ "id": "shot-01", "order": 1, "title": "中文", "start_anchor": "anc-id", "end_anchor": "anc-id", "duration_s": 8, "camera_move": "English, one movement", "motion_prompt": "English one-line summary",
+              "beats": [{ "t": 0, "actor": "obj-id", "expression": "expr-key", "action": "English", "effect": "fx-id" }], "caption": "中文", "caption_source": "brief|ai" }]
 }`;
 
 const BLENDER_SYSTEM_EXTRA = (models: string[]) => `
@@ -290,13 +325,26 @@ export function normalizeDraft(raw: Record<string, unknown>, input: { brief: str
         }),
       };
     });
+    const ps = (obj.psyche && typeof obj.psyche === "object" ? obj.psyche : null) as Record<string, unknown> | null;
+    const psyche = ps ? {
+      temperament: str(ps.temperament, 200), attitude_to_threat: str(ps.attitude_to_threat, 200), motivation: str(ps.motivation, 200),
+      body_language: str(ps.body_language, 300), ...(str(ps.voice, 120) ? { voice: str(ps.voice, 120) } : {}),
+    } : undefined;
+    const exprSeen = new Set<string>();
+    const expressions = (Array.isArray(obj.expressions) ? obj.expressions : []).slice(0, 8).map((e, k) => {
+      const ex = (e || {}) as Record<string, unknown>;
+      return { key: kebab(ex.key, `expr-${k + 1}`), label: str(ex.label, 40) || kebab(ex.key, `expr-${k + 1}`), prompt: str(ex.prompt, 300) };
+    }).filter((e) => e.prompt && !exprSeen.has(e.key) && exprSeen.add(e.key));
     return {
       id,
       type: (objectTypes.has(String(obj.type)) ? String(obj.type) : "prop") as OntologyObject["type"],
       name: str(obj.name, 60) || id,
+      ...(str(obj.handle, 40) ? { handle: str(obj.handle, 40) } : {}),
       description: str(obj.description, 300),
       identity_prompt: str(obj.identity_prompt, 1500),
       attributes: attrs,
+      ...(psyche && psyche.temperament ? { psyche } : {}),
+      ...(expressions.length ? { expressions } : {}),
     };
   });
   const objectIds = new Set(objects.map((o) => o.id));
@@ -402,6 +450,25 @@ export function normalizeDraft(raw: Record<string, unknown>, input: { brief: str
   const anchorIds = new Set(anchors.map((a) => a.id));
 
   const shots: Shot[] = [];
+  const effectKinds = new Set(["projectile", "aura", "shield", "burst", "bind", "environment", "impact"]);
+  const effects: OntologyEffect[] = [];
+  for (const [i, e] of (Array.isArray(raw.effects) ? raw.effects : []).slice(0, 12).entries()) {
+    const ef = (e || {}) as Record<string, unknown>;
+    const id = kebab(ef.id, `fx-${i + 1}`);
+    const owner = kebab(ef.owner, "");
+    if (!objectIds.has(owner)) { errors.push(`effect ${id} dropped: unknown owner`); continue; }
+    if (effects.some((x) => x.id === id)) continue;
+    const prompt = str(ef.prompt, 500);
+    if (!prompt) { errors.push(`effect ${id} dropped: empty prompt`); continue; }
+    effects.push({
+      id, owner, kind: (effectKinds.has(String(ef.kind)) ? String(ef.kind) : "burst") as OntologyEffect["kind"],
+      label: str(ef.label, 40) || id, colour: str(ef.colour, 60), prompt, motion: str(ef.motion, 400), duration_s: num(ef.duration_s, 0.5, 6, 2),
+    });
+  }
+  const effectIds = new Set(effects.map((x) => x.id));
+  const exprOf = (oid: string, key: string) => objects.find((o) => o.id === oid)?.expressions?.find((x) => x.key === key);
+  const objName = (oid: string) => { const o = objects.find((x) => x.id === oid); return o?.handle || o?.name || oid; };
+
   for (const [i, s] of (Array.isArray(raw.shots) ? raw.shots : []).entries()) {
     const sh = (s || {}) as Record<string, unknown>;
     const id = kebab(sh.id, `shot-${String(i + 1).padStart(2, "0")}`);
@@ -428,14 +495,56 @@ export function normalizeDraft(raw: Record<string, unknown>, input: { brief: str
       errors.push(`shot ${id} dropped: duplicate anchor pair`);
       continue;
     }
+    const duration = num(sh.duration_s, 4, 12, LIMITS.shotDuration);
+    const beats: ShotBeat[] = [];
+    for (const b of (Array.isArray(sh.beats) ? sh.beats : []).slice(0, 8)) {
+      const bt = (b || {}) as Record<string, unknown>;
+      const actor = kebab(bt.actor, "");
+      const action = str(bt.action, 300);
+      if (!action) continue;
+      const expression = kebab(bt.expression, "");
+      const effect = kebab(bt.effect, "");
+      if (effect && !effectIds.has(effect)) errors.push(`shot ${id}: beat effect ${effect} unknown; dropped from beat`);
+      beats.push({
+        t: num(bt.t, 0, 12, 0), ...(objectIds.has(actor) ? { actor } : {}),
+        ...(actor && expression && exprOf(actor, expression) ? { expression } : {}),
+        action, ...(effect && effectIds.has(effect) ? { effect } : {}), ...(str(bt.camera, 120) ? { camera: str(bt.camera, 120) } : {}),
+      });
+    }
+    beats.sort((a, b) => a.t - b.t);
+    const cameraMove = str(sh.camera_move, 200);
+    // Beats compile into the model-facing motion prompt: stable subjects first, one camera behaviour, then timestamped beats
+    // that quote the actor's expression and the effect's look + motion from the ontology (no adjectives invented here).
+    let motion = str(sh.motion_prompt, 1200);
+    if (beats.length) {
+      const lines = beats.map((b) => {
+        const ex = b.actor && b.expression ? exprOf(b.actor, b.expression) : undefined;
+        const fx = b.effect ? effects.find((x) => x.id === b.effect) : undefined;
+        const who = b.actor ? `${objName(b.actor)}` : "";
+        return `[${Math.round(b.t)}s] ${who ? who + ": " : ""}${b.action}${ex ? ` — face: ${ex.prompt}` : ""}${fx ? ` — VFX (${fx.colour}): ${fx.prompt}; ${fx.motion}` : ""}${b.camera ? ` — camera: ${b.camera}` : ""}`;
+      });
+      const psy = [...new Set(beats.map((b) => b.actor).filter(Boolean))].map((oid) => {
+        const o = objects.find((x) => x.id === oid);
+        return o?.psyche ? `${o.handle || o.name}: ${o.psyche.attitude_to_threat}; ${o.psyche.body_language}` : "";
+      }).filter(Boolean);
+      motion = [
+        str(sh.motion_prompt, 400),
+        cameraMove ? `Camera: ${cameraMove}` : "",
+        psy.length ? `Character behaviour — ${psy.join(" | ")}` : "",
+        ...lines,
+        "Movements have weight and follow-through. No text overlays, subtitles, UI, logos or watermarks.",
+      ].filter(Boolean).join("\n");
+    }
     shots.push({
       id,
       order: shots.length + 1,
       title: str(sh.title, 40) || id,
       start_anchor: start,
       end_anchor: end,
-      duration_s: num(sh.duration_s, 4, 12, LIMITS.shotDuration),
-      motion_prompt: str(sh.motion_prompt, 800) || "Smooth cinematic motion from the first keyframe to the last keyframe. Keep identity, materials and lighting consistent. No text overlays.",
+      duration_s: duration,
+      motion_prompt: motion || "Smooth cinematic motion from the first keyframe to the last keyframe. Keep identity, materials and lighting consistent. No text overlays.",
+      ...(beats.length ? { beats } : {}),
+      ...(cameraMove ? { camera_move: cameraMove } : {}),
       caption: str(sh.caption, 48),
       caption_source: sh.caption_source === "brief" ? "brief" : "ai",
       status: "proposed",
@@ -598,6 +707,7 @@ export function normalizeDraft(raw: Record<string, unknown>, input: { brief: str
     style_bible: str(raw.style_bible, 600),
     objects,
     links,
+    ...(effects.length ? { effects } : {}),
     anchors: keptAnchors,
     shots,
     review: {},
@@ -1054,6 +1164,7 @@ ${linkAnchors.length ? `<div class="grid">${linkAnchors.map(anchorCard).join("")
   <div class="frames"><div class="fr">${th(a)}<select class="sa">${opts(s.start_anchor)}</select></div><div class="arrow">→ 补间 →</div><div class="fr">${th(b)}<select class="ea">${opts(s.end_anchor)}</select></div></div>
   <label>字幕 <span class="tag ${s.caption_source}">${s.caption_source === "brief" ? "来自需求原文" : "AI 补写"}</span><input class="cap" value="${esc(s.caption)}" maxlength="48"></label>
   <label>运动提示 <textarea class="mp" rows="2">${esc(s.motion_prompt)}</textarea></label>
+  ${s.beats?.length ? `<div class="muted" style="font-size:12px;margin:4px 0">${s.camera_move ? `📷 ${esc(s.camera_move)}<br>` : ""}${s.beats.map((b) => `[${Math.round(b.t)}s] ${b.actor ? esc(objName(b.actor)) + " " : ""}${b.expression ? `〔${esc(b.expression)}〕 ` : ""}${esc(b.action)}${b.effect ? ` ✦${esc(b.effect)}` : ""}`).join("<br>")}</div>` : ""}
   ${s.video_url ? `<video src="${esc(s.video_url)}" controls playsinline></video><span class="muted" style="font-size:12px"><a href="${esc(s.video_url)}" target="_blank">打开视频</a>${s.drive_url ? ` · <a href="${esc(s.drive_url)}" target="_blank">Drive</a>` : ""}${s.video_model ? ` · ${esc(s.video_model)}` : ""}${s.archive_error ? ` · <b style="color:#b45309">未归档</b>（${esc(s.archive_error.slice(0, 80))}）` : ""}</span>` : ""}
   ${s.error ? `<pre class="err">${esc(s.error)}</pre>` : ""}
   <div class="acts"><button class="ok" data-act="approve">✓ 通过</button><button class="no" data-act="reject">✗ 驳回</button>${s.video_job_id ? `<code>job ${esc(s.video_job_id)}</code>` : ""}</div>
@@ -1108,6 +1219,7 @@ ${(o.blender.subjects?.length ? o.blender.subjects : o.blender.subject ? [{ id: 
 <h2>一、对象与属性锚图</h2>
 ${objectSections}
 ${linkSection}
+${o.effects?.length ? `<h2>二·五、特效（一等对象）</h2><table class="attrs"><tbody>${o.effects.map((f) => `<tr><td><code>${esc(f.id)}</code></td><td><b>${esc(f.label)}</b> · ${esc(f.kind)} · ${esc(f.colour)} · ${f.duration_s}s · 属 ${esc(objName(f.owner))}<br><span class="muted">${esc(f.prompt)}<br>${esc(f.motion)}</span></td></tr>`).join("")}</tbody></table>` : ""}
 <h2>三、镜头（起点锚图 → 终点锚图）</h2>
 ${o.shots.map(shotCard).join("") || `<p class="muted">模型没有给出合法镜头。你可以先审锚图，再在 shots.json 里手工补镜头。</p>`}
 <h2>四、审核备注</h2>

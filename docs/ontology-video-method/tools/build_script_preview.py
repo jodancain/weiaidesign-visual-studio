@@ -64,6 +64,35 @@ def esc(v) -> str:
     return html.escape(str(v if v is not None else ""))
 
 
+def psyche_rows(obj) -> str:
+    out = ""
+    ps = obj.get("psyche")
+    if ps:
+        out += (f'<tr><td>心理设定</td><td class="en"><b>性格</b> {esc(ps.get("temperament"))}<br><b>对威胁</b> {esc(ps.get("attitude_to_threat"))}'
+                f'<br><b>动机</b> {esc(ps.get("motivation"))}<br><b>身体语言</b> {esc(ps.get("body_language"))}</td></tr>')
+    ex = obj.get("expressions") or []
+    if ex:
+        items = "".join(f'<div><code>{esc(x["key"])}</code> <b>{esc(x["label"])}</b> <span class="en muted">{esc(x["prompt"])}</span></div>' for x in ex)
+        out += f"<tr><td>表情枚举</td><td>{items}</td></tr>"
+    return out
+
+
+def beat_rows(s, objects) -> str:
+    out = ""
+    if s.get("camera_move"):
+        out += f'<tr><td>相机</td><td class="en">{esc(s["camera_move"])}</td></tr>'
+    beats = s.get("beats") or []
+    if beats:
+        items = []
+        for b in beats:
+            who = objects.get(b.get("actor"), {}).get("name", "")
+            ex = f"〔{esc(b['expression'])}〕" if b.get("expression") else ""
+            fx = f"<b>✦ {esc(b['effect'])}</b>" if b.get("effect") else ""
+            items.append(f'<div><code>[{round(b["t"])}s]</code> {esc(who)} {ex} <span class="en">{esc(b["action"])}</span> {fx}</div>')
+        out += f"<tr><td>节拍</td><td>{''.join(items)}</td></tr>"
+    return out
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("ontology_id")
@@ -134,7 +163,12 @@ def main() -> None:
 <tr><td>尺寸 / 位置</td><td>{esc(f'高 {sj["height_m"]} m' if sj.get("height_m") else f'长 {sj.get("length_m")} m')} · 舞台坐标 ({esc(", ".join(map(str, sj.get("position_m", [0, 0]))))}) · {esc(f'面向 {sj["face"]}' if sj.get("face") else f'转 {sj.get("rotation_deg", 0)}°')}</td></tr>
 {f'<tr><td>姿态</td><td><code>{esc(pose.get("clip"))}</code> @ {esc(pose.get("phase"))}</td></tr>' if pose.get("clip") else ''}
 <tr><td>外形描述</td><td class="en muted">{esc(obj.get("identity_prompt", ""))}</td></tr>
+{psyche_rows(obj)}
 </table></div>''')
+
+    # ---------- 特效
+    fx_rows = "".join(f'<tr><td><code>{esc(f["id"])}</code><br><span class="muted">{esc(f["kind"])} · {f["duration_s"]}s</span></td><td><b>{esc(f["label"])}</b> · {esc(f["colour"])} · 属于 {esc(objects.get(f["owner"], {}).get("name", f["owner"]))}<br><span class="en muted">{esc(f["prompt"])}</span><br><span class="en muted">→ {esc(f["motion"])}</span></td></tr>' for f in o.get("effects") or [])
+    fx_html = f'<h2>二·五、特效（本体一等对象，{len(o.get("effects") or [])}）</h2><table class="plain"><tr><th>id</th><th>形态 / 运动</th></tr>{fx_rows}</table>' if fx_rows else ""
 
     # ---------- 分镜
     shots = []
@@ -151,7 +185,9 @@ def main() -> None:
 </div>
 <table class="kv">
 <tr><td>机位（锁定）</td><td>{esc(cam_txt)}</td></tr>
-<tr><td>运动提示</td><td class="en">{esc(s["motion_prompt"])}</td></tr>
+{f'<tr><td>相机</td><td class="en">{esc(s["camera_move"])}</td></tr>' if s.get("camera_move") else ''}
+{beat_rows(s, objects)}
+<tr><td>编译后的运动提示</td><td class="en muted" style="font-size:12px">{esc(s["motion_prompt"])}</td></tr>
 <tr><td>字幕 / 台词</td><td>{esc(s.get("caption", "") or "—")} <span class="muted">（{ "来自需求原文" if s.get("caption_source") == "brief" else "AI 补写"}；不烧进画面，成片后可叠）</span></td></tr>
 </table></div>''')
 
@@ -193,6 +229,7 @@ ol.check li{{margin:6px 0}}.scene img{{width:100%;border-radius:10px;display:blo
 <h2>二、人物 / 主体（{len(subjects)}）</h2>
 <div class="grid">{"".join(cards)}</div>
 
+{fx_html}
 <h2>三、分镜（{len(o["shots"])}）</h2>
 {"".join(shots)}
 
