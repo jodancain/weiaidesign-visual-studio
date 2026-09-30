@@ -93,6 +93,20 @@ def beat_rows(s, objects) -> str:
     return out
 
 
+def beat_keyframes(s, anchors, pic) -> str:
+    """One card per beat that carries a keyframe anchor: greybox + restyle side by side."""
+    figs = []
+    for b in s.get("beats") or []:
+        a = anchors.get(b.get("anchor"))
+        if not a:
+            continue
+        figs.append(f'<figure>{pic(a, "greybox")}{pic(a, "image")}<figcaption><code>[{round(b["t"])}s]</code> {esc(a["label"])}</figcaption></figure>')
+    if not figs:
+        return ""
+    return f'<p><b>节拍关键帧</b>（灰模 + 重绘；只作分镜确认，视频模型只拿起点帧）</p><div class="grid3">{"".join(figs)}</div>'
+    return out
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("ontology_id")
@@ -183,6 +197,7 @@ def main() -> None:
 <figure>{pic(a, "greybox") if a else ''}{pic(a, "image") if a else ''}<figcaption>起点 · {esc(a["label"] if a else s["start_anchor"])}<br><span class="muted">状态：{esc(states(a) if a else "")}</span></figcaption></figure>
 <figure>{pic(e, "greybox") if e else ''}{pic(e, "image") if e else ''}<figcaption>终点 · {esc(e["label"] if e else s["end_anchor"])}<br><span class="muted">状态：{esc(states(e) if e else "")}</span></figcaption></figure>
 </div>
+{beat_keyframes(s, anchors, pic)}
 <table class="kv">
 <tr><td>机位（锁定）</td><td>{esc(cam_txt)}</td></tr>
 {f'<tr><td>相机</td><td class="en">{esc(s["camera_move"])}</td></tr>' if s.get("camera_move") else ''}
@@ -208,7 +223,7 @@ def main() -> None:
 .callout{{background:var(--soft);border-left:3px solid var(--blue);padding:10px 14px;border-radius:6px;margin:12px 0}}
 .grid{{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}}@media(max-width:820px){{.grid{{grid-template-columns:1fr}}}}
 .card,.shot{{border:1px solid var(--line);border-radius:12px;padding:14px 16px;background:#fff;margin:0 0 14px}}
-.pair{{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:8px 0}}figure{{margin:0}}figure img{{width:100%;border-radius:8px;display:block;background:#000;margin-bottom:4px}}figcaption{{font-size:12px;color:var(--muted);text-align:center}}
+.pair{{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:8px 0}}.grid3{{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:8px 0}}@media(max-width:820px){{.grid3{{grid-template-columns:1fr}}}}figure{{margin:0}}figure img{{width:100%;border-radius:8px;display:block;background:#000;margin-bottom:4px}}figcaption{{font-size:12px;color:var(--muted);text-align:center}}
 .ph{{aspect-ratio:16/9;border:1px dashed var(--line);border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:13px}}
 table.kv{{width:100%;border-collapse:collapse;font-size:13.5px;margin-top:6px}}table.kv td{{border-top:1px solid var(--line);padding:5px 8px;vertical-align:top}}table.kv td:first-child{{width:110px;color:var(--muted);white-space:nowrap}}
 table.plain{{width:100%;border-collapse:collapse;font-size:14px}}table.plain th,table.plain td{{border:1px solid var(--line);padding:6px 10px;text-align:left;vertical-align:top}}table.plain th{{background:var(--soft)}}

@@ -56,6 +56,7 @@ export type ShotBeat = {
   expression?: string; // expression key of that actor
   action: string; // English, one concrete physical action
   effect?: string; // effect id
+  anchor?: string; // optional keyframe anchor illustrating this beat (kept, shown in review / script page; not sent to the video model)
   camera?: string; // optional camera note for this beat (kept minimal)
 };
 
@@ -450,6 +451,7 @@ export function normalizeDraft(raw: Record<string, unknown>, input: { brief: str
   const anchorIds = new Set(anchors.map((a) => a.id));
 
   const shots: Shot[] = [];
+  const used = new Set<string>(); // anchors referenced by shots (start/end) or beats (keyframes)
   const effectKinds = new Set(["projectile", "aura", "shield", "burst", "bind", "environment", "impact"]);
   const effects: OntologyEffect[] = [];
   for (const [i, e] of (Array.isArray(raw.effects) ? raw.effects : []).slice(0, 12).entries()) {
@@ -504,11 +506,13 @@ export function normalizeDraft(raw: Record<string, unknown>, input: { brief: str
       if (!action) continue;
       const expression = kebab(bt.expression, "");
       const effect = kebab(bt.effect, "");
+      const banchor = kebab(bt.anchor, "");
+      if (banchor && anchorIds.has(banchor)) used.add(banchor);
       if (effect && !effectIds.has(effect)) errors.push(`shot ${id}: beat effect ${effect} unknown; dropped from beat`);
       beats.push({
         t: num(bt.t, 0, 12, 0), ...(objectIds.has(actor) ? { actor } : {}),
         ...(actor && expression && exprOf(actor, expression) ? { expression } : {}),
-        action, ...(effect && effectIds.has(effect) ? { effect } : {}), ...(str(bt.camera, 120) ? { camera: str(bt.camera, 120) } : {}),
+        action, ...(effect && effectIds.has(effect) ? { effect } : {}), ...(banchor && anchorIds.has(banchor) ? { anchor: banchor } : {}), ...(str(bt.camera, 120) ? { camera: str(bt.camera, 120) } : {}),
       });
     }
     beats.sort((a, b) => a.t - b.t);
@@ -554,7 +558,7 @@ export function normalizeDraft(raw: Record<string, unknown>, input: { brief: str
   if (!shots.length) errors.push("model produced no valid shots; review page will let you keep anchors only");
 
   // prune anchors no shot references (except identity anchors, which are references for everything else)
-  const used = new Set(shots.flatMap((s) => [s.start_anchor, s.end_anchor]));
+  for (const s of shots) { used.add(s.start_anchor); used.add(s.end_anchor); }
   let keptAnchors = anchors.filter((a) => a.kind === "identity" || used.has(a.id));
   if (keptAnchors.length > LIMITS.anchors) {
     errors.push(`anchors truncated from ${keptAnchors.length} to ${LIMITS.anchors}`);
@@ -613,51 +617,7 @@ export function normalizeDraft(raw: Record<string, unknown>, input: { brief: str
     }
     for (const sj of subjects) if (sj.face && !subjectIds.has(sj.face)) { delete sj.face; sj.rotation_deg = 0; }
     const subjectObjectIds = new Set(subjects.map((x) => x.object_id));
-    const stateIds = new Set<string>();
-    const states: BlenderLayer["states"] = [];
-    for (const [i, st] of (Array.isArray(b.states) ? b.states : []).slice(0, 24).entries()) {
-      const so = (st || {}) as Record<string, unknown>;
-      const sid = kebab(so.id, `state-${i + 1}`);
-      if (stateIds.has(sid)) continue;
-      const ops: Array<Record<string, unknown>> = [];
-      for (const op of (Array.isArray(so.ops) ? so.ops : []).slice(0, 16)) {
-        const oo = (op || {}) as Record<string, unknown>;
-        const kind = String(oo.op || "");
-        const target = kebab(oo.subject, "");
-        const subj = subjectIds.has(target) ? { subject: target } : subjects.length === 1 ? { subject: subjects[0].id } : null;
-        if (!subj) { errors.push(`state ${sid}: op ${kind} needs a known subject`); continue; }
-        if (kind === "hide" || kind === "show") {
-          const match = str(oo.match, 120);
-          if (match) { try { new RegExp(match); } catch { errors.push(`state ${sid}: bad regex dropped`); continue; } }
-          ops.push({ op: kind, ...subj, ...(match ? { match } : {}) });
-        } else if (kind === "add_part") {
-          const d = (Array.isArray(oo.dims_m) ? oo.dims_m : []).map((v) => num(v, 0.01, 6, 0.3)).slice(0, 3);
-          const at = String(oo.at || "roof-center");
-          const emission = Array.isArray(oo.emission) && oo.emission.length === 3 ? oo.emission.map((v) => num(v, 0, 1, 0.5)) : undefined;
-          ops.push({
-            op: "add_part", ...subj, name: kebab(oo.name, sid), shape: oo.shape === "cylinder" ? "cylinder" : "box",
-            dims_m: d.length === 3 ? d : [1.0, 0.3, 0.1], at: (BLENDER_PART_AT as readonly string[]).includes(at) ? at : "roof-center",
-            offset_m: (Array.isArray(oo.offset_m) ? oo.offset_m : [0, 0, 0]).map((v) => num(v, -4, 4, 0)).slice(0, 3),
-            color: (Array.isArray(oo.color) ? oo.color : [0.05, 0.05, 0.05]).map((v) => num(v, 0, 1, 0.05)).slice(0, 3),
-            tilt_deg: num(oo.tilt_deg, -90, 90, 0), snap: oo.snap !== false, ...(emission ? { emission } : {}),
-          });
-        } else if (kind === "rotate") {
-          const match = str(oo.match, 120);
-          if (match) { try { new RegExp(match); } catch { continue; } }
-          ops.push({ op: "rotate", ...subj, ...(match ? { match, axis: axis(oo.axis, ["X", "Y", "Z"], "Z") } : {}), deg: num(oo.deg, -180, 180, 0) });
-        } else if (kind === "pose") {
-          const clip = str(oo.clip, 60);
-          const lib = modelName(oo.library);
-          if (clip) ops.push({ op: "pose", ...subj, clip, phase: num(oo.phase, 0, 1, 0), ...(lib ? { library: lib } : {}) });
-        } else if (kind === "move") {
-          const d = (Array.isArray(oo.delta_m) ? oo.delta_m : [0, 0, 0]).map((v) => num(v, -20, 20, 0)).slice(0, 3);
-          ops.push({ op: "move", ...subj, delta_m: d.length === 3 ? d : [0, 0, 0] });
-        }
-      }
-      if (!ops.length) { errors.push(`state ${sid} dropped: no valid ops`); continue; }
-      stateIds.add(sid);
-      states.push({ id: sid, label: str(so.label, 40) || sid, ops });
-    }
+    const { states, stateIds } = normalizeStates(b.states, subjects, subjectIds, errors, models);
     // anchors: keep render only for anchors about a subject object (or a link between them); validate look_at and states
     for (const a of anchors) {
       if (!a.render) continue;
@@ -918,6 +878,60 @@ export function startAnchorJob(o: Ontology, request: Request, only?: string[]) {
 
 /* ---------- review decisions ---------- */
 
+
+/** Bounded state-op normaliser; shared by normalizeDraft() and applyReview() (review-time state edits). */
+export function normalizeStates(raw: unknown, subjects: BlenderSubject[], subjectIds: Set<string>, errors: string[], models: Set<string>) {
+  const b = { states: raw };
+  const modelName = (v: unknown) => { const n = str(v, 120).replace(/\\/g, "/"); return n && models.has(n) ? n : ""; };
+  const axis = (v: unknown, ok: string[], d: string) => (ok.includes(String(v).toUpperCase()) ? String(v).toUpperCase() : d);
+  const stateIds = new Set<string>();
+  const states: BlenderLayer["states"] = [];
+  for (const [i, st] of (Array.isArray(b.states) ? b.states : []).slice(0, 24).entries()) {
+    const so = (st || {}) as Record<string, unknown>;
+    const sid = kebab(so.id, `state-${i + 1}`);
+    if (stateIds.has(sid)) continue;
+    const ops: Array<Record<string, unknown>> = [];
+    for (const op of (Array.isArray(so.ops) ? so.ops : []).slice(0, 16)) {
+      const oo = (op || {}) as Record<string, unknown>;
+      const kind = String(oo.op || "");
+      const target = kebab(oo.subject, "");
+      const subj = subjectIds.has(target) ? { subject: target } : subjects.length === 1 ? { subject: subjects[0].id } : null;
+      if (!subj) { errors.push(`state ${sid}: op ${kind} needs a known subject`); continue; }
+      if (kind === "hide" || kind === "show") {
+        const match = str(oo.match, 120);
+        if (match) { try { new RegExp(match); } catch { errors.push(`state ${sid}: bad regex dropped`); continue; } }
+        ops.push({ op: kind, ...subj, ...(match ? { match } : {}) });
+      } else if (kind === "add_part") {
+        const d = (Array.isArray(oo.dims_m) ? oo.dims_m : []).map((v) => num(v, 0.01, 6, 0.3)).slice(0, 3);
+        const at = String(oo.at || "roof-center");
+        const emission = Array.isArray(oo.emission) && oo.emission.length === 3 ? oo.emission.map((v) => num(v, 0, 1, 0.5)) : undefined;
+        ops.push({
+          op: "add_part", ...subj, name: kebab(oo.name, sid), shape: oo.shape === "cylinder" ? "cylinder" : "box",
+          dims_m: d.length === 3 ? d : [1.0, 0.3, 0.1], at: (BLENDER_PART_AT as readonly string[]).includes(at) ? at : "roof-center",
+          offset_m: (Array.isArray(oo.offset_m) ? oo.offset_m : [0, 0, 0]).map((v) => num(v, -4, 4, 0)).slice(0, 3),
+          color: (Array.isArray(oo.color) ? oo.color : [0.05, 0.05, 0.05]).map((v) => num(v, 0, 1, 0.05)).slice(0, 3),
+          tilt_deg: num(oo.tilt_deg, -90, 90, 0), snap: oo.snap !== false, ...(emission ? { emission } : {}),
+        });
+      } else if (kind === "rotate") {
+        const match = str(oo.match, 120);
+        if (match) { try { new RegExp(match); } catch { continue; } }
+        ops.push({ op: "rotate", ...subj, ...(match ? { match, axis: axis(oo.axis, ["X", "Y", "Z"], "Z") } : {}), deg: num(oo.deg, -180, 180, 0) });
+      } else if (kind === "pose") {
+        const clip = str(oo.clip, 60);
+        const lib = modelName(oo.library);
+        if (clip) ops.push({ op: "pose", ...subj, clip, phase: num(oo.phase, 0, 1, 0), ...(lib ? { library: lib } : {}) });
+      } else if (kind === "move") {
+        const d = (Array.isArray(oo.delta_m) ? oo.delta_m : [0, 0, 0]).map((v) => num(v, -20, 20, 0)).slice(0, 3);
+        ops.push({ op: "move", ...subj, delta_m: d.length === 3 ? d : [0, 0, 0] });
+      }
+    }
+    if (!ops.length) { errors.push(`state ${sid} dropped: no valid ops`); continue; }
+    stateIds.add(sid);
+    states.push({ id: sid, label: str(so.label, 40) || sid, ops });
+  }
+  return { states, stateIds };
+}
+
 export function applyReview(o: Ontology, body: Record<string, unknown>) {
   const anchorDecisions = (body.anchors || {}) as Record<string, unknown>;
   for (const [id, decision] of Object.entries(anchorDecisions)) {
@@ -928,6 +942,30 @@ export function applyReview(o: Ontology, body: Record<string, unknown>) {
     else if (d.status === "rejected") a.status = "rejected";
     else if (d.status === "pending") a.status = "pending";
     if (typeof d.feedback === "string") a.feedback = str(d.feedback, 400);
+    if (typeof d.prompt === "string" && d.prompt.trim()) a.prompt = str(d.prompt, 1500);
+    if (a.render && d.render && typeof d.render === "object") {
+      const c = ((d.render as Record<string, unknown>).camera || {}) as Record<string, unknown>;
+      const cur = a.render.camera;
+      const lookAt = String(c.look_at || cur.look_at);
+      a.render.camera = {
+        azimuth_deg: num(c.azimuth_deg, 0, 360, cur.azimuth_deg),
+        elevation_deg: num(c.elevation_deg, -5, 45, cur.elevation_deg),
+        distance_factor: num(c.distance_factor, 0.5, 1.6, cur.distance_factor),
+        focal_mm: num(c.focal_mm, 24, 85, cur.focal_mm),
+        look_at: /^[a-z0-9:_-]{1,80}$/i.test(lookAt) ? lookAt : cur.look_at,
+      };
+    }
+  }
+  const blenderPatch = body.blender && typeof body.blender === "object" ? (body.blender as Record<string, unknown>) : null;
+  if (blenderPatch && o.blender && Array.isArray(blenderPatch.states)) {
+    const subjectIds = new Set(o.blender.subjects.map((x) => x.id));
+    const known = new Set<string>();
+    for (const sj of o.blender.subjects) { if (sj.asset?.name) known.add(sj.asset.name); if (sj.pose?.library) known.add(sj.pose.library); }
+    const { states } = normalizeStates(blenderPatch.states, o.blender.subjects, subjectIds, o.errors, known);
+    for (const st of states) {
+      const i = o.blender.states.findIndex((x) => x.id === st.id);
+      if (i >= 0) o.blender.states[i] = st; else if (o.blender.states.length < 24) o.blender.states.push(st);
+    }
   }
   const shotDecisions = (body.shots || {}) as Record<string, unknown>;
   for (const [id, decision] of Object.entries(shotDecisions)) {
