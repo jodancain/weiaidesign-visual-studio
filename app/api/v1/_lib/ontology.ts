@@ -85,6 +85,7 @@ export type Shot = {
   video_job_id?: string;
   video_url?: string;
   drive_url?: string;
+  archive_error?: string;
   video_model?: string;
   error?: string;
 };
@@ -805,14 +806,14 @@ export async function refreshShotVideos(o: Ontology) {
       const d = data.data || {};
       const state = String(d.state || "");
       const drive = d.drive_video as { public_url?: string; webContentLink?: string; webViewLink?: string } | undefined;
+      // Drive download/view links are not playable in <video> (MEDIA_ERR_SRC_NOT_SUPPORTED); they
+      // only go to drive_url. Prefer the gateway-served copy, then the provider URL.
       const url = (d.storage_video as { public_url?: string } | undefined)?.public_url
-        || drive?.public_url
         || (d.result_video_url as string | undefined)
-        || drive?.webContentLink
-        || drive?.webViewLink
         || (d.public_url as string | undefined)
         || (d.video_url as string | undefined);
-      if (drive?.webViewLink) s.drive_url = String(drive.webViewLink);
+      if (drive?.webViewLink || drive?.webContentLink || drive?.public_url) s.drive_url = String(drive.webViewLink || drive.webContentLink || drive.public_url);
+      if (d.archive_error) s.archive_error = String(d.archive_error);
       if (d.video_model) s.video_model = String(d.video_model);
       if (url) {
         s.status = "done";
@@ -929,7 +930,7 @@ ${linkAnchors.length ? `<div class="grid">${linkAnchors.map(anchorCard).join("")
   <div class="frames"><div class="fr">${th(a)}<select class="sa">${opts(s.start_anchor)}</select></div><div class="arrow">→ 补间 →</div><div class="fr">${th(b)}<select class="ea">${opts(s.end_anchor)}</select></div></div>
   <label>字幕 <span class="tag ${s.caption_source}">${s.caption_source === "brief" ? "来自需求原文" : "AI 补写"}</span><input class="cap" value="${esc(s.caption)}" maxlength="48"></label>
   <label>运动提示 <textarea class="mp" rows="2">${esc(s.motion_prompt)}</textarea></label>
-  ${s.video_url ? `<video src="${esc(s.video_url)}" controls playsinline></video><span class="muted" style="font-size:12px"><a href="${esc(s.video_url)}" target="_blank">打开视频</a>${s.drive_url ? ` · <a href="${esc(s.drive_url)}" target="_blank">Drive</a>` : ""}${s.video_model ? ` · ${esc(s.video_model)}` : ""}</span>` : ""}
+  ${s.video_url ? `<video src="${esc(s.video_url)}" controls playsinline></video><span class="muted" style="font-size:12px"><a href="${esc(s.video_url)}" target="_blank">打开视频</a>${s.drive_url ? ` · <a href="${esc(s.drive_url)}" target="_blank">Drive</a>` : ""}${s.video_model ? ` · ${esc(s.video_model)}` : ""}${s.archive_error ? ` · <b style="color:#b45309">未归档</b>（${esc(s.archive_error.slice(0, 80))}）` : ""}</span>` : ""}
   ${s.error ? `<pre class="err">${esc(s.error)}</pre>` : ""}
   <div class="acts"><button class="ok" data-act="approve">✓ 通过</button><button class="no" data-act="reject">✗ 驳回</button>${s.video_job_id ? `<code>job ${esc(s.video_job_id)}</code>` : ""}</div>
 </div>`;
