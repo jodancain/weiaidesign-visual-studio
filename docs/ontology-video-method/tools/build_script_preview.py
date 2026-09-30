@@ -91,6 +91,9 @@ def main() -> None:
         if group:
             scene_img = pic(group[0], "greybox")
     env_objs = [x for x in o["objects"] if x["type"] == "environment"]
+    # look/style frames: environment identity anchors that were generated without a greybox
+    looks = [a for a in o["anchors"] if a["kind"] == "identity" and any(x["id"] == a.get("object_id") and x["type"] == "environment" for x in o["objects"]) and a.get("image") and not a.get("greybox")]
+    look_html = "".join(f'<figure>{pic(a, "image")}<figcaption><b>{esc(a["label"])}</b> —— 按导演视觉语法编译的基准帧，所有人物与分镜锚图重绘时都以它为第二参考（色彩分布 / 光 / 材质 / 构图层次）</figcaption><details><summary class="muted">基准帧提示词</summary><p class="en muted">{esc(a["prompt"])}</p></details></figure>' for a in looks)
     scene_rows = []
     if scene.get("asset"):
         scene_rows.append(f'<tr><td>场景资产</td><td><code>{esc(scene["asset"]["name"])}</code> · {esc(sources.get(scene["asset"]["name"], "见资产表"))}</td></tr>')
@@ -103,6 +106,8 @@ def main() -> None:
     # ---------- 人物 / 主体
     cards = []
     for sj in subjects:
+        if sj.get("camera_ignore"):
+            continue  # stage helpers (floor slabs) are not characters
         obj = objects.get(sj["object_id"], {})
         ident = next((a for a in o["anchors"] if a["kind"] == "identity" and a.get("object_id") == sj["object_id"]), None)
         gb = pic(ident, "greybox") if ident else ""
@@ -169,7 +174,9 @@ ol.check li{{margin:6px 0}}.scene img{{width:100%;border-radius:10px;display:blo
 <p><b>视觉总纲</b> <span class="en muted">{esc(o.get("style_bible", ""))}</span></p>
 
 <h2>一、场景</h2>
+{f'<div class="scene">{look_html}</div>' if look_html else ''}
 <div class="scene">{scene_img or '<div class="ph">尚无场景帧</div>'}</div>
+<p class="muted" style="font-size:12px;text-align:center">Blender 舞台灰模（机位与几何来源）</p>
 <table class="kv">{"".join(scene_rows)}</table>
 
 <h2>二、人物 / 主体（{len(subjects)}）</h2>

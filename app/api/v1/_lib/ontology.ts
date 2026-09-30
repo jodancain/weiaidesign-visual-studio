@@ -78,6 +78,8 @@ export type BlenderSubject = {
   face?: string;
   pose?: { library?: string; clip: string; phase: number };
   tint?: number[];
+  elevation_m?: number;
+  camera_ignore?: boolean;
 };
 
 export type BlenderLayer = {
@@ -155,7 +157,7 @@ const LIMITS = {
   attributesPerObject: 3,
   valuesPerAttribute: 3,
   links: 6,
-  anchors: Number(env.ONTOLOGY_MAX_ANCHORS || "14"),
+  anchors: Number(env.ONTOLOGY_MAX_ANCHORS || "20"),
   shots: Number(env.ONTOLOGY_MAX_SHOTS || "6"),
   shotDuration: 8, // Veo first+last keyframe requirement in current gateway
 };
@@ -466,7 +468,7 @@ export function normalizeDraft(raw: Record<string, unknown>, input: { brief: str
     const primary = objects.find((x) => x.type === "vehicle" || x.type === "actor") || objects[0];
     const subjects: BlenderSubject[] = [];
     const subjectIds = new Set<string>();
-    for (const [i, rs] of rawSubjects.slice(0, 8).entries()) {
+    for (const [i, rs] of rawSubjects.slice(0, 10).entries()) {
       const sj = (rs || {}) as Record<string, unknown>;
       const sid = kebab(sj.id, `subject-${i + 1}`);
       if (subjectIds.has(sid)) { errors.push(`blender subject ${sid} duplicated; dropped`); continue; }
@@ -491,6 +493,8 @@ export function normalizeDraft(raw: Record<string, unknown>, input: { brief: str
         ...(typeof sj.face === "string" && sj.face ? { face: kebab(sj.face, "") } : { rotation_deg: num(sj.rotation_deg, -360, 360, 0) }),
         ...(pose && poseLib ? { pose } : {}),
         ...(tint ? { tint } : {}),
+        ...(sj.elevation_m !== undefined ? { elevation_m: num(sj.elevation_m, -10, 10, 0) } : {}),
+        ...(sj.camera_ignore === true ? { camera_ignore: true } : {}),
       });
       subjectIds.add(sid);
     }
@@ -502,12 +506,12 @@ export function normalizeDraft(raw: Record<string, unknown>, input: { brief: str
     const subjectObjectIds = new Set(subjects.map((x) => x.object_id));
     const stateIds = new Set<string>();
     const states: BlenderLayer["states"] = [];
-    for (const [i, st] of (Array.isArray(b.states) ? b.states : []).slice(0, 12).entries()) {
+    for (const [i, st] of (Array.isArray(b.states) ? b.states : []).slice(0, 24).entries()) {
       const so = (st || {}) as Record<string, unknown>;
       const sid = kebab(so.id, `state-${i + 1}`);
       if (stateIds.has(sid)) continue;
       const ops: Array<Record<string, unknown>> = [];
-      for (const op of (Array.isArray(so.ops) ? so.ops : []).slice(0, 10)) {
+      for (const op of (Array.isArray(so.ops) ? so.ops : []).slice(0, 16)) {
         const oo = (op || {}) as Record<string, unknown>;
         const kind = String(oo.op || "");
         const target = kebab(oo.subject, "");
@@ -661,6 +665,8 @@ async function renderGreyboxes(o: Ontology, targets: Anchor[], request: Request)
       position_m: sj.position_m, ...(sj.face ? { face: sj.face } : { rotation_deg: sj.rotation_deg || 0 }),
       ...(sj.pose ? { pose: { ...sj.pose, ...(sj.pose.library ? { library: sj.pose.library } : {}) } } : {}),
       ...(sj.tint ? { tint: sj.tint } : {}),
+      ...(sj.elevation_m !== undefined ? { elevation_m: sj.elevation_m } : {}),
+      ...(sj.camera_ignore ? { camera_ignore: true } : {}),
     })),
     states: b.states.map((st) => ({ id: st.id, ops: st.ops })),
     anchors: withRender.map((a) => ({ id: a.id, camera: a.render!.camera, states: a.render!.states })),
@@ -724,7 +730,8 @@ export function startAnchorJob(o: Ontology, request: Request, only?: string[]) {
   const targets = o.anchors.filter((a) => (only ? only.includes(a.id) : a.status === "pending" || a.status === "failed"));
   // identity first so later anchors can reference them
   const referenced = new Set(o.anchors.flatMap((a) => a.refs || []));
-  const rank = (a: Anchor) => (a.kind === "identity" ? 0 : referenced.has(a.id) && !(a.refs || []).some((r) => referenced.has(r) && r !== a.id) ? 1 : (a.refs || []).length ? 3 : 2);
+  // identities without refs (e.g. a look/style frame) first, then identities that reference them, then anchors others depend on
+  const rank = (a: Anchor) => (a.kind === "identity" ? ((a.refs || []).length ? 1 : 0) : referenced.has(a.id) && !(a.refs || []).some((r) => referenced.has(r) && r !== a.id) ? 2 : (a.refs || []).length ? 4 : 3);
   targets.sort((a, b) => rank(a) - rank(b));
   void (async () => {
     try {
@@ -766,7 +773,7 @@ export function startAnchorJob(o: Ontology, request: Request, only?: string[]) {
             }
             if (anchor.kind !== "identity" && refs.length < 3) refs.push(...(await referenceImagesFor(o, anchor)).slice(0, 2));
             const prompt = [GREYBOX_RESTYLE, o.style_bible, anchor.prompt,
-              refs.length > 1 ? `References after the first show the finished look of the subjects (${refNotes.join("; ") || "identity images"}): match their design, colours and materials exactly.` : "",
+              refs.length > 1 ? `References after the first show the finished look to match (${refNotes.join("; ") || "identity images"}): a look/style frame sets palette, light, texture and grade; character references fix wardrobe, hair and face — match them exactly.` : "",
               anchor.feedback ? `Reviewer feedback to apply: ${anchor.feedback}` : "", "no text, no watermark, no UI"].filter(Boolean).join("\n");
             result = await editImageWithReference(prompt, o.aspect_ratio, outPath, refs, "medium");
           } else {
