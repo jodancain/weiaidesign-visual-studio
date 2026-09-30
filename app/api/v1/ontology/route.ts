@@ -4,7 +4,7 @@ import { BLENDER_WORKER_URL, draftOntology, listBlenderModels, listOntologies, s
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/* POST { brief, audience?, aspect_ratio?, model?, auto_anchors? } → drafted ontology (LLM only; anchors start when auto_anchors !== false) */
+/* POST { brief, audience?, aspect_ratio?, model?, auto_anchors?, render_backend?, draft? } → drafted ontology (LLM, or `draft` = pre-authored ontology JSON passed through the same gates; anchors start when auto_anchors !== false) */
 export async function POST(request: Request) {
   const authError = requireVideoToken(request);
   if (authError) return authError;
@@ -20,7 +20,7 @@ export async function POST(request: Request) {
   const aspect_ratio = (["16:9", "9:16", "1:1"].includes(String(payload.aspect_ratio || payload.aspect)) ? String(payload.aspect_ratio || payload.aspect) : "16:9") as Aspect;
   try {
     const render_backend = payload.render_backend === "blender" ? "blender" : "image";
-    const ontology = await draftOntology({ brief: brief.slice(0, 4000), audience, aspect_ratio, model: String(payload.model || ""), render_backend });
+    const ontology = await draftOntology({ brief: brief.slice(0, 4000), audience, aspect_ratio, model: String(payload.model || ""), render_backend, ...(payload.draft && typeof payload.draft === "object" ? { draft: payload.draft } : {}) });
     await saveOntology(ontology);
     const autoAnchors = payload.auto_anchors !== false;
     if (autoAnchors) startAnchorJob(ontology, request);

@@ -54,7 +54,7 @@ MANIFEST = WORKER_DIR / "assets" / "manifest.json"
 SCENES_DIR = ASSETS_DIR / "scenes"
 RENDERS_DIR = ASSETS_DIR / "renders"
 
-app = FastAPI(title="Blender Story Worker", version="0.2.0")
+app = FastAPI(title="Blender Story Worker", version="0.3.0")
 jobs: dict[str, dict[str, Any]] = {}
 jobs_lock = threading.Lock()
 work_queue: "queue.Queue[str]" = queue.Queue()
@@ -159,7 +159,8 @@ def render_job(job_id: str) -> None:
 class OntologyRenderSpec(BaseModel):
     """Subject-agnostic studio render: see render_ontology.py docstring for the schema."""
     scene: dict[str, Any] = Field(default_factory=dict)
-    subject: dict[str, Any]
+    subject: dict[str, Any] | None = None
+    subjects: list[dict[str, Any]] = Field(default_factory=list)
     states: list[dict[str, Any]] = Field(default_factory=list)
     anchors: list[dict[str, Any]]
     resolution: list[int] = Field(default_factory=lambda: [1280, 720])
@@ -174,17 +175,37 @@ def validate_ontology_spec(spec: OntologyRenderSpec) -> None:
     ids = [str(a.get("id", "")) for a in spec.anchors]
     if any(not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", i) for i in ids) or len(set(ids)) != len(ids):
         raise HTTPException(422, "anchor ids must be unique kebab/snake tokens")
-    asset = (spec.subject or {}).get("asset") or {}
-    if asset.get("path"):
-        # only files inside the models dir; the caller may pass a bare filename
-        candidate = Path(asset["path"])
+    def resolve(holder: dict[str, Any], key: str = "path") -> None:
+        """Only files inside the models dir; the caller may pass a bare or models-relative name."""
+        raw = str(holder.get(key) or "")
+        if not raw:
+            return
+        candidate = Path(raw)
         if not candidate.is_absolute():
-            candidate = MODELS_DIR / candidate.name
+            candidate = MODELS_DIR / raw.replace("\\", "/")
         if MODELS_DIR.resolve() not in candidate.resolve().parents or not candidate.exists():
-            raise HTTPException(422, f"asset not found under models dir: {candidate.name}")
-        asset["path"] = str(candidate)
-    elif not (spec.subject or {}).get("proxy"):
-        raise HTTPException(422, "subject needs asset.path or proxy")
+            raise HTTPException(422, f"asset not found under models dir: {raw}")
+        holder[key] = str(candidate)
+
+    subjects = spec.subjects or ([spec.subject] if spec.subject else [])
+    if not subjects or len(subjects) > 12:
+        raise HTTPException(422, "spec needs 1..12 subjects")
+    for sj in subjects:
+        asset = sj.get("asset") or {}
+        if asset.get("path"):
+            resolve(asset)
+        elif not sj.get("proxy"):
+            raise HTTPException(422, f"subject {sj.get('id')} needs asset.path or proxy")
+        if sj.get("pose") and sj["pose"].get("library"):
+            resolve(sj["pose"], "library")
+    for st in spec.states:
+        for op in st.get("ops", []):
+            if op.get("op") == "pose" and op.get("library"):
+                resolve(op, "library")
+    for key in ("asset", "sky"):
+        holder = (spec.scene or {}).get(key) or {}
+        if holder.get("path"):
+            resolve(holder)
     if len(spec.resolution) != 2 or min(spec.resolution) < 64 or max(spec.resolution) > 4096:
         raise HTTPException(422, "resolution must be [w, h] within 64..4096")
     for st in spec.states:
@@ -205,7 +226,7 @@ def render_ontology_job(job_id: str) -> None:
     cmd = [BLENDER_BIN, "--background", "--factory-startup", "--python", str(ONTOLOGY_SCRIPT), "--", "--spec", str(spec_path), "--out-dir", str(run_dir)]
     update_job(job_id, state="rendering", progress=5, started_at=time.time())
     started = time.time()
-    timeout = max(RENDER_TIMEOUT, 60 * len(job["spec"].get("anchors", [])))
+    timeout = max(RENDER_TIMEOUT, 120 + 90 * len(job["spec"].get("anchors", [])))
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, encoding="utf-8", errors="replace")
     except subprocess.TimeoutExpired:
@@ -306,7 +327,8 @@ def get_shot(job_id: str, include_image: bool = True) -> dict[str, Any]:
 @app.get("/api/v1/models")
 def list_models() -> dict[str, Any]:
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    items = [{"name": p.name, "bytes": p.stat().st_size} for p in sorted(MODELS_DIR.iterdir()) if p.suffix.lower() in (".glb", ".gltf", ".obj", ".fbx")]
+    items = [{"name": p.relative_to(MODELS_DIR).as_posix(), "bytes": p.stat().st_size}
+             for p in sorted(MODELS_DIR.rglob("*")) if p.is_file() and p.suffix.lower() in (".glb", ".gltf", ".obj", ".fbx")]
     return {"models_dir": str(MODELS_DIR), "items": items}
 
 
