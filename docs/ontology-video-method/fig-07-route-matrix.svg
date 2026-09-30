@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 450" width="100%" role="img" aria-label="图7 三条渲染路线对比" style="font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;max-width:960px;display:block;margin:0 auto">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#6e6e73"/></marker><marker id="arrb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#2F6FED"/></marker></defs>
+<rect width="960" height="450" fill="#FFFFFF" rx="12"/>
+<rect x="30" y="74" width="900" height="40" fill="#F2F2F7"/>
+<rect x="30" y="114" width="900" height="40" fill="#fff"/>
+<rect x="30" y="154" width="900" height="40" fill="#F2F2F7"/>
+<rect x="30" y="194" width="900" height="40" fill="#fff"/>
+<rect x="30" y="234" width="900" height="40" fill="#F2F2F7"/>
+<rect x="30" y="274" width="900" height="40" fill="#fff"/>
+<rect x="30" y="314" width="900" height="40" fill="#F2F2F7"/>
+<rect x="30" y="354" width="900" height="40" fill="#fff"/>
+<text x="130" y="56" text-anchor="middle" font-size="13" font-weight="700" fill="#1d1d1f">维度</text>
+<rect x="230" y="30" width="235" height="38" rx="10" fill="#8E8E93" stroke="#8E8E93" stroke-width="1.5"/>
+<text x="347.5" y="53.9" text-anchor="middle" font-size="14" font-weight="700" fill="#fff">3D 白模</text>
+<rect x="475" y="30" width="235" height="38" rx="10" fill="#7A5AF8" stroke="#7A5AF8" stroke-width="1.5"/>
+<text x="592.5" y="53.9" text-anchor="middle" font-size="14" font-weight="700" fill="#fff">锁定图本体（本方案）</text>
+<rect x="720" y="30" width="235" height="38" rx="10" fill="#D64545" stroke="#D64545" stroke-width="1.5"/>
+<text x="837.5" y="53.9" text-anchor="middle" font-size="14" font-weight="700" fill="#fff">自由生成</text>
+<text x="42" y="100" text-anchor="start" font-size="13" font-weight="700" fill="#1d1d1f">对象同一性</text>
+<text x="347" y="100" text-anchor="middle" font-size="13" font-weight="700" fill="#2E9E6B">✔</text>
+<text x="592" y="100" text-anchor="middle" font-size="13" font-weight="700" fill="#2E9E6B">✔</text>
+<text x="837" y="100" text-anchor="middle" font-size="13" font-weight="700" fill="#D64545">✘</text>
+<text x="42" y="140" text-anchor="start" font-size="13" font-weight="700" fill="#1d1d1f">关系几何真值</text>
+<text x="347" y="140" text-anchor="middle" font-size="13" font-weight="700" fill="#2E9E6B">✔</text>
+<text x="592" y="140" text-anchor="middle" font-size="13" font-weight="700" fill="#2E9E6B">关键帧 ✔</text>
+<text x="837" y="140" text-anchor="middle" font-size="13" font-weight="700" fill="#D64545">✘</text>
+<text x="42" y="180" text-anchor="start" font-size="13" font-weight="700" fill="#1d1d1f">属性可校验</text>
+<text x="347" y="180" text-anchor="middle" font-size="13" font-weight="700" fill="#2E9E6B">程序校验</text>
+<text x="592" y="180" text-anchor="middle" font-size="13" font-weight="700" fill="#2E9E6B">人审一次</text>
+<text x="837" y="180" text-anchor="middle" font-size="13" font-weight="700" fill="#D64545">每次人眼</text>
+<text x="42" y="220" text-anchor="start" font-size="13" font-weight="700" fill="#1d1d1f">改槽不改模</text>
+<text x="347" y="220" text-anchor="middle" font-size="13" font-weight="700" fill="#2E9E6B">✔</text>
+<text x="592" y="220" text-anchor="middle" font-size="13" font-weight="700" fill="#2E9E6B">✔</text>
+<text x="837" y="220" text-anchor="middle" font-size="13" font-weight="700" fill="#D64545">✘</text>
+<text x="42" y="260" text-anchor="start" font-size="13" font-weight="700" fill="#1d1d1f">任意视角</text>
+<text x="347" y="260" text-anchor="middle" font-size="13" font-weight="700" fill="#2E9E6B">✔</text>
+<text x="592" y="260" text-anchor="middle" font-size="13" font-weight="700" fill="#F28C28">锚过的角度</text>
+<text x="837" y="260" text-anchor="middle" font-size="13" font-weight="700" fill="#F28C28">✔ 但不可信</text>
+<text x="42" y="300" text-anchor="start" font-size="13" font-weight="700" fill="#1d1d1f">补间可信度</text>
+<text x="347" y="300" text-anchor="middle" font-size="13" font-weight="700" fill="#2E9E6B">确定</text>
+<text x="592" y="300" text-anchor="middle" font-size="13" font-weight="700" fill="#2E9E6B">短补间稳</text>
+<text x="837" y="300" text-anchor="middle" font-size="13" font-weight="700" fill="#D64545">差</text>
+<text x="42" y="340" text-anchor="start" font-size="13" font-weight="700" fill="#1d1d1f">前置成本</text>
+<text x="347" y="340" text-anchor="middle" font-size="13" font-weight="700" fill="#F28C28">建模</text>
+<text x="592" y="340" text-anchor="middle" font-size="13" font-weight="700" fill="#F28C28">生图+审图</text>
+<text x="837" y="340" text-anchor="middle" font-size="13" font-weight="700" fill="#2E9E6B">无</text>
+<text x="42" y="380" text-anchor="start" font-size="13" font-weight="700" fill="#1d1d1f">复用现有链路</text>
+<text x="347" y="380" text-anchor="middle" font-size="13" font-weight="700" fill="#F28C28">需渲染器</text>
+<text x="592" y="380" text-anchor="middle" font-size="13" font-weight="700" fill="#2E9E6B">✔ 直接复用</text>
+<text x="837" y="380" text-anchor="middle" font-size="13" font-weight="700" fill="#2E9E6B">✔</text>
+<text x="480.0" y="436" text-anchor="middle" font-size="12" font-weight="400" fill="#8E8E93">图 7 · 锁定图本体把“连续可算”换成“离散锚定 + 短补间”，丢任意视角，换不建模与直接复用现有链路</text>
+</svg>

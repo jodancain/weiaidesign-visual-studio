@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 260" width="100%" role="img" aria-label="图9 关键帧密度决定可信度" style="font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;max-width:960px;display:block;margin:0 auto">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#6e6e73"/></marker><marker id="arrb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#2F6FED"/></marker></defs>
+<rect width="960" height="260" fill="#FFFFFF" rx="12"/>
+<text x="30" y="58" text-anchor="start" font-size="14" font-weight="700" fill="#D64545">两张锚图</text>
+<line x1="180" y1="50" x2="780" y2="50" stroke="#C7C7CC" stroke-width="6"/>
+<rect x="166.0" y="36" width="28" height="28" rx="5" fill="#fff" stroke="#D64545" stroke-width="2"/>
+<text x="180.0" y="55" text-anchor="middle" font-size="12" font-weight="400" fill="#1d1d1f">🔒</text>
+<rect x="766.0" y="36" width="28" height="28" rx="5" fill="#fff" stroke="#D64545" stroke-width="2"/>
+<text x="780.0" y="55" text-anchor="middle" font-size="12" font-weight="400" fill="#1d1d1f">🔒</text>
+<rect x="198.0" y="45" width="564.0" height="10" rx="5" fill="#D64545" fill-opacity="0.25"/>
+<text x="810" y="55" text-anchor="start" font-size="12" font-weight="400" fill="#6e6e73">共 8s</text>
+<text x="180" y="92" text-anchor="start" font-size="12" font-weight="400" fill="#6e6e73">8 秒补间：螺栓数量中途可能变、零件形状漂移</text>
+<text x="30" y="153" text-anchor="start" font-size="14" font-weight="700" fill="#2E9E6B">三张以上锚图</text>
+<line x1="180" y1="145" x2="780" y2="145" stroke="#C7C7CC" stroke-width="6"/>
+<rect x="166.0" y="131" width="28" height="28" rx="5" fill="#fff" stroke="#2E9E6B" stroke-width="2"/>
+<text x="180.0" y="150" text-anchor="middle" font-size="12" font-weight="400" fill="#1d1d1f">🔒</text>
+<rect x="366.0" y="131" width="28" height="28" rx="5" fill="#fff" stroke="#2E9E6B" stroke-width="2"/>
+<text x="380.0" y="150" text-anchor="middle" font-size="12" font-weight="400" fill="#1d1d1f">🔒</text>
+<rect x="566.0" y="131" width="28" height="28" rx="5" fill="#fff" stroke="#2E9E6B" stroke-width="2"/>
+<text x="580.0" y="150" text-anchor="middle" font-size="12" font-weight="400" fill="#1d1d1f">🔒</text>
+<rect x="766.0" y="131" width="28" height="28" rx="5" fill="#fff" stroke="#2E9E6B" stroke-width="2"/>
+<text x="780.0" y="150" text-anchor="middle" font-size="12" font-weight="400" fill="#1d1d1f">🔒</text>
+<rect x="198.0" y="140" width="164.0" height="10" rx="5" fill="#2E9E6B" fill-opacity="0.5"/>
+<rect x="398.0" y="140" width="164.0" height="10" rx="5" fill="#2E9E6B" fill-opacity="0.5"/>
+<rect x="598.0" y="140" width="164.0" height="10" rx="5" fill="#2E9E6B" fill-opacity="0.5"/>
+<text x="810" y="150" text-anchor="start" font-size="12" font-weight="400" fill="#6e6e73">共 8s</text>
+<text x="180" y="187" text-anchor="start" font-size="12" font-weight="400" fill="#6e6e73">每段 ≤ 3 秒：幻觉空间小，关系几何在每个关键帧被重新钉住</text>
+<text x="480.0" y="246" text-anchor="middle" font-size="12" font-weight="400" fill="#8E8E93">图 9 · 同样 8 秒动作：拆成“装好 / 松开 / 取下 / 放置”四张锚图，补间越短，模型越难出错</text>
+</svg>

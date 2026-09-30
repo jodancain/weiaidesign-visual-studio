@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 300" width="100%" role="img" aria-label="图6 AI 填四个参数，本体沿链接展开" style="font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;max-width:960px;display:block;margin:0 auto">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#6e6e73"/></marker><marker id="arrb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#2F6FED"/></marker></defs>
+<rect width="960" height="300" fill="#FFFFFF" rx="12"/>
+<rect x="30" y="40" width="230" height="120" rx="10" fill="#EEE9FE" stroke="#7A5AF8" stroke-width="1.5"/>
+<text x="145.0" y="66.9" text-anchor="middle" font-size="13" font-weight="700" fill="#1d1d1f">AI 创建 Shot</text>
+<text x="145.0" y="85.7" text-anchor="middle" font-size="12" font-weight="400" fill="#1d1d1f">target = BMS-01</text>
+<text x="145.0" y="104.6" text-anchor="middle" font-size="12" font-weight="400" fill="#1d1d1f">framing = close</text>
+<text x="145.0" y="123.4" text-anchor="middle" font-size="12" font-weight="400" fill="#1d1d1f">action = remove</text>
+<text x="145.0" y="142.2" text-anchor="middle" font-size="12" font-weight="400" fill="#1d1d1f">duration = 4s</text>
+<line x1="260" y1="100" x2="320" y2="100" stroke="#7A5AF8" stroke-width="1.6" marker-end="url(#arr)"/>
+<text x="290.0" y="94.0" text-anchor="middle" font-size="12" font-weight="400" fill="#6e6e73">本体展开</text>
+<rect x="320" y="40" width="300" height="26" rx="5" fill="#F2F2F7" stroke="#2F6FED"/>
+<text x="330" y="58" text-anchor="start" font-size="12" font-weight="400" fill="#1d1d1f">BMS-01 —fastened_by→ Bolt ×4</text>
+<line x1="620" y1="53" x2="650" y2="53" stroke="#2F6FED" stroke-width="1.6" marker-end="url(#arr)"/>
+<text x="658" y="58" text-anchor="start" font-size="12" font-weight="700" fill="#2F6FED">同框高亮 + “×4”</text>
+<rect x="320" y="72" width="300" height="26" rx="5" fill="#F2F2F7" stroke="#F28C28"/>
+<text x="330" y="90" text-anchor="start" font-size="12" font-weight="400" fill="#1d1d1f">Cover-02 —blocks_removal_of→ BMS-01</text>
+<line x1="620" y1="85" x2="650" y2="85" stroke="#F28C28" stroke-width="1.6" marker-end="url(#arr)"/>
+<text x="658" y="90" text-anchor="start" font-size="12" font-weight="700" fill="#F28C28">前插“拆盖板”镜头，之后盖板变半透明</text>
+<rect x="320" y="104" width="300" height="26" rx="5" fill="#F2F2F7" stroke="#2F6FED"/>
+<text x="330" y="122" text-anchor="start" font-size="12" font-weight="400" fill="#1d1d1f">BMS-01 —part_of→ 电池包</text>
+<line x1="620" y1="117" x2="650" y2="117" stroke="#2F6FED" stroke-width="1.6" marker-end="url(#arr)"/>
+<text x="658" y="122" text-anchor="start" font-size="12" font-weight="700" fill="#2F6FED">半透明位置参照</text>
+<rect x="320" y="136" width="300" height="26" rx="5" fill="#F2F2F7" stroke="#2E9E6B"/>
+<text x="330" y="154" text-anchor="start" font-size="12" font-weight="400" fill="#1d1d1f">Step —supported_by→ E05</text>
+<line x1="620" y1="149" x2="650" y2="149" stroke="#2E9E6B" stroke-width="1.6" marker-end="url(#arr)"/>
+<text x="658" y="154" text-anchor="start" font-size="12" font-weight="700" fill="#2E9E6B">字幕角标 “E05 p.312”</text>
+<rect x="320" y="190" width="610" height="60" rx="10" fill="#fff" stroke="#C7C7CC" stroke-width="1.5" stroke-dasharray="4 3"/>
+<text x="625.0" y="224.2" text-anchor="middle" font-size="12" font-weight="400" fill="#1d1d1f">产物：起点锚图“装好” → 终点锚图“取下” · 4 秒补间 · 字幕 E05 · manifest 记录镜头→步骤→证据→页码</text>
+<line x1="470" y1="168" x2="470" y2="190" stroke="#6e6e73" stroke-width="1.6" marker-end="url(#arr)"/>
+<text x="480.0" y="286" text-anchor="middle" font-size="12" font-weight="400" fill="#8E8E93">图 6 · AI 只填了四个参数；其余画面元素全由链接推出，可回放、可改槽重生成</text>
+</svg>

@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 360" width="100%" role="img" aria-label="图10 一次出片的流程与门禁" style="font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;max-width:960px;display:block;margin:0 auto">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#6e6e73"/></marker><marker id="arrb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#2F6FED"/></marker></defs>
+<rect width="960" height="360" fill="#FFFFFF" rx="12"/>
+<rect x="20" y="40" width="105" height="34" rx="10" fill="#8E8E93" stroke="#8E8E93" stroke-width="1.5"/>
+<text x="72.5" y="61.5" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">① 输入</text>
+<rect x="20" y="74" width="105" height="96" rx="10" fill="#F2F2F7" stroke="#8E8E93" stroke-width="1.5"/>
+<text x="72.5" y="109.9" text-anchor="middle" font-size="11" font-weight="400" fill="#1d1d1f">结构化 SOP</text>
+<text x="72.5" y="125.8" text-anchor="middle" font-size="10" font-weight="400" fill="#1d1d1f">+ 车型变体</text>
+<text x="72.5" y="141.8" text-anchor="middle" font-size="10" font-weight="400" fill="#1d1d1f">+ 观众</text>
+<line x1="125" y1="122" x2="137" y2="122" stroke="#6e6e73" stroke-width="1.2" marker-end="url(#arr)"/>
+<rect x="137" y="40" width="105" height="34" rx="10" fill="#2F6FED" stroke="#2F6FED" stroke-width="1.5"/>
+<text x="189.5" y="61.5" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">② 本体检索</text>
+<rect x="137" y="74" width="105" height="96" rx="10" fill="#E8F0FE" stroke="#2F6FED" stroke-width="1.5"/>
+<text x="189.5" y="109.9" text-anchor="middle" font-size="11" font-weight="400" fill="#1d1d1f">零件名→Part.id</text>
+<text x="189.5" y="125.8" text-anchor="middle" font-size="10" font-weight="400" fill="#1d1d1f">拉连接与拆序</text>
+<text x="189.5" y="141.8" text-anchor="middle" font-size="10" font-weight="400" fill="#1d1d1f">缺失登记缺口</text>
+<line x1="242" y1="122" x2="254" y2="122" stroke="#6e6e73" stroke-width="1.2" marker-end="url(#arr)"/>
+<rect x="254" y="40" width="105" height="34" rx="10" fill="#7A5AF8" stroke="#7A5AF8" stroke-width="1.5"/>
+<text x="306.5" y="61.5" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">③ AI 填槽</text>
+<rect x="254" y="74" width="105" height="96" rx="10" fill="#EEE9FE" stroke="#7A5AF8" stroke-width="1.5"/>
+<text x="306.5" y="109.9" text-anchor="middle" font-size="11" font-weight="400" fill="#1d1d1f">输出 Shot 列表</text>
+<text x="306.5" y="125.8" text-anchor="middle" font-size="10" font-weight="400" fill="#1d1d1f">Schema 校验</text>
+<text x="306.5" y="141.8" text-anchor="middle" font-size="10" font-weight="400" fill="#1d1d1f">未知 ID 整包拒绝</text>
+<line x1="359" y1="122" x2="371" y2="122" stroke="#6e6e73" stroke-width="1.2" marker-end="url(#arr)"/>
+<rect x="371" y="40" width="105" height="34" rx="10" fill="#2F6FED" stroke="#2F6FED" stroke-width="1.5"/>
+<text x="423.5" y="61.5" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">④ 展开</text>
+<rect x="371" y="74" width="105" height="96" rx="10" fill="#E8F0FE" stroke="#2F6FED" stroke-width="1.5"/>
+<text x="423.5" y="109.9" text-anchor="middle" font-size="11" font-weight="400" fill="#1d1d1f">按依赖补前置镜头</text>
+<text x="423.5" y="125.8" text-anchor="middle" font-size="10" font-weight="400" fill="#1d1d1f">解析起止锚图</text>
+<text x="423.5" y="141.8" text-anchor="middle" font-size="10" font-weight="400" fill="#1d1d1f">+ 时长</text>
+<line x1="476" y1="122" x2="488" y2="122" stroke="#6e6e73" stroke-width="1.2" marker-end="url(#arr)"/>
+<rect x="488" y="40" width="105" height="34" rx="10" fill="#2E9E6B" stroke="#2E9E6B" stroke-width="1.5"/>
+<text x="540.5" y="61.5" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">⑤ 生成</text>
+<rect x="488" y="74" width="105" height="96" rx="10" fill="#E3F4EC" stroke="#2E9E6B" stroke-width="1.5"/>
+<text x="540.5" y="109.9" text-anchor="middle" font-size="11" font-weight="400" fill="#1d1d1f">首尾关键帧</text>
+<text x="540.5" y="125.8" text-anchor="middle" font-size="10" font-weight="400" fill="#1d1d1f">图生视频</text>
+<text x="540.5" y="141.8" text-anchor="middle" font-size="10" font-weight="400" fill="#1d1d1f">无锚图标 unanchored</text>
+<line x1="593" y1="122" x2="605" y2="122" stroke="#6e6e73" stroke-width="1.2" marker-end="url(#arr)"/>
+<rect x="605" y="40" width="105" height="34" rx="10" fill="#2E9E6B" stroke="#2E9E6B" stroke-width="1.5"/>
+<text x="657.5" y="61.5" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">⑥ 合成</text>
+<rect x="605" y="74" width="105" height="96" rx="10" fill="#E3F4EC" stroke="#2E9E6B" stroke-width="1.5"/>
+<text x="657.5" y="109.9" text-anchor="middle" font-size="11" font-weight="400" fill="#1d1d1f">字幕 · 步骤号</text>
+<text x="657.5" y="125.8" text-anchor="middle" font-size="10" font-weight="400" fill="#1d1d1f">警示 · 证据脚注</text>
+<text x="657.5" y="141.8" text-anchor="middle" font-size="10" font-weight="400" fill="#1d1d1f">无证据句不发声</text>
+<line x1="710" y1="122" x2="722" y2="122" stroke="#6e6e73" stroke-width="1.2" marker-end="url(#arr)"/>
+<rect x="722" y="40" width="105" height="34" rx="10" fill="#8E8E93" stroke="#8E8E93" stroke-width="1.5"/>
+<text x="774.5" y="61.5" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">⑦ 产物</text>
+<rect x="722" y="74" width="105" height="96" rx="10" fill="#F2F2F7" stroke="#8E8E93" stroke-width="1.5"/>
+<text x="774.5" y="109.9" text-anchor="middle" font-size="11" font-weight="400" fill="#1d1d1f">mp4 + srt</text>
+<text x="774.5" y="125.8" text-anchor="middle" font-size="10" font-weight="400" fill="#1d1d1f">evidence-manifest</text>
+<text x="774.5" y="141.8" text-anchor="middle" font-size="10" font-weight="400" fill="#1d1d1f">shots.json</text>
+<line x1="827" y1="122" x2="839" y2="122" stroke="#6e6e73" stroke-width="1.2" marker-end="url(#arr)"/>
+<rect x="839" y="40" width="105" height="34" rx="10" fill="#F28C28" stroke="#F28C28" stroke-width="1.5"/>
+<text x="891.5" y="61.5" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">⑧ 验收</text>
+<rect x="839" y="74" width="105" height="96" rx="10" fill="#FDEEDC" stroke="#F28C28" stroke-width="1.5"/>
+<text x="891.5" y="109.9" text-anchor="middle" font-size="11" font-weight="400" fill="#1d1d1f">技术复核</text>
+<text x="891.5" y="125.8" text-anchor="middle" font-size="10" font-weight="400" fill="#1d1d1f">业务签认</text>
+<text x="891.5" y="141.8" text-anchor="middle" font-size="10" font-weight="400" fill="#1d1d1f">双状态字段</text>
+<path d="M306 178 L315 190 L306 202 L297 190 Z" fill="#D64545"/>
+<text x="306" y="225" text-anchor="middle" font-size="11" font-weight="700" fill="#D64545">门禁 1：值域 / ID 校验</text>
+<path d="M540 178 L549 190 L540 202 L531 190 Z" fill="#D64545"/>
+<text x="540" y="243" text-anchor="middle" font-size="11" font-weight="700" fill="#D64545">门禁 2：无锚图需人确认</text>
+<path d="M657 178 L666 190 L657 202 L648 190 Z" fill="#D64545"/>
+<text x="657" y="225" text-anchor="middle" font-size="11" font-weight="700" fill="#D64545">门禁 3：无证据不发声</text>
+<path d="M891 178 L900 190 L891 202 L882 190 Z" fill="#D64545"/>
+<text x="891" y="243" text-anchor="middle" font-size="11" font-weight="700" fill="#D64545">门禁 4：两位复核人签认</text>
+<path d="M 137 300 L 137 285 L 840 285 L 840 300" fill="none" stroke="#F28C28" stroke-width="1.6" stroke-dasharray="4 3"/>
+<text x="490" y="315" text-anchor="middle" font-size="12" font-weight="400" fill="#F28C28">验收不通过 → 改槽位（换锚图 / 换镜头）重生成该段，其他段不动；本体与证据链不变</text>
+<text x="480.0" y="346" text-anchor="middle" font-size="12" font-weight="400" fill="#8E8E93">图 10 · 四道门禁全是确定性检查或人签认，AI 只在第③步有写权限</text>
+</svg>

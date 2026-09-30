@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 490" width="100%" role="img" aria-label="图8 锁定图本体：对象、属性取值、链接实例各挂一张图" style="font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;max-width:960px;display:block;margin:0 auto">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#6e6e73"/></marker><marker id="arrb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#2F6FED"/></marker></defs>
+<rect width="960" height="490" fill="#FFFFFF" rx="12"/>
+<rect x="30" y="40" width="170" height="90" rx="10" fill="#E8F0FE" stroke="#2F6FED" stroke-width="1.5"/>
+<text x="115.0" y="70.7" text-anchor="middle" font-size="13" font-weight="700" fill="#1d1d1f">对象：技师 Actor</text>
+<text x="115.0" y="89.5" text-anchor="middle" font-size="12" font-weight="400" fill="#1d1d1f">身份锚图 ×1</text>
+<text x="115.0" y="108.4" text-anchor="middle" font-size="12" font-weight="400" fill="#1d1d1f">（正面标准像）</text>
+<text x="240" y="60" text-anchor="start" font-size="13" font-weight="700" fill="#1d1d1f">属性取值 = 图（值域有限 ⇒ 图有限）</text>
+<text x="335" y="88" text-anchor="middle" font-size="11" font-weight="400" fill="#6e6e73">angle=front</text>
+<text x="425" y="88" text-anchor="middle" font-size="11" font-weight="400" fill="#6e6e73">angle=side</text>
+<text x="515" y="88" text-anchor="middle" font-size="11" font-weight="400" fill="#6e6e73">angle=rear-3q</text>
+<text x="292" y="150" text-anchor="end" font-size="11" font-weight="400" fill="#6e6e73">state=idle</text>
+<rect x="300" y="100" width="70" height="50" rx="5" fill="#fff" stroke="#2F6FED"/>
+<circle cx="335" cy="118" r="8" fill="#2F6FED" fill-opacity="0.6"/>
+<rect x="322" y="128" width="26" height="16" rx="3" fill="#2F6FED" fill-opacity="0.35"/>
+<text x="335" y="147" text-anchor="middle" font-size="9" font-weight="400" fill="#1d1d1f">🔒</text>
+<rect x="390" y="100" width="70" height="50" rx="5" fill="#fff" stroke="#2F6FED"/>
+<circle cx="425" cy="118" r="8" fill="#2F6FED" fill-opacity="0.6"/>
+<rect x="412" y="128" width="26" height="16" rx="3" fill="#2F6FED" fill-opacity="0.35"/>
+<text x="425" y="147" text-anchor="middle" font-size="9" font-weight="400" fill="#1d1d1f">🔒</text>
+<rect x="480" y="100" width="70" height="50" rx="5" fill="#fff" stroke="#2F6FED"/>
+<circle cx="515" cy="118" r="8" fill="#2F6FED" fill-opacity="0.6"/>
+<rect x="502" y="128" width="26" height="16" rx="3" fill="#2F6FED" fill-opacity="0.35"/>
+<text x="515" y="147" text-anchor="middle" font-size="9" font-weight="400" fill="#1d1d1f">🔒</text>
+<text x="292" y="212" text-anchor="end" font-size="11" font-weight="400" fill="#6e6e73">state=holding wrench</text>
+<rect x="300" y="162" width="70" height="50" rx="5" fill="#fff" stroke="#2F6FED"/>
+<circle cx="335" cy="180" r="8" fill="#2F6FED" fill-opacity="0.6"/>
+<rect x="322" y="190" width="26" height="16" rx="3" fill="#2F6FED" fill-opacity="0.35"/>
+<text x="335" y="209" text-anchor="middle" font-size="9" font-weight="400" fill="#1d1d1f">🔒</text>
+<rect x="390" y="162" width="70" height="50" rx="5" fill="#fff" stroke="#2F6FED"/>
+<circle cx="425" cy="180" r="8" fill="#2F6FED" fill-opacity="0.6"/>
+<rect x="412" y="190" width="26" height="16" rx="3" fill="#2F6FED" fill-opacity="0.35"/>
+<text x="425" y="209" text-anchor="middle" font-size="9" font-weight="400" fill="#1d1d1f">🔒</text>
+<rect x="480" y="162" width="70" height="50" rx="5" fill="#fff" stroke="#2F6FED"/>
+<circle cx="515" cy="180" r="8" fill="#2F6FED" fill-opacity="0.6"/>
+<rect x="502" y="190" width="26" height="16" rx="3" fill="#2F6FED" fill-opacity="0.35"/>
+<text x="515" y="209" text-anchor="middle" font-size="9" font-weight="400" fill="#1d1d1f">🔒</text>
+<text x="292" y="274" text-anchor="end" font-size="11" font-weight="400" fill="#6e6e73">state=alert</text>
+<rect x="300" y="224" width="70" height="50" rx="5" fill="#fff" stroke="#2F6FED"/>
+<circle cx="335" cy="242" r="8" fill="#2F6FED" fill-opacity="0.6"/>
+<rect x="322" y="252" width="26" height="16" rx="3" fill="#2F6FED" fill-opacity="0.35"/>
+<text x="335" y="271" text-anchor="middle" font-size="9" font-weight="400" fill="#1d1d1f">🔒</text>
+<rect x="390" y="224" width="70" height="50" rx="5" fill="#fff" stroke="#2F6FED"/>
+<circle cx="425" cy="242" r="8" fill="#2F6FED" fill-opacity="0.6"/>
+<rect x="412" y="252" width="26" height="16" rx="3" fill="#2F6FED" fill-opacity="0.35"/>
+<text x="425" y="271" text-anchor="middle" font-size="9" font-weight="400" fill="#1d1d1f">🔒</text>
+<rect x="480" y="224" width="70" height="50" rx="5" fill="#fff" stroke="#2F6FED"/>
+<circle cx="515" cy="242" r="8" fill="#2F6FED" fill-opacity="0.6"/>
+<rect x="502" y="252" width="26" height="16" rx="3" fill="#2F6FED" fill-opacity="0.35"/>
+<text x="515" y="271" text-anchor="middle" font-size="9" font-weight="400" fill="#1d1d1f">🔒</text>
+<line x1="200" y1="85" x2="290" y2="85" stroke="#2F6FED" stroke-width="1.6" marker-end="url(#arr)" stroke-dasharray="4 3"/>
+<rect x="620" y="40" width="310" height="60" rx="10" fill="#E3F4EC" stroke="#2E9E6B" stroke-width="1.5"/>
+<text x="775.0" y="65.1" text-anchor="middle" font-size="13" font-weight="700" fill="#1d1d1f">零件 BMS-01 的锚图</text>
+<text x="775.0" y="84.0" text-anchor="middle" font-size="12" font-weight="400" fill="#1d1d1f">installed / loosened / removed × 角度</text>
+<rect x="620" y="115" width="310" height="60" rx="10" fill="#E3F4EC" stroke="#2E9E6B" stroke-width="1.5"/>
+<text x="775.0" y="140.1" text-anchor="middle" font-size="13" font-weight="700" fill="#1d1d1f">链接实例 BMS —fastened_by→ Bolt×4</text>
+<text x="775.0" y="159.0" text-anchor="middle" font-size="12" font-weight="400" fill="#1d1d1f">锁一张“装配好的样子”⇒ 几何真值钉死</text>
+<rect x="620" y="190" width="310" height="60" rx="10" fill="#FDEEDC" stroke="#F28C28" stroke-width="1.5"/>
+<text x="775.0" y="215.1" text-anchor="middle" font-size="13" font-weight="700" fill="#1d1d1f">车内件锚图来源：维修手册图例</text>
+<text x="775.0" y="234.0" text-anchor="middle" font-size="12" font-weight="400" fill="#1d1d1f">锚图 ID = 手册页码 ⇒ 与证据链同一件事</text>
+<text x="30" y="320" text-anchor="start" font-size="13" font-weight="700" fill="#1d1d1f">视频 = 锚图之间的短补间（复用现有首尾关键帧图生视频链路）</text>
+<rect x="60" y="340" width="90" height="60" rx="6" fill="#fff" stroke="#2E9E6B" stroke-width="2"/>
+<text x="105" y="375" text-anchor="middle" font-size="13" font-weight="700" fill="#1d1d1f">装好</text>
+<text x="105" y="415" text-anchor="middle" font-size="11" font-weight="400" fill="#6e6e73">锁定锚图 🔒</text>
+<line x1="156" y1="370" x2="354" y2="370" stroke="#7A5AF8" stroke-width="1.6" marker-end="url(#arrb)"/>
+<text x="255" y="362" text-anchor="middle" font-size="12" font-weight="400" fill="#6e6e73">补间 ≤ 4s</text>
+<rect x="360" y="340" width="90" height="60" rx="6" fill="#fff" stroke="#2E9E6B" stroke-width="2"/>
+<text x="405" y="375" text-anchor="middle" font-size="13" font-weight="700" fill="#1d1d1f">松开</text>
+<text x="405" y="415" text-anchor="middle" font-size="11" font-weight="400" fill="#6e6e73">锁定锚图 🔒</text>
+<line x1="456" y1="370" x2="654" y2="370" stroke="#7A5AF8" stroke-width="1.6" marker-end="url(#arrb)"/>
+<text x="555" y="362" text-anchor="middle" font-size="12" font-weight="400" fill="#6e6e73">补间 ≤ 4s</text>
+<rect x="660" y="340" width="90" height="60" rx="6" fill="#fff" stroke="#2E9E6B" stroke-width="2"/>
+<text x="705" y="375" text-anchor="middle" font-size="13" font-weight="700" fill="#1d1d1f">取下</text>
+<text x="705" y="415" text-anchor="middle" font-size="11" font-weight="400" fill="#6e6e73">锁定锚图 🔒</text>
+<text x="480" y="440" text-anchor="middle" font-size="12" font-weight="700" fill="#7A5AF8">AI 只选起点锚图、终点锚图和时长；视频模型只补两张锁定图之间的运动</text>
+<text x="480.0" y="476" text-anchor="middle" font-size="12" font-weight="400" fill="#8E8E93">图 8 · 导演台缩成一个选图器：AI 只挑起点锚图、终点锚图和时长；相机坐标、爆炸比例被“两张图之间补间”替代</text>
+</svg>
