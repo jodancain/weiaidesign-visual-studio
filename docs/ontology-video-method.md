@@ -268,6 +268,10 @@ R 负责 · A 批准 · S 支持 · I 被通知
 - 对比页已更新为四路：<https://yundongyl.cn/ontology-video/compare/>；本体 JSON 含完整 Blender 层：`weiaidesign.com/api/v1/ontology/onto-5ed42749-7bd4-4fc6-b1db-a6c36101533b`。
 - 实施中修掉的 Blender 侧问题：proxy 尾翼曾悬在包围盒顶（改射线吸附表面）；构图过远（改按包围球配框）；灯光过硬（按主体长度缩放面光）。
 
+### 11.7 出片门禁：先发 HTML 脚本预览页（2026-09-30 起的硬规则）
+
+任何视频生成前，先把一份脚本预览页交给用户确认，确认后才调 `/generate`。页面由 `docs/ontology-video-method/tools/build_script_preview.py <ontology-id>` 从本体 JSON 生成：场景（灰模帧、资产来源、舞台原点）、每个人物 / 主体（灰模 + 重绘身份图、外形描述、模型、姿态、位置）、分镜（起点 / 终点锚图、锁定机位、时长、运动提示、字幕）、资产许可表、待确认清单、预计耗时与配额。示例：<https://yundongyl.cn/ontology-video/fight/script/>。这一步和审核页不重复：审核页是操作台（通过 / 驳回 / 改锚图对），脚本页是给决策者看的一页纸。
+
 ### 11.4 已知问题与未做
 
 1. **`AGENT_LLM_API_KEY` 在 router 上返回 401「无效的令牌」**（handoff env 版本），所有起草请求都静默回退到 relay 的 gpt-5.4-mini；本体质量可接受，但要用更强模型需先换 key。本体 JSON 的 `errors[0]` 会记录这次回退。
