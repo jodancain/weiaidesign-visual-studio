@@ -12,7 +12,7 @@ export async function GET(request: Request) {
     openapi: "3.1.0",
     info: {
       title: "Youngtuo Visual Studio API",
-      version: "1.3.0",
+      version: "1.4.0",
     },
     servers: [{ url: publicBaseUrl }],
     security: [{ bearerAuth: [] }],
@@ -236,6 +236,65 @@ export async function GET(request: Request) {
           summary: "Proxy image-to-video job status when available",
           parameters: [{ name: "job_id", in: "path", required: true, schema: { type: "string" } }],
           responses: { "200": { description: "Image-to-video job status" } },
+        },
+      },
+      "/ontology": {
+        post: {
+          summary: "本体视频法 C 线：需求 → 本体（对象/属性/链接/锚图/镜头），默认随即开始锚图生成",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["brief"],
+                  properties: {
+                    brief: { type: "string", description: "视频需求原文（≥ 8 字）" },
+                    audience: { type: "string", enum: ["owner", "showroom", "accessory"], default: "showroom" },
+                    aspect_ratio: { type: "string", enum: ["16:9", "9:16", "1:1"], default: "16:9" },
+                    model: { type: "string", description: "优先使用的 LLM 模型名（可选）" },
+                    auto_anchors: { type: "boolean", default: true, description: "false 时只起草本体，不生成锚图" },
+                  },
+                },
+              },
+            },
+          },
+          responses: { "201": { description: "已起草；返回 id、review_url（人工审核 HTML）、json_url" } },
+        },
+        get: { summary: "最近的本体列表", responses: { "200": { description: "items[]" } } },
+      },
+      "/ontology/{id}": {
+        get: {
+          summary: "本体 JSON（会同步镜头视频任务状态）",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "200": { description: "Ontology" }, "404": { description: "not found" } },
+        },
+        patch: {
+          summary: "写入审核决定：anchors{id: approved|rejected|{status,feedback}}、shots{id:{status,caption,motion_prompt}}、notes",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "200": { description: "state 与通过数量" } },
+        },
+      },
+      "/ontology/{id}/anchors": {
+        post: {
+          summary: "开始（重）生成锚图；body.anchor_ids 可选，缺省为所有待生成/失败的锚图",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "202": { description: "已开始" }, "409": { description: "已有任务在跑" } },
+        },
+      },
+      "/ontology/{id}/generate": {
+        post: {
+          summary: "把已通过且两端锚图已通过的镜头提交为首尾关键帧图生视频任务（固定 8 秒）",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "202": { description: "submitted 数量与各镜头 job id" }, "400": { description: "没有可提交的镜头" } },
+        },
+      },
+      "/ontology/{id}/review": {
+        get: {
+          summary: "人工审核页（独立 HTML：对象与锚图、链接图、镜头起止锚图、字幕、生成结果）",
+          security: [],
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "200": { description: "text/html" } },
         },
       },
       "/openapi.json": {

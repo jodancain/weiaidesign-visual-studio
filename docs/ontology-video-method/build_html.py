@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 """Markdown -> self-contained HTML with the SVG figures inlined. Run: uv run --with markdown python3 build_html.py"""
-import markdown, pathlib, re
+import markdown, pathlib, re, base64
 HERE = pathlib.Path(__file__).parent
 src = (HERE.parent / "ontology-video-method.md").read_text()
 md = markdown.Markdown(extensions=["tables", "fenced_code", "toc"], extension_configs={"toc": {"toc_depth": "2"}})
 body = md.convert(src)
 # inline figures
 def inline(m):
-    name = pathlib.Path(m.group(1)).name
-    svg = (HERE / name).read_text()
-    return f'<figure class="fig">{svg}</figure>'
-body = re.sub(r'<p><img alt="[^"]*" src="\./ontology-video-method/([^"]+)"\s*/?></p>', inline, body)
+    alt, name = m.group(1), pathlib.Path(m.group(2)).name
+    path = HERE / name
+    if name.endswith(".svg"):
+        return f'<figure class="fig">{path.read_text()}</figure>'
+    b64 = base64.b64encode(path.read_bytes()).decode()
+    mime = "image/png" if name.endswith(".png") else "image/jpeg"
+    return f'<figure class="fig"><img src="data:{mime};base64,{b64}" alt="{alt}" loading="lazy"><figcaption>{alt}</figcaption></figure>'
+body = re.sub(r'<p><img alt="([^"]*)" src="\./ontology-video-method/([^"]+)"\s*/?></p>', inline, body)
 # callouts: blockquotes starting with 📌 / 🎯
 body = body.replace('<blockquote>\n<p>📌', '<blockquote class="callout bg">\n<p>📌').replace('<blockquote>\n<p>🎯', '<blockquote class="callout goal">\n<p>🎯')
 html = f"""<!doctype html>
@@ -42,7 +46,7 @@ hr{{border:0;border-top:1px solid var(--line);margin:32px 0}}
 .toc{{background:var(--soft);border-radius:8px;padding:12px 18px;margin:20px 0;font-size:14.5px}}
 .toc ul{{margin:0;padding-left:18px}}
 figure.fig{{margin:18px 0;padding:6px;background:#fff;border:1px solid var(--line);border-radius:12px}}
-figure.fig svg{{width:100%;height:auto}}
+figure.fig svg,figure.fig img{{width:100%;height:auto;border-radius:8px}}figure.fig figcaption{{text-align:center;color:var(--muted);font-size:12px;margin-top:6px}}
 a{{color:var(--accent);text-decoration:none}}a:hover{{text-decoration:underline}}
 .meta{{color:var(--muted);font-size:13px;margin-top:40px;border-top:1px solid var(--line);padding-top:12px}}
 </style></head><body><div class="wrap">

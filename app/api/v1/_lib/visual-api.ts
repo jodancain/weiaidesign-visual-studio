@@ -5,7 +5,7 @@ import { basename, dirname, join } from "node:path";
 import { Buffer } from "node:buffer";
 import { NextResponse } from "next/server";
 
-type ReferenceImage = {
+export type ReferenceImage = {
   buffer: Buffer;
   mimeType: string;
   filename: string;
@@ -131,7 +131,7 @@ function apiBaseUrl(request: Request) {
   return `${url.origin}/api/v1`;
 }
 
-function imagePublicUrl(request: Request, imageId: string, filename: string) {
+export function imagePublicUrl(request: Request, imageId: string, filename: string) {
   return `${apiBaseUrl(request)}/generated-images/${encodeURIComponent(imageId)}/${encodeURIComponent(filename)}`;
 }
 
@@ -219,7 +219,7 @@ function orderedImageModels(preferred = "") {
   return Array.from(new Set([clean, ...imageGenerationModels]));
 }
 
-async function generateImage(prompt: string, aspect: string, outPath: string, qualityOverride = "", transparent = false, preferredModel = "") {
+export async function generateImage(prompt: string, aspect: string, outPath: string, qualityOverride = "", transparent = false, preferredModel = "") {
   const { baseUrl, apiKey } = openAIConfig();
   const models = orderedImageModels(preferredModel);
   let payload: { data?: Array<{ b64_json?: string; url?: string }> } | null = null;
@@ -261,7 +261,7 @@ async function generateImage(prompt: string, aspect: string, outPath: string, qu
   return { model: usedModel || imageModel, mimeType: normalizeImageMime(transparent ? "image/png" : `image/${imageOutputFormat || "png"}`), size: buffer.length, mode: "generation" };
 }
 
-async function editImageWithReference(prompt: string, aspect: string, outPath: string, references: ReferenceImage[], qualityOverride = "", transparent = false, preferredModel = "") {
+export async function editImageWithReference(prompt: string, aspect: string, outPath: string, references: ReferenceImage[], qualityOverride = "", transparent = false, preferredModel = "") {
   const { baseUrl, apiKey } = openAIConfig();
   const validRefs = references.filter((ref) => ref?.buffer?.length);
   if (!validRefs.length) throw new Error("reference image is empty");

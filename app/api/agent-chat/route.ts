@@ -1,4 +1,5 @@
 import { jsonCors, optionsResponse, requireVideoToken } from "../v1/_lib/visual-api";
+import { chatUpstreams } from "../v1/_lib/llm";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -274,24 +275,6 @@ const TOOLS = [
     },
   },
 ];
-
-type ChatUpstream = { base: string; key: string; models: string[] };
-
-/* 主备双上游：AGENT_LLM_*（新 router，多模型自动匹配）优先，原 relay 备选 */
-function chatUpstreams(): ChatUpstream[] {
-  const list: ChatUpstream[] = [];
-  const agentBase = (env.AGENT_LLM_BASE_URL || "").replace(/\/+$/, "");
-  const agentKey = env.AGENT_LLM_API_KEY || "";
-  const agentModels = (env.AGENT_LLM_MODELS || "claude-sonnet-5,gpt-5.5,kimi-k2.7-code")
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
-  if (agentBase && agentKey && agentModels.length) list.push({ base: agentBase, key: agentKey, models: agentModels });
-  const relayBase = (env.IMAGE_OPENAI_BASE_URL || "").replace(/\/+$/, "");
-  const relayKey = env.IMAGE_OPENAI_API_KEY || env.OPENAI_API_KEY || "";
-  if (relayBase && relayKey) list.push({ base: relayBase, key: relayKey, models: [env.AGENT_LLM_MODEL || "gpt-5.4-mini"] });
-  return list;
-}
 
 export async function POST(request: Request) {
   const authError = requireVideoToken(request);

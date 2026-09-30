@@ -41,6 +41,7 @@ import {
   Type,
   Wand2,
   X,
+  Network,
   Zap,
 } from "lucide-react";
 import {
@@ -2865,6 +2866,9 @@ export default function Home() {
               </button>
               <a className="videoEntry" href="/video" title="图生视频（独立页面）">
                 <Clapperboard size={14} /> 视频
+              </a>
+              <a className="videoEntry" href="/ontology" title="本体视频法 · 需求→本体→锚图→人审→出片">
+                <Network size={14} /> 本体
               </a>
               {exportMenu ? (
                 <div className="exportMenu" onMouseLeave={() => setExportMenu(false)}>
