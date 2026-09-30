@@ -1,6 +1,6 @@
 # 本体视频法：对象、关系、数值与锁定图路线
 
-> 版本 v0.4 · 2026-09-30 · 麦秋选 · 图文版 · C 线工作流已在 Visual Studio 内实现并跑通 E2E
+> 版本 v0.5 · 2026-09-30 · 麦秋选 · 图文版 · C 线工作流已在 Visual Studio 内实现并部署生产；四种出片路线同题对比（含 Blender 层）
 
 > 📌 **背景**
 > 售后技术支持已有三处明确需求指向"用数模/动画做作业指导与培训内容"（BRD 第 10 条、9/11 技术支持日会、9/20 门店场景纪要），但都卡在"3D 数模来源"。与此同时，M9 / ES8 本体建设已经沉淀了对象、链接、证据片段、复核状态这套框架。本方案把两件事接起来：**用已有的本体框架驱动视频生成，用锁定图片绕开数模来源问题。**
@@ -19,7 +19,7 @@
 | "本体已建模，AI 只填数值"能不能成立 | **成立。** SU7 服务车库 V2.3 已跑通同一模式：AI 只输出受控 patch，前端按能力表校验，未知 ID 原子拒绝，无 AI 时手动照常用。 |
 | "填数值"填什么 | **填有界枚举和比例，不填裸浮点。** 相机坐标、位移这类连续值由程序算，或直接被锚图替代。 |
 | 本体之间的联系怎么进画面 | 链接不需要新对象类型，**一条链接被渲染成三种画面语法之一：同框、先后、脚注**。 |
-| 要不要先建 3D 白模 | **不必。** 把图片当属性值锁死（锚图），视频只做锚图之间的短补间；维修指导线也够用，需要绕零件自由转的镜头以后单独补 3D。 |
+| 要不要先建 3D 白模 | **不必先建，但可以后挂。** 把图片当属性值锁死（锚图），视频只做锚图之间的短补间。需要严格同机位、多状态几何真值时，再给本体加一层 **Blender 层**：场景预设、主体归一化、状态操作、机位语法全部是有界字段，"怎么建好场景"本身写进本体，程序把数值变成灰模再重绘（见 5.5、11.6）。 |
 
 ---
 
@@ -87,7 +87,7 @@
 
 ![图7 路线矩阵](./ontology-video-method/fig-07-route-matrix.svg)
 
-自由生成保得住内容层（出场对象、顺序、旁白证据），保不住对象同一性和关系几何真值，对维修指导线不够。3D 白模全都保得住，但要先建模，而数模来源本身就是卡点。**锁定图本体是中间解：把"连续可算"换成"离散锚定 + 短补间"。**
+自由生成保得住内容层（出场对象、顺序、旁白证据），保不住对象同一性和关系几何真值，对维修指导线不够。3D 白模全都保得住，但要先建模，而数模来源本身就是卡点。**锁定图本体是中间解：把"连续可算"换成"离散锚定 + 短补间"。** 第四条路线（5.5）不是另起一套，而是在锁定图本体上加一层有界的 Blender 字段，让需要严格几何的锚图从灰模来。
 
 ### 5.2 锁定图本体的定义
 
@@ -113,6 +113,23 @@
 | 组合状态（链接实例） | 手册分解图 / 装配图 | 中 |
 
 组合数要控：不给全部零件建锚图，只给当前 SOP 用到的件建，按需扩。生成不贵，**审图是瓶颈**，审过的图必须进本体永久复用。
+
+### 5.5 Blender 层：把"怎么建好场景"也写进本体
+
+![图12 Blender 层](./ontology-video-method/fig-12-blender-layer.svg)
+
+锚图路线的机位是"描述出来"的：LLM 在提示词里写"后 3/4 视角"，GPT-image 大致照做，两张锚图之间机位差多少没人能保证。要做**同机位对比、多状态切换**这类几何必须严格的镜头，就要有一处能把机位钉成数字的地方。Blender 层就是这个地方，而且它不是给某一台车写的脚本，而是**本体的一部分**——和对象、链接、锚图并列的一组字段，值域全部有界：
+
+| 字段组 | 内容 | AI 填什么 |
+|---|---|---|
+| 场景预设 `scene` | `preset ∈ {showroom_dark, studio_white, garage, outdoor_overcast}`，`floor_reflective` | 选枚举 |
+| 主体归一化 `subject` | 资产（worker 模型库里选）或 proxy 盒 / 圆柱 + 尺寸；文件的 up / forward 轴；真实长度 `length_m`；转台角 | 选枚举 + 填几个米 / 度 |
+| 状态 = 有界操作 `states` | `hide / show`（按名字正则）、`add_part`（`at ∈` 7 个位置枚举，程序射线吸附到表面）、`rotate`、`translate` | 从操作菜单里挑 |
+| 机位语法 `anchor.render` | `azimuth_deg / elevation_deg / distance_factor / focal_mm / look_at ∈ {center, front, rear, roof, wheel_front, ground}`；距离系数按包围球自动配框 | 5 个有界数字 |
+
+服务端 `normalizeDraft()` 夹紧：未知预设 / 资产 / 位置枚举整条丢弃，数值 clamp 到区间，不是主体的锚图不带机位。然后一个**通用 bpy 脚本**（`render_ontology.py`，没有任何主体特定代码）按这份 spec 搭棚、导入并归一化主体、套状态、摆相机，出灰模 PNG；再以"灰模为第一参考、身份图为第二参考"用 GPT-image 重绘，之后进同一套审核页与补间。
+
+这样 ③ 路线（车库截图）里"机位靠人在车库摆、状态靠 UI 勾"的两件事都变成了本体字段：换主体只换 `subject`；没有 GLB 的车型先用 proxy 盒子把机位和状态定死，等数模到位只换资产名。这就是"本体已建模，AI 只填数值"在 3D 侧的落地。
 
 ---
 
@@ -192,13 +209,13 @@ R 负责 · A 批准 · S 支持 · I 被通知
 | 入口 | 说明 |
 |---|---|
 | 页面 `/ontology` | 写需求、选受众线（展厅 / 精品选配 / 车主）与画幅，一键起草本体并开始出锚图；列出最近本体 |
-| `POST /api/v1/ontology` | 需求 → LLM 起草本体 JSON（对象 / 属性枚举 / 链接 / 锚图计划 / 镜头），服务端规范化：未知 id、跨对象补间、重复起止对一律丢弃并记日志 |
-| `POST /api/v1/ontology/{id}/anchors` | 后台逐张生成锚图：先 identity，再以 identity 为参考图做属性 / 链接锚图（多参考图编辑，保证同一性） |
+| `POST /api/v1/ontology` | 需求 → LLM 起草本体 JSON（对象 / 属性枚举 / 链接 / 锚图计划 / 镜头），服务端规范化：未知 id、跨对象补间、重复起止对一律丢弃并记日志。`render_backend=blender` 时额外起草 Blender 层（5.5），`GET` 列表返回 worker 是否可用与模型库 |
+| `POST /api/v1/ontology/{id}/anchors` | 后台逐张生成锚图：先 identity，再以 identity 为参考图做属性 / 链接锚图（多参考图编辑，保证同一性）。Blender 后端先调 worker 出灰模，再以灰模 + identity 为参考重绘 |
 | `GET /api/v1/ontology/{id}/review` | **人工审核 HTML**：对象与属性锚图卡片（通过 / 驳回 / 填意见重生成）、关系图与链接表、镜头起止锚图 + 可改字幕与运动提示、审核备注；后台任务中自动刷新 |
 | `PATCH /api/v1/ontology/{id}` | 写入审核决定；全部镜头通过且两端锚图通过 → 状态 `approved` |
 | `POST /api/v1/ontology/{id}/generate` | 已通过镜头 → 网关 `image-videos`（`first_image_b64 / last_image_b64 / video_prompt`，固定 8 秒）；`GET` 本体时自动同步视频状态与链接 |
 
-存储在 `IMAGE_OUTPUT_DIR/_ontology/{id}.json`，锚图复用 `generated-images` 目录与公网 URL。可选环境变量 `ONTOLOGY_MAX_ANCHORS`（默认 14）、`ONTOLOGY_MAX_SHOTS`（默认 6）。
+存储在 `IMAGE_OUTPUT_DIR/_ontology/{id}.json`，锚图复用 `generated-images` 目录与公网 URL。可选环境变量 `ONTOLOGY_MAX_ANCHORS`（默认 14）、`ONTOLOGY_MAX_SHOTS`（默认 6）、`BLENDER_STORY_WORKER_URL`（不设则 Blender 后端不可选）。worker 侧脚本快照见 `docs/ontology-video-method/blender-worker/`。
 
 ### 11.2 与方法的对应
 
@@ -231,13 +248,31 @@ R 负责 · A 批准 · S 支持 · I 被通知
 
 - ① 车不是 SU7，首尾两帧是两台不同的车——自由生成保不住对象同一性的实证。
 - ② 与 ③ 都保住同一性、画质相当；③ 几何来自 GLB 是真的，② 是参考编辑"像"出来的但不需要 3D 资产且人可逐张把关。两者可合并：车库截图当锚图喂进本体。
-- 三路共同问题：Seedance 把 "subtle push-in" 做成大幅推近，机位没锁住；下一步用 "locked-off static camera" 措辞复测。
+- 三路共同问题：Seedance 把 "subtle push-in" 做成大幅推近，机位没锁住——11.6 里用 "locked-off static camera" 措辞复测已解决。
 - 暴露的产品缺口已修：审核页可换镜头起止锚图（PATCH 接受 `start_anchor / end_anchor`）；生产 `review_url` 曾指向容器内 origin，改用 `PUBLIC_BASE_URL`。
 - 网关任务在内存：容器重建导致一次任务丢失（① 重提），需落盘。
+
+### 11.6 第四条路线：本体 + Blender 层（2026-09-30 下午，生产环境）
+
+同一需求，`POST /api/v1/ontology` 带 `render_backend=blender`。claude-sonnet-5 起草出 2 对象 / 1 链接 / 3 锚图 / 2 镜头，外加 Blender 层：`showroom_dark` 预设、资产 `su7.glb`（Y-up / Z-forward，4.97 m）、状态 `state-spoiler = add_part(box 1.4×0.28×0.06 m, at rear-top, tilt −8°)`；身份锚图与"装尾翼"链接锚图共用机位 `az145 / el15 / ×1.1 / 35mm / look_at rear`，细节锚图 `×0.8 / 50mm`。Windows worker 一分钟出三张灰模，重绘两分半，审核页全通过后出片。
+
+![上排 Blender 灰模 · 下排重绘锚图](./ontology-video-method/compare-20260930/route4-greybox-restyle.jpg)
+
+![④ 成片第 0 / 64 / 128 / 190 帧：机位锁住，只有尾翼从无到有](./ontology-video-method/compare-20260930/route4-shot01-frames.jpg)
+
+![四路首帧 / 末帧：① ② ③ ④](./ontology-video-method/compare-20260930/grid-first-last-4.jpg)
+
+- **机位问题的答案**：两张灰模逐像素同机位，加上运动提示改为 "Locked-off static camera, zero camera movement, no zoom, no pan"（去掉 push-in 字眼），`dreamina-seedance-2-0` 真的钉住了机位，四路里唯一做到"同机位对比"。推近是提示词问题，不是关键帧来源问题；这句已作为同机位对比镜头的默认运动模板。
+- **④ 对 ③ 的增量不在画质，在"机位与状态是本体字段"**：③ 要人在车库摆机位、勾状态，换主体重来；④ 换主体只改 `subject`，没有 GLB 用 proxy 盒子先把机位状态定死。
+- 第二镜头（宽景 → 细节，运动提示本来就是慢推近）网关回退到 `doubao-seedance-1-5-pro`，推近正常。
+- 对比页已更新为四路：<https://yundongyl.cn/ontology-video/compare/>；本体 JSON 含完整 Blender 层：`weiaidesign.com/api/v1/ontology/onto-5ed42749-7bd4-4fc6-b1db-a6c36101533b`。
+- 实施中修掉的 Blender 侧问题：proxy 尾翼曾悬在包围盒顶（改射线吸附表面）；构图过远（改按包围球配框）；灯光过硬（按主体长度缩放面光）。
 
 ### 11.4 已知问题与未做
 
 1. **`AGENT_LLM_API_KEY` 在 router 上返回 401「无效的令牌」**（handoff env 版本），所有起草请求都静默回退到 relay 的 gpt-5.4-mini；本体质量可接受，但要用更强模型需先换 key。本体 JSON 的 `errors[0]` 会记录这次回退。
 2. 审核页无鉴权（人直接打开），生产若开 `REQUIRE_ACCESS_TOKEN=1` 则页内按钮需带 token，尚未处理。
-3. 未做：多镜头拼接成一条完整视频、字幕烧录、TTS；A / B 线（证据片段、手册图例作锚图）尚未接入。
+3. 未做：多镜头拼接成一条完整视频、字幕烧录、TTS；A / B 线（证据片段、手册图例作锚图）尚未接入；② 与 ③/④ 合并（车库截图或灰模直接作锚图源）只是路径已通，还没做成一个按钮。
+4. Blender 层目前只支持单主体、`add_part` 只有盒 / 圆柱 proxy；worker 模型库里只有 `su7.glb`，其他主体走 proxy。worker 只对 Docker host 开放，本体 API 是唯一入口。
+5. 网关任务在内存，容器重建即丢；需落盘或本体侧记录 job 后自动重提。
 4. ~~生产部署未执行~~ 2026-09-30 已按 `ops/windows/README-rebuild.md` 部署（WSL 源同步 → rsync 到 `C:\\Users\\qrrwi\\build\\weiaidesign-web` → 计划任务构建 → `up-web.ps1`），`weiaidesign.com/ontology` 与五个 API 均 200。生产 `AGENT_LLM_API_KEY` 有效（起草用 claude-sonnet-5），失效的只是 handoff env 副本。

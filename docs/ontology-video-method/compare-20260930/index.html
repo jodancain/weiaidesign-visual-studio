@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">
-<title>三种路线出片对比 · SU7 夜间展厅装运动尾翼</title>
+<title>四种路线出片对比 · SU7 夜间展厅装运动尾翼</title>
 <style>
 :root{--fg:#1d1d1f;--muted:#6e6e73;--line:#e5e5ea;--soft:#f5f5f7;--blue:#2F6FED;--orange:#F28C28;--green:#2E9E6B;--purple:#7A5AF8;--red:#D64545}
 @media(prefers-color-scheme:dark){:root{--fg:#f2f2f7;--muted:#9a9aa0;--line:#2c2c2e;--soft:#1c1c1e}body{background:#111}}
@@ -8,10 +8,10 @@
 .wrap{max-width:1280px;margin:0 auto;padding:28px 18px 80px}
 h1{font-size:26px;margin:0 0 6px}h2{font-size:20px;margin:40px 0 12px;padding-top:12px;border-top:1px solid var(--line)}h3{font-size:16px;margin:18px 0 6px}
 .muted{color:var(--muted)}.callout{background:var(--soft);border-left:3px solid var(--blue);padding:10px 14px;border-radius:6px;margin:12px 0}
-.cols{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}@media(max-width:900px){.cols{grid-template-columns:1fr}}
+.cols{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}.cols.three{grid-template-columns:repeat(3,1fr)}@media(max-width:1100px){.cols{grid-template-columns:repeat(2,1fr)}}@media(max-width:700px){.cols{grid-template-columns:1fr}}
 .card{border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:#fff}@media(prefers-color-scheme:dark){.card{background:#161618}}
 .card h3{margin-top:0}.tag{display:inline-block;font-size:11px;padding:1px 8px;border-radius:10px;background:var(--soft);color:var(--muted);vertical-align:middle}
-.c1{border-top:4px solid var(--red)}.c2{border-top:4px solid var(--purple)}.c3{border-top:4px solid var(--green)}
+.c1{border-top:4px solid var(--red)}.c2{border-top:4px solid var(--purple)}.c3{border-top:4px solid var(--green)}.c4{border-top:4px solid var(--blue)}.new{background:var(--blue);color:#fff}
 video,img{width:100%;border-radius:8px;display:block;background:#000}
 figure{margin:10px 0}figcaption{font-size:12px;color:var(--muted);text-align:center;margin-top:4px}
 table{width:100%;border-collapse:collapse;font-size:14px;margin:12px 0}th,td{border:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}th{background:var(--soft)}
@@ -19,15 +19,16 @@ table{width:100%;border-collapse:collapse;font-size:14px;margin:12px 0}th,td{bor
 pre{background:var(--soft);padding:8px 10px;border-radius:6px;font-size:11.5px;white-space:pre-wrap;word-break:break-word}
 ol li{margin:4px 0}
 </style></head><body><div class="wrap">
-<h1>三种路线出片对比 · SU7 夜间展厅 · 同机位装运动尾翼前后</h1>
-<p class="muted">2026-09-30 · 同一条需求、同一网关（<code>dreamina-seedance-2-0</code>，8 秒，16:9）、同一段运动提示。只换「首尾关键帧从哪来」。</p>
+<h1>四种路线出片对比 · SU7 夜间展厅 · 同机位装运动尾翼前后</h1>
+<p class="muted">2026-09-30 · 同一条需求、同一网关（<code>dreamina-seedance-2-0</code>，8 秒，16:9）、只换「首尾关键帧从哪来」。①②③ 共用同一段运动提示；④ 是 2026-09-30 下午追加的，运动提示改为「locked-off static camera」措辞（见第 4 节第 3 条）。</p>
 <div class="callout"><b>需求原文</b>：一台深空灰色小米SU7停在夜间展厅，地面有反光。同一个机位，先看原车，然后车尾装上黑色运动尾翼，对比装前和装后。氛围高级、安静、科技感。</div>
 
-<h2>0. 三路并排（左 ① · 中 ② · 右 ③）</h2>
-<video src="compare-3up.mp4" controls loop muted playsinline autoplay></video>
-<figure><img src="grid-first-last.jpg" alt="首帧末帧网格"><figcaption>上排：三路首帧 · 下排：三路末帧（第 190 帧）。左 ① 自由生成 · 中 ② 锚图本体 · 右 ③ 3D 白模重绘</figcaption></figure>
+<h2>0. 四路并排（左上 ① · 右上 ② · 左下 ③ · 右下 ④）</h2>
+<video src="compare-4up.mp4" controls loop muted playsinline autoplay></video>
+<figure><img src="grid-first-last-4.jpg" alt="首帧末帧网格"><figcaption>上排：四路首帧 · 下排：四路末帧（第 190 帧）。从左到右 ① 自由生成 · ② 锚图本体 · ③ 3D 白模重绘 · ④ 本体 + Blender 层。只有 ④ 的首尾帧机位没动。</figcaption></figure>
+<p class="muted">三路旧版并排：<a href="compare-3up.mp4">compare-3up.mp4</a></p>
 
-<h2>1. 三条路线各自怎么来的</h2>
+<h2>1. 四条路线各自怎么来的</h2>
 <div class="cols">
 <div class="card c1"><h3>① 自由生成 <span class="tag">无锁定图</span></h3>
 <p>只给网关三段英文提示词（首帧 / 末帧 / 运动），GPT-image 自己画两张关键帧，再补间。<b>没有任何参考图</b>。</p>
@@ -42,6 +43,17 @@ ol li{margin:4px 0}
 <figure><img src="garage-pair.jpg" alt="车库白模"><figcaption>车库原始两帧（默认青色漆，UI 已隐藏）</figcaption></figure>
 <figure><img src="restyled-pair.jpg" alt="重绘"><figcaption>重绘后：机位、车身比例、轮位与白模一致，尾翼在</figcaption></figure>
 <p class="muted">耗时：截图 ~20s，两次重绘各 ~40s，视频 ~6 分钟。人工介入：0（脚本驱动车库）。</p></div>
+<div class="card c4"><h3>④ 本体 + Blender 层 <span class="tag new">新增 · 生产环境</span></h3>
+<p><code>POST /api/v1/ontology</code> 加 <code>render_backend=blender</code>：LLM 除了对象 / 链接 / 锚图，还要产出一层 <b>Blender 层</b>——它本身就是本体的一部分，不含任何 SU7 特定代码：</p>
+<ul style="padding-left:18px;margin:6px 0">
+<li><b>场景预设</b>：<code>showroom_dark</code>（枚举 4 种）、地面是否反光</li>
+<li><b>主体归一化</b>：资产 <code>su7.glb</code>（worker 模型库里选）、文件 up/forward 轴、真实车长 4.97 m、转台角</li>
+<li><b>状态 = 有界操作</b>：<code>state-spoiler</code> → <code>add_part</code>（尾翼盒 1.4×0.28×0.06 m，贴在 <code>rear-top</code>，射线吸附到后备箱盖表面）</li>
+<li><b>机位语法</b>：每张锚图只写 方位角 / 仰角 / 距离系数 / 焦距 / 看向哪（枚举）。身份图与链接图共用 az145 / el15 / ×1.1 / 35mm，所以两张灰模<b>逐像素同机位</b></li>
+</ul>
+<p>Windows worker 用 Blender 5.2 headless 出灰模，再以「灰模为第一参考、身份图为第二参考」GPT-image 重绘，然后进同一套审核页与补间。</p>
+<figure><img src="anchors4-grid.jpg" alt="④ 灰模与重绘"><figcaption>上排：Blender 灰模（身份 · 装尾翼 · 细节）· 下排：重绘后的锚图。机位由本体数值决定，不靠 LLM 描述</figcaption></figure>
+<p class="muted">耗时：起草 ~15s，3 张灰模 ~1 分钟，3 张重绘 ~2.5 分钟，视频 ~6 分钟。人工介入：审核一次（本次直接全通过，只改了运动提示）。</p></div>
 </div>
 
 <h2>2. 成片</h2>
@@ -49,27 +61,31 @@ ol li{margin:4px 0}
 <div class="card c1"><h3>① 自由生成</h3><video src="video1.mp4" controls loop muted playsinline></video><figure><img src="frames1.jpg" alt=""><figcaption>第 0 / 64 / 128 / 190 帧</figcaption></figure></div>
 <div class="card c2"><h3>② 锚图本体</h3><video src="video2.mp4" controls loop muted playsinline></video><figure><img src="frames2.jpg" alt=""><figcaption>第 0 / 64 / 128 / 190 帧</figcaption></figure></div>
 <div class="card c3"><h3>③ 3D 白模重绘</h3><video src="video3.mp4" controls loop muted playsinline></video><figure><img src="frames3.jpg" alt=""><figcaption>第 0 / 64 / 128 / 190 帧</figcaption></figure></div>
+<div class="card c4"><h3>④ 本体 + Blender 层</h3><video src="video4.mp4" controls loop muted playsinline></video><figure><img src="frames4.jpg" alt=""><figcaption>第 0 / 64 / 128 / 190 帧 —— 机位锁住，只有尾翼从无到有</figcaption></figure></div>
 </div>
+<figure><video src="video4b.mp4" controls loop muted playsinline style="max-width:640px;margin:0 auto"></video><figcaption>④ 第二镜头「尾翼贴合与做工细节」：装尾翼宽景 → 细节锚图（同方位角，距离系数 0.8、50mm），运动提示本来就是慢推近，所以推近是对的。网关回退到 <code>doubao-seedance-1-5-pro</code>。</figcaption></figure>
+<figure><img src="frames4b.jpg" alt="" style="max-width:960px;margin:0 auto"><figcaption>④ 第二镜头 第 0 / 64 / 128 / 190 帧</figcaption></figure>
 
 <h2>3. 逐项对比</h2>
 <table>
-<tr><th>维度</th><th>① 自由生成</th><th>② 锚图本体</th><th>③ 3D 白模重绘</th></tr>
-<tr><td>车是不是 SU7</td><td class="bad">不是——首帧是一台泛化深灰轿车，末帧又变成另一款前脸</td><td class="good">是，前脸 / 轮毂 / 黄色卡钳全程一致</td><td class="good">是，直接来自车库真车 GLB 的比例与轮位</td></tr>
-<tr><td>首尾两帧是同一台车</td><td class="bad">否，前脸、大灯、格栅都变了</td><td class="good">是（末帧锚图以首帧为参考编辑）</td><td class="good">是（末帧重绘同时参考白模与首帧成品）</td></tr>
-<tr><td>尾翼"从无到有"</td><td class="mid">有，但顺带换了车</td><td class="good">有，只多了尾翼</td><td class="good">有，位置与车库几何一致</td></tr>
-<tr><td>机位是否锁住</td><td class="bad">否，Seedance 大幅推近</td><td class="bad">否，同样大幅推近</td><td class="bad">否，同样大幅推近</td></tr>
-<tr><td>展厅 / 光线一致</td><td class="mid">风格一致，布局变化</td><td class="good">一致</td><td class="good">一致</td></tr>
-<tr><td>人可干预的点</td><td>只能改提示词重跑全部</td><td class="good">审核页逐张锚图通过 / 驳回 / 重生成、换镜头起止锚图</td><td class="mid">改车库配置重截，重绘不可控</td></tr>
-<tr><td>可回溯性</td><td>无</td><td class="good">本体 JSON：对象 → 锚图 → 镜头 → job → 视频</td><td class="mid">车库配置 JSON + 两张图</td></tr>
-<tr><td>前置成本</td><td>0</td><td>LLM 起草 + N 张锚图（本次 5 张）</td><td>需要该车型的 3D 资产（SU7 有，M9 / ES8 没有）</td></tr>
-<tr><td>总耗时（到成片）</td><td>~6 分钟</td><td>~11 分钟 + 一次人审</td><td>~8 分钟</td></tr>
+<tr><th>维度</th><th>① 自由生成</th><th>② 锚图本体</th><th>③ 3D 白模重绘</th><th>④ 本体 + Blender 层</th></tr>
+<tr><td>车是不是 SU7</td><td class="bad">不是——首帧是一台泛化深灰轿车，末帧又变成另一款前脸</td><td class="good">是，前脸 / 轮毂 / 黄色卡钳全程一致</td><td class="good">是，直接来自车库真车 GLB 的比例与轮位</td><td class="good">是，GLB 真几何 + 身份图参考重绘</td></tr>
+<tr><td>首尾两帧是同一台车</td><td class="bad">否，前脸、大灯、格栅都变了</td><td class="good">是（末帧锚图以首帧为参考编辑）</td><td class="good">是（末帧重绘同时参考白模与首帧成品）</td><td class="good">是（两张灰模同机位同车，重绘时末帧以首帧成品为第二参考）</td></tr>
+<tr><td>尾翼"从无到有"</td><td class="mid">有，但顺带换了车</td><td class="good">有，只多了尾翼</td><td class="good">有，位置与车库几何一致</td><td class="good">有，尾翼位置由 <code>add_part rear-top</code> 射线吸附在后备箱盖上，几何真值</td></tr>
+<tr><td>机位是否锁住</td><td class="bad">否，Seedance 大幅推近</td><td class="bad">否，同样大幅推近</td><td class="bad">否，同样大幅推近</td><td class="good">是——四路里唯一锁住的；首尾帧灰模逐像素同机位 + 「locked-off static camera」措辞</td></tr>
+<tr><td>展厅 / 光线一致</td><td class="mid">风格一致，布局变化</td><td class="good">一致</td><td class="good">一致</td><td class="good">一致（同一 Blender 场景预设）</td></tr>
+<tr><td>人可干预的点</td><td>只能改提示词重跑全部</td><td class="good">审核页逐张锚图通过 / 驳回 / 重生成、换镜头起止锚图</td><td class="mid">改车库配置重截，重绘不可控</td><td class="good">审核页同 ②，另可改本体里的机位数值 / 状态操作后重出灰模</td></tr>
+<tr><td>可回溯性</td><td>无</td><td class="good">本体 JSON：对象 → 锚图 → 镜头 → job → 视频</td><td class="mid">车库配置 JSON + 两张图</td><td class="good">本体 JSON 里多一层 Blender 层：预设 / 归一化 / 状态 ops / 每锚图机位 / worker job</td></tr>
+<tr><td>前置成本</td><td>0</td><td>LLM 起草 + N 张锚图（本次 5 张）</td><td>需要该车型的 3D 资产（SU7 有，M9 / ES8 没有）</td><td>需要该主体的 3D 资产<b>或</b>只用 proxy 盒 / 圆柱；Blender worker 在 Windows <code>ai</code> 上已常驻</td></tr>
+<tr><td>总耗时（到成片）</td><td>~6 分钟</td><td>~11 分钟 + 一次人审</td><td>~8 分钟</td><td>~10 分钟 + 一次人审</td></tr>
 </table>
 
 <h2>4. 结论</h2>
 <ol>
 <li><b>① 不能用在任何需要"这台车"的场景</b>：两帧各画各的，SU7 变成泛化轿车，中途还换了前脸。这就是「自由生成保不住对象同一性」的实证。</li>
 <li><b>② 和 ③ 都保住了同一性，画质相当</b>。差别在于：③ 的几何是真的（来自 GLB），② 的几何是 GPT-image 参考编辑"像"出来的；② 不需要 3D 资产、人可以在审核页逐张把关，③ 需要车库且重绘环节黑盒。对有 3D 资产的 SU7，③ 是 ② 的"锚图来源升级版"——<b>两者可以合并：车库截图当锚图喂进本体，走同一套审核与出片</b>。对没有 3D 资产的 M9 / ES8，只有 ②。</li>
-<li><b>三路共同的问题是机位没锁住</b>：Seedance 把 "subtle push-in" 做成大幅推近，"同机位对比"的意图被运动破坏。这与关键帧来源无关，是运动提示 / 模型行为问题，下一步用 "locked-off static camera, zero camera movement" 措辞 + 更短时长复测；必要时允许网关按 <code>camera_lock=true</code> 追加约束。</li>
+<li><b>①②③ 共同的问题是机位没锁住</b>：Seedance 把 "subtle push-in" 做成大幅推近。<b>④ 复测已给出答案</b>：运动提示改成 "Locked-off static camera, zero camera movement, no zoom, no pan"（并去掉 push-in 字眼）后，<code>dreamina-seedance-2-0</code> 真的把机位钉住了，四个采样帧几乎逐像素一致、只有尾翼长出来。所以推近是提示词问题，不是关键帧来源问题；本体层面已把这句写成「同机位对比」镜头的默认运动提示模板。</li>
+<li><b>④ 相对 ③ 的增量不在画质，在"机位是数值"</b>：③ 的机位靠人在车库里摆好再截图，换个主体（M9 / ES8 / 一瓶机油 / 一个人形 proxy）就得重摆；④ 的机位是本体里的 5 个有界数字（方位 / 仰角 / 距离系数 / 焦距 / 看向），状态是有界操作（显隐 / 加件 / 旋转 / 平移），场景是 4 个预设——<b>"怎么把 Blender 建好"这件事本身被写进本体</b>，LLM 只填枚举和比例，程序把它变成灰模。没有 GLB 也能用 proxy 盒子先把机位与状态定死。这就是「本体已建模，AI 只填数值」在 3D 侧的落地。</li>
 <li>本体路线本次暴露的产品缺口：LLM 排的"同机位对比"镜头用了车尾锚图→前 3/4 锚图，审核人当时无法改起止锚图，只能绕过。<b>已修</b>：审核页镜头卡片加了起止锚图下拉框，PATCH 接受 <code>start_anchor / end_anchor</code>（待部署）。</li>
 </ol>
 
@@ -78,6 +94,7 @@ ol li{margin:4px 0}
 <tr><th>路线</th><th>网关 job</th><th>Drive</th><th>本体 / 输入</th></tr>
 <tr><td>①</td><td><code>b9f033c0-bbb2-4f8c-b489-d975badff1ab</code></td><td><a href="https://drive.google.com/file/d/1MJvAKoZhFpF1upMm6LRoKhcha5n2SDDj/view" target="_blank">video</a></td><td>首帧 / 末帧 / 运动三段提示词（见页尾）</td></tr>
 <tr><td>②</td><td><code>e71930c9-3b5e-4465-ab8c-ed995507da73</code></td><td><a href="https://drive.google.com/file/d/1GG2TzW6tdQATOOH6pXcsWuZmE4bo25ik/view" target="_blank">video</a></td><td><a href="https://weiaidesign.com/api/v1/ontology/onto-b3dd8c0f-49bd-4a62-89ee-7f10dc4f2b3f/review" target="_blank">审核页</a> · <a href="https://weiaidesign.com/api/v1/ontology/onto-b3dd8c0f-49bd-4a62-89ee-7f10dc4f2b3f" target="_blank">JSON</a></td></tr>
+<tr><td>④</td><td>shot-01 <code>dfd26504-d54e-4006-899e-cfd64c315bcb</code><br>shot-02 <code>7e6fdda8-11f0-4920-9671-13ee1e7da926</code></td><td><a href="https://drive.google.com/file/d/15unfei3KRWFDEVY9jSkPpSqWnKd7SXOk/view" target="_blank">video（shot-01）</a></td><td><a href="https://weiaidesign.com/api/v1/ontology/onto-5ed42749-7bd4-4fc6-b1db-a6c36101533b/review" target="_blank">审核页</a> · <a href="https://weiaidesign.com/api/v1/ontology/onto-5ed42749-7bd4-4fc6-b1db-a6c36101533b" target="_blank">JSON（含 Blender 层）</a> · worker job <code>onto-9803ca09</code></td></tr>
 <tr><td>③</td><td><code>ca5bf25d-06c5-4999-bcab-83d7f89fa968</code></td><td><a href="https://drive.google.com/file/d/1aFKw6TOnnSNwrfrYiY51nSlC1_IDmhIM/view" target="_blank">video</a></td><td>车库 V2.3 默认机位 · 外观套件→运动尾翼 · 重绘 <a href="restyled-before.jpg" target="_blank">前</a> / <a href="restyled-after.jpg" target="_blank">后</a></td></tr>
 </table>
 <p class="muted">注：① 第一次提交的 job（892d63cb）因网关容器在中途被重建（任务在内存）而丢失，本页是重提后的结果；这也说明网关任务需要落盘。</p>
@@ -86,8 +103,15 @@ ol li{margin:4px 0}
 <pre>first_frame_prompt: A dark space-gray Xiaomi SU7 sedan parked in a premium night showroom, glossy reflective floor, cool blue-gray rim lighting, three-quarter front view from a fixed camera, stock car without rear spoiler, realistic automotive advertising photography, 35mm lens, no text, no watermark, no UI
 last_frame_prompt: The same dark space-gray Xiaomi SU7 in the same night showroom from the exact same fixed camera position and framing, now fitted with a black sport rear spoiler on the trunk lid, everything else identical: lighting, reflections, wheels, background, no text, no watermark, no UI
 video_prompt (三路共用): Fixed camera, same framing. Transition from the stock SU7 to the SU7 with a black sport rear spoiler installed, premium showroom reveal with a subtle slow push-in, keep car body, wheels, floor reflections and lighting consistent. No text overlays, subtitles, UI, logos or watermarks.</pre>
+<h3>④ 运动提示（锁机位版，已验证有效）</h3>
+<pre>Locked-off static camera, zero camera movement, no zoom, no pan. The stock SU7 becomes the SU7 with a black sport rear spoiler installed on the trunk lid: the spoiler materialises smoothly in place. Car body, wheels, showroom floor reflections and lighting stay identical. No text overlays, subtitles, UI, logos or watermarks.</pre>
+<h3>④ 本体里的 Blender 层（LLM 产出、服务端夹紧后的原样）</h3>
+<pre>"blender": {"enabled": true, "scene": {"preset": "showroom_dark", "floor_reflective": true},
+ "subject": {"object_id": "obj-su7", "asset": {"name": "su7.glb"}, "up_axis": "Y", "forward_axis": "Z", "length_m": 4.97, "rotation_deg": 0},
+ "states": [{"id": "state-spoiler", "label": "加装运动尾翼", "ops": [{"op": "add_part", "name": "sport-spoiler", "shape": "box", "dims_m": [1.4, 0.28, 0.06], "at": "rear-top", "color": [0.03, 0.03, 0.03], "tilt_deg": -8}]}]}
+anchor.render: identity / link-wide 均为 {"azimuth_deg": 145, "elevation_deg": 15, "distance_factor": 1.1, "focal_mm": 35, "look_at": "rear"}；link-close 为 distance_factor 0.8 / focal 50。</pre>
 <h3>③ 重绘提示词</h3>
 <pre>Photoreal restyle of the reference 3D render. CRITICAL: keep the exact camera angle, framing, car position and size in frame, body proportions, wheel positions and every body panel from the reference; do not zoom, crop, move or re-centre the car. Change ONLY materials, lighting and environment: dark space-gray metallic paint, black wheels, premium night showroom with glossy dark reflective floor and cool blue-gray rim lighting, realistic automotive advertising photography, 35mm lens. no text, no watermark, no UI
 （末帧追加）The car now has a black sport rear spoiler on the trunk lid exactly as in the first reference image; the second reference image shows the finished paint, wheels and showroom look to match exactly.</pre>
-<p class="muted" style="margin-top:30px">方法文档：<a href="../">本体视频法</a> · 本页由对比脚本生成，视频与图片均为真实生成产物，未经剪辑（并排视频仅缩放拼接）。</p>
+<p class="muted" style="margin-top:30px">方法文档：<a href="../">本体视频法</a> · 本页由对比脚本生成（④ 于 2026-09-30 下午追加），视频与图片均为真实生成产物，未经剪辑（并排视频仅缩放拼接）。</p>
 </div></body></html>

@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 560" width="100%" role="img" aria-label="图12 Blender 层：把“怎么建好场景”写进本体，AI 只填枚举与比例" style="font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;max-width:960px;display:block;margin:0 auto">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#6e6e73"/></marker><marker id="arrb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#2F6FED"/></marker></defs>
+<rect width="960" height="560" fill="#FFFFFF" rx="12"/>
+<text x="30" y="32" text-anchor="start" font-size="13" font-weight="400" fill="#6e6e73">本体 JSON 里新增一层 blender（与对象 / 链接 / 锚图并列），四个字段组全部有界：</text>
+<rect x="30" y="50" width="214" height="34" rx="10" fill="#8E8E93" stroke="#8E8E93" stroke-width="1.5"/>
+<text x="137.0" y="71.5" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">场景预设 scene</text>
+<rect x="30" y="84" width="214" height="96" rx="10" fill="#F2F2F7" stroke="#8E8E93" stroke-width="1.5"/>
+<text x="137.0" y="119.9" text-anchor="middle" font-size="11" font-weight="400" fill="#1d1d1f">preset ∈ {showroom_dark, studio_white,</text>
+<text x="137.0" y="135.8" text-anchor="middle" font-size="10" font-weight="400" fill="#1d1d1f">garage, outdoor_overcast}</text>
+<text x="137.0" y="151.8" text-anchor="middle" font-size="10" font-weight="400" fill="#1d1d1f">floor_reflective ∈ {true, false}</text>
+<rect x="262" y="50" width="214" height="34" rx="10" fill="#2F6FED" stroke="#2F6FED" stroke-width="1.5"/>
+<text x="369.0" y="71.5" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">主体归一化 subject</text>
+<rect x="262" y="84" width="214" height="96" rx="10" fill="#E8F0FE" stroke="#2F6FED" stroke-width="1.5"/>
+<text x="369.0" y="119.9" text-anchor="middle" font-size="11" font-weight="400" fill="#1d1d1f">asset ∈ 模型库 或 proxy 盒 / 圆柱</text>
+<text x="369.0" y="135.8" text-anchor="middle" font-size="10" font-weight="400" fill="#1d1d1f">up_axis / forward_axis（文件轴）</text>
+<text x="369.0" y="151.8" text-anchor="middle" font-size="10" font-weight="400" fill="#1d1d1f">length_m 真实长度 · rotation_deg 转台角</text>
+<rect x="494" y="50" width="214" height="34" rx="10" fill="#F28C28" stroke="#F28C28" stroke-width="1.5"/>
+<text x="601.0" y="71.5" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">状态 = 有界操作 states</text>
+<rect x="494" y="84" width="214" height="96" rx="10" fill="#FDEEDC" stroke="#F28C28" stroke-width="1.5"/>
+<text x="601.0" y="119.9" text-anchor="middle" font-size="11" font-weight="400" fill="#1d1d1f">hide / show（名字正则）</text>
+<text x="601.0" y="135.8" text-anchor="middle" font-size="10" font-weight="400" fill="#1d1d1f">add_part（at ∈ 7 个位置枚举 · 吸附表面）</text>
+<text x="601.0" y="151.8" text-anchor="middle" font-size="10" font-weight="400" fill="#1d1d1f">rotate（轴 · 角度 · 枢轴）· translate</text>
+<rect x="726" y="50" width="214" height="34" rx="10" fill="#7A5AF8" stroke="#7A5AF8" stroke-width="1.5"/>
+<text x="833.0" y="71.5" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">机位语法 anchor.render</text>
+<rect x="726" y="84" width="214" height="96" rx="10" fill="#EEE9FE" stroke="#7A5AF8" stroke-width="1.5"/>
+<text x="833.0" y="119.9" text-anchor="middle" font-size="11" font-weight="400" fill="#1d1d1f">azimuth_deg · elevation_deg</text>
+<text x="833.0" y="135.8" text-anchor="middle" font-size="10" font-weight="400" fill="#1d1d1f">distance_factor（按包围球自动配框）</text>
+<text x="833.0" y="151.8" text-anchor="middle" font-size="10" font-weight="400" fill="#1d1d1f">focal_mm · look_at ∈ {center, front, …}</text>
+<text x="30" y="208" text-anchor="start" font-size="12" font-weight="400" fill="#6e6e73">LLM 起草 → 服务端 normalizeDraft 夹紧：未知预设 / 资产 / 位置枚举丢弃，数值 clamp 到区间，非主体锚图不带机位</text>
+<rect x="30" y="240" width="160" height="58" rx="10" fill="#EEE9FE" stroke="#7A5AF8" stroke-width="1.5"/>
+<text x="110.0" y="264.5" text-anchor="middle" font-size="12" font-weight="700" fill="#1d1d1f">本体 Blender 层</text>
+<text x="110.0" y="281.9" text-anchor="middle" font-size="11" font-weight="400" fill="#1d1d1f">数值 + 枚举</text>
+<line x1="190" y1="269" x2="216" y2="269" stroke="#7A5AF8" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="216" y="240" width="160" height="58" rx="10" fill="#E8F0FE" stroke="#2F6FED" stroke-width="1.5"/>
+<text x="296.0" y="264.5" text-anchor="middle" font-size="12" font-weight="700" fill="#1d1d1f">render_ontology.py</text>
+<text x="296.0" y="281.9" text-anchor="middle" font-size="11" font-weight="400" fill="#1d1d1f">bpy 通用脚本 · 无主体特定代码</text>
+<line x1="376" y1="269" x2="402" y2="269" stroke="#2F6FED" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="402" y="240" width="160" height="58" rx="10" fill="#F2F2F7" stroke="#8E8E93" stroke-width="1.5"/>
+<text x="482.0" y="264.5" text-anchor="middle" font-size="12" font-weight="700" fill="#1d1d1f">灰模 PNG</text>
+<text x="482.0" y="281.9" text-anchor="middle" font-size="11" font-weight="400" fill="#1d1d1f">同机位逐像素一致</text>
+<line x1="562" y1="269" x2="588" y2="269" stroke="#8E8E93" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="588" y="240" width="160" height="58" rx="10" fill="#FDEEDC" stroke="#F28C28" stroke-width="1.5"/>
+<text x="668.0" y="264.5" text-anchor="middle" font-size="12" font-weight="700" fill="#1d1d1f">GPT-image 重绘</text>
+<text x="668.0" y="281.9" text-anchor="middle" font-size="11" font-weight="400" fill="#1d1d1f">灰模第一参考 · 身份图第二参考</text>
+<line x1="748" y1="269" x2="774" y2="269" stroke="#F28C28" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="774" y="240" width="160" height="58" rx="10" fill="#E3F4EC" stroke="#2E9E6B" stroke-width="1.5"/>
+<text x="854.0" y="264.5" text-anchor="middle" font-size="12" font-weight="700" fill="#1d1d1f">锚图 → 人审 → 补间</text>
+<text x="854.0" y="281.9" text-anchor="middle" font-size="11" font-weight="400" fill="#1d1d1f">与 image 后端同一条路</text>
+<text x="30" y="325" text-anchor="start" font-size="11" font-weight="400" fill="#6e6e73">Windows ai · blender-story worker（FastAPI :18087）· Blender 5.2 headless · POST /api/v1/ontology-render</text>
+<rect x="30" y="350" width="440" height="150" rx="10" fill="#E3F4EC" stroke="#2E9E6B" stroke-width="1.5"/>
+<text x="250.0" y="401.3" text-anchor="middle" font-size="13" font-weight="700" fill="#1d1d1f">③ 3D 白模重绘（车库截图）</text>
+<text x="250.0" y="420.1" text-anchor="middle" font-size="12" font-weight="400" fill="#1d1d1f">机位靠人在车库里摆好再截</text>
+<text x="250.0" y="439.0" text-anchor="middle" font-size="12" font-weight="400" fill="#1d1d1f">状态靠车库 UI 勾选</text>
+<text x="250.0" y="457.8" text-anchor="middle" font-size="12" font-weight="400" fill="#1d1d1f">换主体（M9 / 机油瓶 / 人形）要重摆重接</text>
+<rect x="490" y="350" width="440" height="150" rx="10" fill="#EEE9FE" stroke="#7A5AF8" stroke-width="1.5"/>
+<text x="710.0" y="401.3" text-anchor="middle" font-size="13" font-weight="700" fill="#1d1d1f">④ 本体 + Blender 层</text>
+<text x="710.0" y="420.1" text-anchor="middle" font-size="12" font-weight="400" fill="#1d1d1f">机位 = 5 个有界数字，写在锚图上</text>
+<text x="710.0" y="439.0" text-anchor="middle" font-size="12" font-weight="400" fill="#1d1d1f">状态 = 有界操作列表，写在本体里</text>
+<text x="710.0" y="457.8" text-anchor="middle" font-size="12" font-weight="400" fill="#1d1d1f">换主体只换 subject 字段；没有 GLB 用 proxy 先定机位</text>
+<line x1="470" y1="425" x2="490" y2="425" stroke="#7A5AF8" stroke-width="1.6" marker-end="url(#arr)"/>
+<text x="480" y="345" text-anchor="middle" font-size="12" font-weight="400" fill="#6e6e73">“怎么建好 Blender”进本体</text>
+<text x="480.0" y="546" text-anchor="middle" font-size="12" font-weight="400" fill="#8E8E93">图 12 · 场景预设 / 主体归一化 / 状态操作 / 机位语法四组有界字段构成 Blender 层；程序把数值变成灰模，重绘与出片走同一条链</text>
+</svg>

@@ -377,6 +377,42 @@ def fig11():
     s.save("fig-11-roadmap.svg")
 
 
+# ---------------------------------------------------------------- fig 12 Blender 层是本体的一部分
+def fig12():
+    s = SVG(560, "图12 Blender 层：把“怎么建好场景”写进本体，AI 只填枚举与比例")
+    s.text(30, 32, "本体 JSON 里新增一层 blender（与对象 / 链接 / 锚图并列），四个字段组全部有界：", size=13, color="#6e6e73")
+    groups = [
+        ("场景预设 scene", ["preset ∈ {showroom_dark, studio_white,", "garage, outdoor_overcast}", "floor_reflective ∈ {true, false}"], C["gray"], C["gray_l"]),
+        ("主体归一化 subject", ["asset ∈ 模型库 或 proxy 盒 / 圆柱", "up_axis / forward_axis（文件轴）", "length_m 真实长度 · rotation_deg 转台角"], C["blue"], C["blue_l"]),
+        ("状态 = 有界操作 states", ["hide / show（名字正则）", "add_part（at ∈ 7 个位置枚举 · 吸附表面）", "rotate（轴 · 角度 · 枢轴）· translate"], C["orange"], C["orange_l"]),
+        ("机位语法 anchor.render", ["azimuth_deg · elevation_deg", "distance_factor（按包围球自动配框）", "focal_mm · look_at ∈ {center, front, …}"], C["purple"], C["purple_l"]),
+    ]
+    for i, (name, items, col, fl) in enumerate(groups):
+        x = 30 + i * 232
+        s.box(x, 50, 214, 34, col, col, name, size=13, color="#fff")
+        s.box(x, 84, 214, 96, fl, col, items, size=11, bold_first=False)
+    s.text(30, 208, "LLM 起草 → 服务端 normalizeDraft 夹紧：未知预设 / 资产 / 位置枚举丢弃，数值 clamp 到区间，非主体锚图不带机位", size=12, color="#6e6e73")
+    # pipeline row
+    steps = [("本体 Blender 层", "数值 + 枚举", C["purple"]),
+             ("render_ontology.py", "bpy 通用脚本 · 无主体特定代码", C["blue"]),
+             ("灰模 PNG", "同机位逐像素一致", C["gray"]),
+             ("GPT-image 重绘", "灰模第一参考 · 身份图第二参考", C["orange"]),
+             ("锚图 → 人审 → 补间", "与 image 后端同一条路", C["green"])]
+    fills = {C["gray"]: C["gray_l"], C["blue"]: C["blue_l"], C["purple"]: C["purple_l"], C["green"]: C["green_l"], C["orange"]: C["orange_l"]}
+    for i, (a, b, col) in enumerate(steps):
+        x = 30 + i * 186
+        s.box(x, 240, 160, 58, fills[col], col, [a, b], size=12)
+        if i < len(steps) - 1:
+            s.arrow(x + 160, 269, x + 186, 269, color=col)
+    s.text(30, 325, "Windows ai · blender-story worker（FastAPI :18087）· Blender 5.2 headless · POST /api/v1/ontology-render", size=11, color="#6e6e73")
+    # why row: comparison with route 3
+    s.box(30, 350, 440, 150, C["green_l"], C["green"], ["③ 3D 白模重绘（车库截图）", "机位靠人在车库里摆好再截", "状态靠车库 UI 勾选", "换主体（M9 / 机油瓶 / 人形）要重摆重接"], size=13)
+    s.box(490, 350, 440, 150, C["purple_l"], C["purple"], ["④ 本体 + Blender 层", "机位 = 5 个有界数字，写在锚图上", "状态 = 有界操作列表，写在本体里", "换主体只换 subject 字段；没有 GLB 用 proxy 先定机位"], size=13)
+    s.arrow(470, 425, 490, 425, color=C["purple"], label="“怎么建好 Blender”进本体", lx=480, ly=345)
+    s.caption("图 12 · 场景预设 / 主体归一化 / 状态操作 / 机位语法四组有界字段构成 Blender 层；程序把数值变成灰模，重绘与出片走同一条链")
+    s.save("fig-12-blender-layer.svg")
+
+
 if __name__ == "__main__":
-    for f in (fig01, fig02, fig03, fig04, fig05, fig06, fig07, fig08, fig09, fig10, fig11):
+    for f in (fig01, fig02, fig03, fig04, fig05, fig06, fig07, fig08, fig09, fig10, fig11, fig12):
         f()
