@@ -29,11 +29,22 @@ except ImportError:  # pragma: no cover
 UA = "Mozilla/5.0"
 
 
-def fetch(url: str) -> bytes:
-    r = subprocess.run(["curl", "-s", "-L", "-m", "60", "-H", f"user-agent: {UA}", url], capture_output=True)
-    if r.returncode != 0 or not r.stdout:
-        raise SystemExit(f"fetch failed: {url}")
-    return r.stdout
+def fetch(url: str, expect_image: bool = False, tries: int = 5) -> bytes:
+    """GET with retries; the production edge occasionally answers 502/HTML for a few seconds."""
+    import time
+    last = b""
+    for i in range(tries):
+        r = subprocess.run(["curl", "-s", "-L", "-m", "60", "-H", f"user-agent: {UA}", url], capture_output=True)
+        last = r.stdout
+        ok = r.returncode == 0 and bool(last)
+        if ok and expect_image:
+            ok = last[:4] in (b"\x89PNG", b"\xff\xd8\xff\xe0", b"\xff\xd8\xff\xe1", b"\xff\xd8\xff\xdb", b"RIFF") or last[:3] == b"\xff\xd8\xff"
+        if ok and not expect_image:
+            ok = last.lstrip()[:1] in (b"{", b"[")
+        if ok:
+            return last
+        time.sleep(3 * (i + 1))
+    raise SystemExit(f"fetch failed after {tries} tries: {url} ({last[:80]!r})")
 
 
 def save_image(data: bytes, out: Path, width: int = 960) -> str:
@@ -77,7 +88,7 @@ def main() -> None:
         img = a.get(key)
         if not img:
             return ""
-        name = save_image(fetch(img["public_url"]), out / f"{key}-{a['id']}.png")
+        name = save_image(fetch(img["public_url"], expect_image=True), out / f"{key}-{a['id']}.png")
         return f'<img src="{esc(name)}" alt="">'
 
     # ---------- 场景
