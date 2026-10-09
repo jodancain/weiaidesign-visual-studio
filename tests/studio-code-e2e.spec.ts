@@ -1,0 +1,32 @@
+import { test, expect } from './studio-test';
+import { readFile } from 'node:fs/promises';
+import type { StudioProject, StudioJob } from '../lib/studio/types';
+
+test('real BFF and SQLite apply a fixture-generated scene, preserve director edits, queue two exporters and owned enhancement', async ({ page, request }) => {
+  const created = await request.post('/api/v3/projects', { data: { name: '代码链路端到端隔离验收', demo: false } }); expect(created.ok()).toBe(true); const before = (await created.json()).data;
+  const errors: string[] = []; page.on('pageerror', e => errors.push(e.message));
+  await page.goto(`/video/studio?project=${before.id}`); await page.getByRole('button', { name: '模式 3 · 代码动画', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '代码场景动画' }); await dialog.getByLabel('代码故事模板').selectOption('three-knocks'); await dialog.getByRole('button', { name: '生成可编辑场景', exact: true }).click();
+  await expect(dialog).not.toBeVisible(); const id = new URL(page.url()).searchParams.get('project')!; expect(id).not.toBe(before.id);
+  const get = async (): Promise<StudioProject> => (await (await request.get(`/api/v3/projects/${id}`)).json()).data;
+  await page.locator('.studio-jobs summary').click(); await page.getByRole('button', { name: '应用到导演台', exact: true }).click({ timeout: 30_000 });
+  const panel = page.getByRole('dialog', { name: '三维导演台' }); await expect(panel.locator('canvas')).toBeVisible({ timeout: 30_000 });
+  await expect(panel.getByRole('button', { name: '烘焙并预演', exact: true })).toHaveCount(0);
+  await expect(panel.getByLabel('添加动作片段', { exact: true })).toHaveCount(0);
+  await expect(panel.getByText('分镜程序动作，可用骨骼/关键帧覆盖', { exact: true })).toBeVisible();
+  await expect.poll(async () => (await get()).shots.length).toBe(10);
+  const applied = (await get()).scenes.find(s => s.codeProgram)!; expect(applied.codeGenerationJobId).toBeTruthy(); expect(applied.codeProgramHash).toMatch(/^[0-9a-f]{64}$/);
+  await panel.getByLabel('相机位置 X', { exact: true }).fill('0.9'); await panel.getByLabel('相机位置 X', { exact: true }).press('Enter');
+  await expect.poll(async () => (await get()).scenes.find(s => s.id === applied.id)!.cameras[0].position[0]).toBe(.9);
+  await panel.getByLabel('场景导出工具').selectOption('both'); await panel.getByRole('button', { name: '渲染成片', exact: true }).click();
+  const getJobs = async (): Promise<StudioJob[]> => (await (await request.get(`/api/v3/projects/${id}/jobs`)).json()).data;
+  await expect.poll(async () => (await getJobs()).filter(j => j.kind === 'render').length).toBe(2);
+  const rendered = (await getJobs()).filter(j => j.kind === 'render'); expect(new Set(rendered.map(j => j.renderGroupId)).size).toBe(1); expect(rendered.map(j => j.backend).sort()).toEqual(['remotion', 'three-webgl']); expect(rendered.every(j => j.state === 'queued')).toBe(true);
+  await panel.getByRole('button', { name: '返回画布', exact: true }).click();
+  const bytes = await readFile('../output/studio-code-mode-20261002/web/interaction-fixture.mp4');
+  const upload = await request.post(`/api/v3/projects/${id}/assets`, { data: { name: '明确标识的三秒测试视频', kind: 'video', mime: 'video/mp4', base64: bytes.toString('base64') } }); expect(upload.ok(), await upload.text()).toBe(true); const asset = (await upload.json()).data.asset;
+  await page.reload(); await page.getByRole('button', { name: '资产库', exact: true }).click(); const tile = page.locator('.studio-asset-tile').filter({ hasText: asset.name });
+  await tile.getByRole('button', { name: 'DLSS 5', exact: true }).click(); await expect.poll(async () => (await getJobs()).filter(j => j.kind === 'enhancement').length).toBe(1);
+  const after = await get(); expect(after.assets.find(a => a.id === asset.id)?.hash).toBe(asset.hash); expect(after.sequence.clips).toHaveLength(0); expect((await (await request.get(`/api/v3/projects/${before.id}`)).json()).data.totalFrames).toBe(240);
+  expect(errors).toEqual([]);
+});

@@ -7,26 +7,45 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test:studio": "tsx --test tests/*.test.ts components/studio/director/*.test.ts",
+    "test:studio:ui": "playwright test --config=playwright.studio.config.ts",
+    "test:studio:loop": "playwright test --config=playwright.studio-loop.config.ts"
   },
   "dependencies": {
+    "@react-three/drei": "10.7.9",
+    "@react-three/fiber": "9.8.1",
+    "@remotion/bundler": "4.0.532",
+    "@remotion/renderer": "4.0.532",
+    "@remotion/three": "4.0.532",
+    "@xyflow/react": "12.12.0",
+    "@xzdarcy/react-timeline-editor": "1.0.0",
     "imagetracerjs": "^1.2.6",
     "jspdf": "^4.2.1",
     "lucide-react": "^0.555.0",
-    "next": "^16.2.10",
+    "next": "16.3.8",
     "openai": "^6.46.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
+    "react-virtualized": "9.22.6",
+    "remotion": "4.0.532",
     "svg2pdf.js": "^2.7.0",
+    "three": "0.186.0",
     "tldraw": "^3.15.6"
   },
   "overrides": {
     "postcss": "^8.5.17"
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "@types/node": "^25.0.0",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
+    "@types/three": "0.186.0",
+    "eslint": "9.39.5",
+    "eslint-config-next": "16.3.8",
+    "tsx": "4.23.15",
     "typescript": "^5.9.3"
   }
 }

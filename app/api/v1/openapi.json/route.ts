@@ -29,8 +29,18 @@ export async function GET(request: Request) {
           required: ["prompt"],
           properties: {
             prompt: { type: "string" },
-            aspect: { type: "string", examples: ["1:1", "9:16", "16:9"] },
+            aspect: {
+              type: "string",
+              examples: ["auto", "1:1", "3:2", "2:3", "9:16", "16:9"],
+              description: "auto (default) follows the first reference image's proportions; 1:1 when there is no reference",
+            },
             count: { type: "integer", minimum: 1, maximum: 4, default: 1 },
+            image_model: { type: "string", description: "Preferred image model, e.g. gpt-image-2 | gpt-image-1.5 | seedream-4-5" },
+            allow_generation_fallback: {
+              type: "boolean",
+              default: false,
+              description: "When a reference edit fails, fall back to text-to-image. Off by default so edits never silently return unrelated pictures.",
+            },
             quality: { type: "string", enum: ["low", "medium", "high"] },
             style: { type: "string" },
             brand: { type: "string" },
@@ -42,6 +52,7 @@ export async function GET(request: Request) {
             negative_prompt: { type: "string" },
             reference_images: {
               type: "array",
+              description: "Order matters: first item is the base image being edited, the rest are references (style / colour / garment / path).",
               items: {
                 oneOf: [
                   { type: "string", description: "Base64 image or data URL" },
@@ -78,9 +89,13 @@ export async function GET(request: Request) {
                       download_url: { type: "string" },
                       prompt: { type: "string" },
                       model: { type: "string" },
+                      reference_mode: { type: "string", examples: ["multi", "single_fallback", "none"] },
+                      policy_fallback: { type: "boolean", description: "true when the default model was blocked by content policy and the request completed on IMAGE_POLICY_FALLBACK_MODEL" },
                     },
                   },
                 },
+                policy_fallback: { type: "boolean" },
+                error_kind: { type: "string", enum: ["content_policy", "upstream"], description: "Set when some or all images failed; failed jobs prefix the error with content_policy: when the block was a safety rejection" },
               },
             },
           },
@@ -103,7 +118,16 @@ export async function GET(request: Request) {
                 required: ["role", "content"],
                 properties: {
                   role: { type: "string", enum: ["system", "user", "assistant", "tool"] },
-                  content: { type: "string" },
+                  content: {
+                    oneOf: [
+                      { type: "string" },
+                      {
+                        type: "array",
+                        description: "OpenAI multimodal parts: {type:text,text} and {type:image_url,image_url:{url}} — user turns may carry the pictures they refer to as 图一/图二",
+                        items: { type: "object" },
+                      },
+                    ],
+                  },
                   tool_call_id: { type: "string" },
                   name: { type: "string" },
                 },
@@ -306,7 +330,7 @@ export async function GET(request: Request) {
       },
       "/agent-chat": {
         post: {
-          summary: "Two-phase context-aware design planning and canvas tool execution",
+          summary: "Lovart-style visual agent: multimodal edit/generate planning with canvas tool calls (edit_images, generate_images, remove_background, upscale_image, vectorize_image, restyle_lettering, transfer_material, export_ai)",
           servers: [{ url: agentBaseUrl }],
           requestBody: {
             required: true,

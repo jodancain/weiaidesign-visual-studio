@@ -30,6 +30,83 @@ export const imageOutputCompression = Number(env.IMAGE_OPENAI_OUTPUT_COMPRESSION
 export const imageGenerationRetries = Math.max(1, Number(env.IMAGE_GENERATION_RETRIES || "3"));
 export const imageGenerationConcurrency = Math.max(1, Number(env.IMAGE_GENERATION_CONCURRENCY || "1"));
 export const imageOutputDir = env.IMAGE_OUTPUT_DIR || join(tmpdir(), "youngtuo-visual", "generated_images");
+/* Lovart 同款：默认模型被内容安全拦截时换到另一家图像模型重试，而不是在同一审核体系里换版本。 */
+export const imagePolicyFallbackModel = (env.IMAGE_POLICY_FALLBACK_MODEL || "seedream-4-5").trim();
+
+export type ImageErrorKind = "content_policy" | "upstream";
+
+export class ImageGenerationError extends Error {
+  kind: ImageErrorKind;
+  constructor(message: string, kind: ImageErrorKind) {
+    super(message);
+    this.kind = kind;
+  }
+}
+
+const CONTENT_POLICY_PATTERN =
+  /content[_ -]?policy|policy[_ -]?violation|safety[_ -]?(?:system|violation|check|filter)|moderation|flagged|not allowed by|violat(?:e|es|ed|ion)|sensitive content|unsafe|rejected by (?:the )?(?:ai|provider|safety)/i;
+
+export function isContentPolicyMessage(message: string) {
+  return CONTENT_POLICY_PATTERN.test(String(message || ""));
+}
+
+export function errorKindOf(error: unknown): ImageErrorKind {
+  if (error instanceof ImageGenerationError) return error.kind;
+  return isContentPolicyMessage(error instanceof Error ? error.message : String(error)) ? "content_policy" : "upstream";
+}
+
+/* Read pixel dimensions from PNG / JPEG / WebP headers (no image library on the server). */
+export function imageDimensions(buffer: Buffer): { width: number; height: number } | null {
+  if (buffer.length >= 24 && buffer.toString("ascii", 1, 4) === "PNG") {
+    return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
+  }
+  if (buffer.length >= 4 && buffer[0] === 0xff && buffer[1] === 0xd8) {
+    let offset = 2;
+    while (offset + 9 < buffer.length) {
+      if (buffer[offset] !== 0xff) {
+        offset += 1;
+        continue;
+      }
+      const marker = buffer[offset + 1];
+      if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+        offset += 2;
+        continue;
+      }
+      const length = buffer.readUInt16BE(offset + 2);
+      if ((marker >= 0xc0 && marker <= 0xcf) && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+        return { height: buffer.readUInt16BE(offset + 5), width: buffer.readUInt16BE(offset + 7) };
+      }
+      offset += 2 + length;
+    }
+    return null;
+  }
+  if (buffer.length >= 30 && buffer.toString("ascii", 0, 4) === "RIFF" && buffer.toString("ascii", 8, 12) === "WEBP") {
+    const chunk = buffer.toString("ascii", 12, 16);
+    if (chunk === "VP8 ") return { width: buffer.readUInt16LE(26) & 0x3fff, height: buffer.readUInt16LE(28) & 0x3fff };
+    if (chunk === "VP8L") {
+      const bits = buffer.readUInt32LE(21);
+      return { width: (bits & 0x3fff) + 1, height: ((bits >> 14) & 0x3fff) + 1 };
+    }
+    if (chunk === "VP8X") {
+      return {
+        width: 1 + (buffer[24] | (buffer[25] << 8) | (buffer[26] << 16)),
+        height: 1 + (buffer[27] | (buffer[28] << 8) | (buffer[29] << 16)),
+      };
+    }
+  }
+  return null;
+}
+
+/* Nearest supported aspect for a base image ("auto" follows the picture the user is editing, like Lovart's Wide/Square). */
+export function aspectFromDimensions(width: number, height: number) {
+  if (!width || !height) return "1:1";
+  const ratio = width / height;
+  if (ratio >= 1.6) return "16:9";
+  if (ratio >= 1.2) return "3:2";
+  if (ratio > 0.83) return "1:1";
+  if (ratio > 0.62) return "2:3";
+  return "9:16";
+}
 
 export function jsonCors(payload: unknown, init: ResponseInit = {}) {
   const headers = new Headers(init.headers);
@@ -219,16 +296,59 @@ function orderedImageModels(preferred = "") {
   return Array.from(new Set([clean, ...imageGenerationModels]));
 }
 
+type AttemptOutcome<T> = { value: T; model: string; policyFallback: boolean };
+
+/* Shared retry driver: walk the model list; on a content-policy block jump straight to the
+   other-provider fallback model (Lovart: GPT Image blocked → Seedream/Nano Banana), and keep
+   the classification so callers can tell the user why it failed. */
+async function runWithModelFallback<T>(
+  preferredModel: string,
+  attempt: (model: string) => Promise<T>,
+  label: string,
+): Promise<AttemptOutcome<T>> {
+  let models = [...orderedImageModels(preferredModel)];
+  let lastError: unknown = null;
+  let policyBlocked = false;
+  let policyFallback = false;
+  const tried = new Set<string>();
+  for (let index = 0; index < imageGenerationRetries; index += 1) {
+    const model = models[Math.min(index, models.length - 1)] || imageModel;
+    tried.add(model);
+    try {
+      const value = await attempt(model);
+      return { value, model, policyFallback };
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      if (isContentPolicyMessage(message)) {
+        policyBlocked = true;
+        if (imagePolicyFallbackModel && !tried.has(imagePolicyFallbackModel)) {
+          models = [
+            ...models.slice(0, index + 1),
+            imagePolicyFallbackModel,
+            ...models.slice(index + 1).filter((m) => m !== imagePolicyFallbackModel),
+          ];
+          policyFallback = true;
+          continue;
+        }
+      }
+      if (index < imageGenerationRetries - 1) await sleep(Math.min(30000, 3000 * (index + 1) * (index + 1)));
+    }
+  }
+  const detail = lastError instanceof Error ? lastError.message : String(lastError);
+  const kind: ImageErrorKind = policyBlocked && isContentPolicyMessage(detail) ? "content_policy" : "upstream";
+  throw new ImageGenerationError(
+    `${label} failed after ${imageGenerationRetries} attempt(s)${kind === "content_policy" ? " [content_policy]" : ""}: ${detail}`,
+    kind,
+  );
+}
+
 export async function generateImage(prompt: string, aspect: string, outPath: string, qualityOverride = "", transparent = false, preferredModel = "") {
   const { baseUrl, apiKey } = openAIConfig();
-  const models = orderedImageModels(preferredModel);
-  let payload: { data?: Array<{ b64_json?: string; url?: string }> } | null = null;
-  let lastError: unknown = null;
-  let usedModel = "";
-  for (let attempt = 1; attempt <= imageGenerationRetries; attempt += 1) {
-    const model = models[Math.min(attempt - 1, models.length - 1)] || imageModel;
-    try {
-      payload = await fetchJson(`${baseUrl}/images/generations`, {
+  const outcome = await runWithModelFallback(
+    preferredModel,
+    (model) =>
+      fetchJson(`${baseUrl}/images/generations`, {
         method: "POST",
         headers: {
           authorization: `Bearer ${apiKey}`,
@@ -243,152 +363,132 @@ export async function generateImage(prompt: string, aspect: string, outPath: str
           ...outputFormatParamsForModel(model, transparent),
         }),
         timeoutMs: imageTimeoutSeconds * 1000,
-      });
-      usedModel = model;
-      lastError = null;
-      break;
-    } catch (error) {
-      lastError = error;
-      if (attempt < imageGenerationRetries) await sleep(Math.min(30000, 3000 * attempt * attempt));
-    }
-  }
-  if (lastError) throw new Error(`image generation failed after ${imageGenerationRetries} attempt(s): ${lastError instanceof Error ? lastError.message : String(lastError)}`);
-  const item = payload?.data?.[0];
+      }),
+    "image generation",
+  );
+  const item = outcome.value?.data?.[0];
   if (!item) throw new Error("image generation returned no data");
   const buffer = await imagePayloadToBuffer(item);
   await mkdir(dirname(outPath), { recursive: true });
   await writeFile(outPath, buffer);
-  return { model: usedModel || imageModel, mimeType: normalizeImageMime(transparent ? "image/png" : `image/${imageOutputFormat || "png"}`), size: buffer.length, mode: "generation" };
+  return {
+    model: outcome.model || imageModel,
+    mimeType: normalizeImageMime(transparent ? "image/png" : `image/${imageOutputFormat || "png"}`),
+    size: buffer.length,
+    mode: "generation",
+    policyFallback: outcome.policyFallback,
+  };
 }
 
 export async function editImageWithReference(prompt: string, aspect: string, outPath: string, references: ReferenceImage[], qualityOverride = "", transparent = false, preferredModel = "") {
   const { baseUrl, apiKey } = openAIConfig();
   const validRefs = references.filter((ref) => ref?.buffer?.length);
   if (!validRefs.length) throw new Error("reference image is empty");
-  const models = orderedImageModels(preferredModel);
-  let payload: { data?: Array<{ b64_json?: string; url?: string }> } | null = null;
-  let lastError: unknown = null;
-  let usedModel = "";
   let referenceMode: "multi" | "single_fallback" = validRefs.length > 1 ? "multi" : "single_fallback";
-  for (let attempt = 1; attempt <= imageGenerationRetries; attempt += 1) {
-    const model = models[Math.min(attempt - 1, models.length - 1)] || imageModel;
-    try {
-      const buildForm = (withFidelity: boolean, multi: boolean) => {
-        const form = new FormData();
-        form.append("model", model);
-        form.append("prompt", prompt);
-        form.append("size", imageSizeForModel(aspect, model));
-        form.append("n", "1");
-        if (withFidelity) form.append("input_fidelity", "high");
-        if (qualityOverride || imageQuality) form.append("quality", qualityOverride || imageQuality);
-        if (!isSeedreamModel(model)) {
-          if (transparent) {
-            form.append("output_format", "png");
-          } else {
-            if (imageOutputFormat) form.append("output_format", imageOutputFormat);
-            if (imageOutputCompression > 0) form.append("output_compression", String(imageOutputCompression));
-          }
-        }
-        const refsToSend = multi && validRefs.length > 1 ? validRefs : [validRefs[0]];
-        if (refsToSend.length > 1) {
-          // OpenAI multi-image edits: repeat image[] field
-          for (const ref of refsToSend) {
-            form.append(
-              "image[]",
-              new Blob([new Uint8Array(ref.buffer)], { type: ref.mimeType || "image/png" }),
-              ref.filename || "reference.png",
-            );
-          }
+
+  const attemptWithModel = async (model: string) => {
+    const buildForm = (withFidelity: boolean, multi: boolean) => {
+      const form = new FormData();
+      form.append("model", model);
+      form.append("prompt", prompt);
+      form.append("size", imageSizeForModel(aspect, model));
+      form.append("n", "1");
+      if (withFidelity) form.append("input_fidelity", "high");
+      if (qualityOverride || imageQuality) form.append("quality", qualityOverride || imageQuality);
+      if (!isSeedreamModel(model)) {
+        if (transparent) {
+          form.append("output_format", "png");
         } else {
-          const source = refsToSend[0];
+          if (imageOutputFormat) form.append("output_format", imageOutputFormat);
+          if (imageOutputCompression > 0) form.append("output_compression", String(imageOutputCompression));
+        }
+      }
+      const refsToSend = multi && validRefs.length > 1 ? validRefs : [validRefs[0]];
+      if (refsToSend.length > 1) {
+        // OpenAI multi-image edits: repeat image[] field; order = base image first, then references
+        for (const ref of refsToSend) {
           form.append(
-            "image",
-            new Blob([new Uint8Array(source.buffer)], { type: source.mimeType || "image/png" }),
-            source.filename || "reference.png",
+            "image[]",
+            new Blob([new Uint8Array(ref.buffer)], { type: ref.mimeType || "image/png" }),
+            ref.filename || "reference.png",
           );
         }
-        return form;
-      };
+      } else {
+        const source = refsToSend[0];
+        form.append(
+          "image",
+          new Blob([new Uint8Array(source.buffer)], { type: source.mimeType || "image/png" }),
+          source.filename || "reference.png",
+        );
+      }
+      return form;
+    };
 
-      const postEdits = async (withFidelity: boolean, multi: boolean) =>
-        fetchJson(`${baseUrl}/images/edits`, {
-          method: "POST",
-          headers: { authorization: `Bearer ${apiKey}` },
-          body: buildForm(withFidelity, multi),
-          timeoutMs: imageTimeoutSeconds * 1000,
-        });
+    const postEdits = async (withFidelity: boolean, multi: boolean) =>
+      fetchJson(`${baseUrl}/images/edits`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${apiKey}` },
+        body: buildForm(withFidelity, multi),
+        timeoutMs: imageTimeoutSeconds * 1000,
+      });
 
-      const canMulti = validRefs.length > 1;
-      // Matrix: multi+fidelity → multi no fidelity (only if error mentions input_fidelity)
-      //         → single+fidelity → single (multi→single on any 4xx / parse error)
-      type EditStep = { multi: boolean; withFidelity: boolean };
-      const runStep = async (step: EditStep) => {
-        payload = await postEdits(step.withFidelity, step.multi);
-        referenceMode = step.multi && canMulti ? "multi" : "single_fallback";
-      };
-
+    const canMulti = validRefs.length > 1;
+    type EditStep = { multi: boolean; withFidelity: boolean };
+    let payload: { data?: Array<{ b64_json?: string; url?: string }> } | null = null;
+    const runStep = async (step: EditStep) => {
+      payload = await postEdits(step.withFidelity, step.multi);
+      referenceMode = step.multi && canMulti ? "multi" : "single_fallback";
+    };
+    const runSingle = async () => {
       try {
-        if (canMulti) {
+        await runStep({ multi: false, withFidelity: true });
+      } catch (singleFidErr) {
+        const sMsg = singleFidErr instanceof Error ? singleFidErr.message : String(singleFidErr);
+        if (/input_fidelity/i.test(sMsg)) await runStep({ multi: false, withFidelity: false });
+        else throw singleFidErr;
+      }
+    };
+
+    // Matrix: multi+fidelity → multi no fidelity (only if error mentions input_fidelity)
+    //         → single+fidelity → single. A content-policy block is never "fixed" by dropping
+    //         references, so it propagates immediately for the model-level fallback.
+    if (canMulti) {
+      try {
+        await runStep({ multi: true, withFidelity: true });
+      } catch (multiFidErr) {
+        const msg = multiFidErr instanceof Error ? multiFidErr.message : String(multiFidErr);
+        if (isContentPolicyMessage(msg)) throw multiFidErr;
+        if (/input_fidelity/i.test(msg)) {
           try {
-            await runStep({ multi: true, withFidelity: true });
-          } catch (multiFidErr) {
-            const msg = multiFidErr instanceof Error ? multiFidErr.message : String(multiFidErr);
-            if (/input_fidelity/i.test(msg)) {
-              try {
-                await runStep({ multi: true, withFidelity: false });
-              } catch {
-                // multi without fidelity also failed → fall through to single
-                await runStep({ multi: false, withFidelity: true }).catch(async (singleFidErr) => {
-                  const sMsg = singleFidErr instanceof Error ? singleFidErr.message : String(singleFidErr);
-                  if (/input_fidelity/i.test(sMsg)) await runStep({ multi: false, withFidelity: false });
-                  else throw singleFidErr;
-                });
-              }
-            } else {
-              // any multi failure (4xx / parse) → single path
-              try {
-                await runStep({ multi: false, withFidelity: true });
-              } catch (singleFidErr) {
-                const sMsg = singleFidErr instanceof Error ? singleFidErr.message : String(singleFidErr);
-                if (/input_fidelity/i.test(sMsg)) await runStep({ multi: false, withFidelity: false });
-                else throw singleFidErr;
-              }
-            }
+            await runStep({ multi: true, withFidelity: false });
+          } catch (multiErr) {
+            const mMsg = multiErr instanceof Error ? multiErr.message : String(multiErr);
+            if (isContentPolicyMessage(mMsg)) throw multiErr;
+            await runSingle();
           }
         } else {
-          try {
-            await runStep({ multi: false, withFidelity: true });
-          } catch (singleFidErr) {
-            const sMsg = singleFidErr instanceof Error ? singleFidErr.message : String(singleFidErr);
-            if (/input_fidelity/i.test(sMsg)) await runStep({ multi: false, withFidelity: false });
-            else throw singleFidErr;
-          }
+          await runSingle();
         }
-      } catch (stepError) {
-        throw stepError;
       }
-
-      usedModel = model;
-      lastError = null;
-      break;
-    } catch (error) {
-      lastError = error;
-      if (attempt < imageGenerationRetries) await sleep(Math.min(30000, 3000 * attempt * attempt));
+    } else {
+      await runSingle();
     }
-  }
-  if (lastError) throw new Error(`image edit failed after ${imageGenerationRetries} attempt(s): ${lastError instanceof Error ? lastError.message : String(lastError)}`);
-  const resolved = payload as { data?: Array<{ b64_json?: string; url?: string }> } | null;
-  const item = resolved?.data?.[0];
+    return payload as { data?: Array<{ b64_json?: string; url?: string }> } | null;
+  };
+
+  const outcome = await runWithModelFallback(preferredModel, attemptWithModel, "image edit");
+  const item = outcome.value?.data?.[0];
   if (!item) throw new Error("image edit returned no data");
   const buffer = await imagePayloadToBuffer(item);
   await mkdir(dirname(outPath), { recursive: true });
   await writeFile(outPath, buffer);
   return {
-    model: usedModel || imageModel,
+    model: outcome.model || imageModel,
     mimeType: normalizeImageMime(transparent ? "image/png" : `image/${imageOutputFormat || "png"}`),
     size: buffer.length,
     mode: "edit",
     referenceMode,
+    policyFallback: outcome.policyFallback,
   };
 }
 
@@ -612,19 +712,28 @@ export async function readAsyncImageJob(jobId: string) {
 export async function createStandaloneImages(payload: Record<string, unknown>, request: Request) {
   const prompt = String(payload.prompt || payload.image_prompt || payload.video_subject || "").trim();
   if (!prompt) throw new Error("prompt is required");
-  const aspect = String(payload.aspect_ratio || payload.aspect || payload.video_aspect || "1:1");
   const count = Math.max(1, Math.min(4, Number(payload.n || payload.count || payload.image_count || 1)));
   const qualityOverride = ["low", "medium", "high"].includes(String(payload.quality || "").toLowerCase())
     ? String(payload.quality).toLowerCase()
     : "";
   const transparent = String(payload.background || "") === "transparent";
   const preferredModel = String(payload.image_model || payload.model || "").trim();
+  /* Reference edits must not silently degrade into unrelated text-to-image output; callers opt in. */
+  const allowGenerationFallback = payload.allow_generation_fallback === true || payload.allow_generation_fallback === "true";
   const imageId = `img-${randomUUID()}`;
   const runDir = join(imageOutputDir, imageId);
   await mkdir(runDir, { recursive: true });
   const references = extractReferenceImages(payload);
+  const requestedAspect = String(payload.aspect_ratio || payload.aspect || payload.video_aspect || "auto").trim();
+  let aspect = requestedAspect;
+  if (!["1:1", "3:2", "2:3", "16:9", "9:16"].includes(aspect)) {
+    const base = references[0] ? imageDimensions(references[0].buffer) : null;
+    aspect = base ? aspectFromDimensions(base.width, base.height) : "1:1";
+  }
   const images: Array<Record<string, unknown>> = [];
   const errors: string[] = [];
+  let errorKind: ImageErrorKind | "" = "";
+  let policyFallback = false;
 
   await mapLimit(
     Array.from({ length: count }, (_, index) => index + 1),
@@ -635,12 +744,13 @@ export async function createStandaloneImages(payload: Record<string, unknown>, r
       const imagePrompt = standaloneImagePrompt(payload, index, count);
       let referenceMode: string = references.length ? "edit" : "none";
       try {
-        let result: { model: string; mimeType: string; size: number; mode: string; referenceMode?: string };
+        let result: { model: string; mimeType: string; size: number; mode: string; referenceMode?: string; policyFallback?: boolean };
         if (references.length) {
           try {
             result = await editImageWithReference(imagePrompt, aspect, outPath, references, qualityOverride, transparent, preferredModel);
             referenceMode = result.referenceMode || (references.length > 1 ? "multi" : "single_fallback");
           } catch (error) {
+            if (!allowGenerationFallback || errorKindOf(error) === "content_policy") throw error;
             referenceMode = "fallback_generation";
             errors.push(`reference edit fallback for image-${index}: ${error instanceof Error ? error.message : String(error)}`);
             result = await generateImage(`${imagePrompt}\nUse the uploaded reference only as conceptual direction if unavailable to the model.`, aspect, outPath, qualityOverride, transparent, preferredModel);
@@ -648,6 +758,7 @@ export async function createStandaloneImages(payload: Record<string, unknown>, r
         } else {
           result = await generateImage(imagePrompt, aspect, outPath, qualityOverride, transparent, preferredModel);
         }
+        if (result.policyFallback) policyFallback = true;
         const written = await stat(outPath);
         const publicUrl = imagePublicUrl(request, imageId, filename);
         images.push({
@@ -660,28 +771,38 @@ export async function createStandaloneImages(payload: Record<string, unknown>, r
           model: result.model,
           mode: result.mode,
           reference_mode: referenceMode,
+          policy_fallback: Boolean(result.policyFallback),
           mime_type: result.mimeType,
           size: written.size,
           public_url: publicUrl,
           download_url: publicUrl,
         });
       } catch (error) {
+        const kind = errorKindOf(error);
+        if (kind === "content_policy" || !errorKind) errorKind = kind;
         errors.push(`image-${index}: ${error instanceof Error ? error.message : String(error)}`);
       }
     },
   );
 
   images.sort((a, b) => Number(a.index || 0) - Number(b.index || 0));
-  if (!images.length) throw new Error(errors.join("; ") || "no images generated");
+  if (!images.length) {
+    const kind = (errorKind as ImageErrorKind | "") || "upstream";
+    const prefix = kind === "content_policy" ? "content_policy: " : "";
+    throw new ImageGenerationError(`${prefix}${errors.join("; ") || "no images generated"}`, kind);
+  }
   return {
     job_id: imageId,
     state: "complete",
     progress: 100,
     prompt,
     aspect_ratio: aspect,
+    requested_aspect_ratio: requestedAspect,
     count,
     image_model: imageModel,
     image_fallback_models: imageFallbackModels,
+    image_policy_fallback_model: imagePolicyFallbackModel,
+    policy_fallback: policyFallback,
     image_quality: imageQuality,
     image_output_format: imageOutputFormat,
     image_output_compression: imageOutputCompression,
@@ -689,6 +810,7 @@ export async function createStandaloneImages(payload: Record<string, unknown>, r
     reference_count: references.length,
     images,
     errors,
+    error_kind: errorKind || undefined,
   };
 }
 

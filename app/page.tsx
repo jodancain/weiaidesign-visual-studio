@@ -266,7 +266,7 @@ type HistoryEntry = {
 };
 
 type ChatMessage =
-  | { id: string; role: "user"; text: string; ts: number }
+  | { id: string; role: "user"; text: string; images?: string[]; ts: number }
   | {
       id: string;
       role: "assistant";
@@ -280,10 +280,83 @@ type ChatMessage =
   | { id: string; role: "action"; label: string; done: boolean; ts: number };
 
 type OaiToolCall = { id: string; type?: string; function: { name: string; arguments: string } };
+type OaiContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string; detail?: "low" | "high" | "auto" } };
 type OaiMessage =
-  | { role: "user" | "system"; content: string }
+  | { role: "user" | "system"; content: string | OaiContentPart[] }
   | { role: "assistant"; content?: string | null; tool_calls?: OaiToolCall[] }
   | { role: "tool"; tool_call_id: string; content: string };
+
+/** Every picture the agent may refer to in this conversation gets a stable global id (#1, #2 …).
+ *  Per-turn "图一/图二" labels are resolved against this registry (Lovart numbers by attach order). */
+type TurnImageSource = "attached" | "selected" | "last_output" | "output";
+type TurnImage = {
+  id: number;
+  src: string;
+  label: string;
+  source: TurnImageSource;
+  width: number;
+  height: number;
+  turn: number;
+};
+
+type ComposerAttachment = { id: string; src: string; name: string; width: number; height: number };
+
+/* Image parts are only needed live; persisted sessions keep the text so history stays small. */
+function stripOaiImages(history: OaiMessage[]): OaiMessage[] {
+  return history.map((message) => {
+    if (message.role !== "user" || typeof message.content === "string") return message;
+    const parts = message.content;
+    const text = parts.map((part) => (part.type === "text" ? part.text : "")).filter(Boolean).join("\n");
+    const imageCount = parts.filter((part) => part.type === "image_url").length;
+    return { role: "user", content: imageCount ? `${text}\n（本轮附带 ${imageCount} 张图片，已省略）` : text };
+  });
+}
+
+/** Nearest supported aspect for a base image; mirrors aspectFromDimensions on the server. */
+function aspectFromSize(width: number, height: number) {
+  if (!width || !height) return "1:1";
+  const ratio = width / height;
+  if (ratio >= 1.6) return "16:9";
+  if (ratio >= 1.2) return "3:2";
+  if (ratio > 0.83) return "1:1";
+  if (ratio > 0.62) return "2:3";
+  return "9:16";
+}
+
+const CN_ORDINALS = ["一", "二", "三", "四", "五", "六", "七", "八", "九", "十"];
+function cnOrdinal(index: number) {
+  return CN_ORDINALS[index] || String(index + 1);
+}
+
+/** Downscale for the vision LLM (tokens) — keeps alpha for PNG sources so cut-outs don't turn black. */
+async function downscaleForVision(src: string, maxEdge = 768): Promise<string> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxEdge / Math.max(img.naturalWidth || 1, img.naturalHeight || 1));
+      const w = Math.max(1, Math.round((img.naturalWidth || 1) * scale));
+      const h = Math.max(1, Math.round((img.naturalHeight || 1) * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        resolve(src);
+        return;
+      }
+      ctx.drawImage(img, 0, 0, w, h);
+      try {
+        resolve(src.startsWith("data:image/png") ? canvas.toDataURL("image/png") : canvas.toDataURL("image/jpeg", 0.82));
+      } catch {
+        resolve(src);
+      }
+    };
+    img.onerror = () => resolve(src);
+    img.src = src;
+  });
+}
 
 type DesignPlan = {
   title: string;
@@ -388,7 +461,7 @@ function normalizeAgentSessions(raw: unknown): AgentSession[] {
       title: String(s.title || "New chat"),
       ts: Number(s.ts) || Date.now(),
       messages: Array.isArray(s.messages) ? s.messages : [],
-      oai: Array.isArray(s.oai) ? s.oai : [],
+      oai: Array.isArray(s.oai) ? stripOaiImages(s.oai as OaiMessage[]) : [],
       projectId: sessionProjectIdOf(s),
     }));
 }
@@ -742,6 +815,7 @@ function writeProjectsToStorage(projects: ProjectMeta[], activeId: string) {
 /* ------------------------------------------------------------------ */
 
 export default function Home() {
+  "use no memo"; // The tldraw editor is an imperative external store; its action closures are not compiler-pure.
   const [editor, setEditor] = useState<Editor | null>(null);
 
   const [token, setToken] = useState("");
@@ -778,6 +852,8 @@ export default function Home() {
   const [showSkillsLib, setShowSkillsLib] = useState(false);
   const [listening, setListening] = useState(false);
   const [contextChips, setContextChips] = useState<string[]>([]);
+  const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
+  const [composerDragOver, setComposerDragOver] = useState(false);
   const [tick, setTick] = useState(0);
 
   const [zoomPct, setZoomPct] = useState(100);
@@ -835,6 +911,10 @@ export default function Home() {
   const recognitionRef = useRef<{ stop: () => void } | null>(null);
   const oaiHistoryRef = useRef<OaiMessage[]>([]);
   const currentPlanRef = useRef<DesignPlan | null>(null);
+  const imageRegistryRef = useRef<TurnImage[]>([]);
+  const lastOutputsRef = useRef<number[]>([]);
+  const turnCounterRef = useRef(0);
+  const attachmentsRef = useRef<ComposerAttachment[]>([]);
   const selectionRef = useRef(selection);
   const skipAutosaveRef = useRef(false);
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -845,6 +925,10 @@ export default function Home() {
   useEffect(() => {
     selectionRef.current = selection;
   }, [selection]);
+
+  useEffect(() => {
+    attachmentsRef.current = attachments;
+  }, [attachments]);
 
   useEffect(() => {
     activeProjectIdRef.current = activeProjectId;
@@ -956,6 +1040,7 @@ export default function Home() {
   // 60s debounced autosave when document changes
   useEffect(() => {
     if (!editor) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- A newly attached external editor starts a new autosave subscription.
     setSyncStatus("local");
     if (autosaveTimerRef.current) {
       clearTimeout(autosaveTimerRef.current);
@@ -1026,10 +1111,16 @@ export default function Home() {
         setSessionId(last.id);
         setMessages(last.messages);
         oaiHistoryRef.current = last.oai || [];
+        imageRegistryRef.current = [];
+        lastOutputsRef.current = [];
+        turnCounterRef.current = 0;
       } else {
         setSessionId(uid());
         setMessages([]);
         oaiHistoryRef.current = [];
+        imageRegistryRef.current = [];
+        lastOutputsRef.current = [];
+        turnCounterRef.current = 0;
       }
       setContextChips([]);
     },
@@ -1110,6 +1201,7 @@ export default function Home() {
   /* ------------------------------ boot ------------------------------ */
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Browser-only persisted state is hydrated after the server-matching first render.
     setToken(localStorage.getItem("videoApiToken") || "");
     setTokenLoaded(true);
     try {
@@ -1159,6 +1251,9 @@ export default function Home() {
         setSessionId(last.id);
         setMessages(last.messages);
         oaiHistoryRef.current = last.oai || [];
+        imageRegistryRef.current = [];
+        lastOutputsRef.current = [];
+        turnCounterRef.current = 0;
       }
     } catch {
       setPastSessions([]);
@@ -1239,7 +1334,7 @@ export default function Home() {
   useEffect(() => {
     const active = agentBusy || busy || messages.some((m) => m.role === "action" && !m.done);
     if (!active) return;
-    const timer = setInterval(() => setTick((v) => v + 1), 1000);
+    const timer = setInterval(() => setTick(Date.now()), 1000);
     return () => clearInterval(timer);
   }, [agentBusy, busy, messages]);
 
@@ -1583,9 +1678,39 @@ export default function Home() {
     if (item.action === "grid") editor.updateInstanceState({ isGridMode: !editor.getInstanceState().isGridMode });
   };
 
+  /* Lovart 同款：从对话框上传的图既进画布，也按顺序挂到当前消息上（图一/图二…） */
+  const addAttachmentFiles = useCallback(
+    async (files: File[]) => {
+      for (const file of files.slice(0, 6)) {
+        if (!file.type.startsWith("image/")) continue;
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result));
+          reader.onerror = () => reject(new Error("读取文件失败"));
+          reader.readAsDataURL(file);
+        });
+        let width = 0;
+        let height = 0;
+        try {
+          const img = await loadImage(dataUrl);
+          width = img.naturalWidth || 0;
+          height = img.naturalHeight || 0;
+        } catch {
+          /* dimensions optional */
+        }
+        setAttachments((prev) => [...prev, { id: uid(), src: dataUrl, name: file.name || "image", width, height }].slice(-6));
+        setReferences((prev) => [...prev, dataUrl].slice(-4));
+      }
+    },
+    [],
+  );
+
   const handleFiles = async (list: FileList | null) => {
     if (!list?.length) return;
-    for (const file of Array.from(list).slice(0, 6)) {
+    const files = Array.from(list).slice(0, 6);
+    await addAttachmentFiles(files);
+    for (const file of files) {
+      if (!file.type.startsWith("image/")) continue;
       const dataUrl = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve(String(reader.result));
@@ -1593,8 +1718,8 @@ export default function Home() {
         reader.readAsDataURL(file);
       });
       await placeImageOnCanvas(dataUrl, file.name);
-      setReferences((prev) => [...prev, dataUrl].slice(-4));
     }
+    editor?.selectNone();
   };
 
   /* ------------------------------- api ------------------------------ */
@@ -1642,7 +1767,7 @@ export default function Home() {
   }, []);
 
   type NewChatMessage =
-    | { id?: string; role: "user"; text: string }
+    | { id?: string; role: "user"; text: string; images?: string[] }
     | { id?: string; role: "assistant"; kind: string; text?: string; images?: string[]; videoUrl?: string; error?: string }
     | { id?: string; role: "action"; label: string; done: boolean };
 
@@ -1698,18 +1823,19 @@ export default function Home() {
       transparent?: boolean;
       imageModel?: string;
       negativePrompt?: string;
+      outputName?: string;
     }) => {
       const refs = [...(params.refs || [])];
       // Direct gen: append brand logo as extra reference when present
       if (params.kind !== "agent" && brandKit.logoRef) refs.push(brandKit.logoRef);
       const referenceImages = await Promise.all(refs.slice(0, 6).map((src) => srcToDataUrl(src)));
-      const placeholderId = createPlaceholder("生成图片");
+      const placeholderId = createPlaceholder(params.outputName || "生成图片");
       try {
         const effectivePrompt = params.transparent
           ? `${params.prompt}。背景为纯白色（#FFFFFF）纯净平涂，无阴影无渐变，主体边缘干净利落`
           : params.prompt;
         const brandLine = params.kind === "agent" ? undefined : brandText || undefined;
-        const payload = await apiAsyncImages("/images", {
+        const payload = await apiAsyncImages<ImagesResult & { policy_fallback?: boolean; error_kind?: string }>("/images", {
             prompt: effectivePrompt,
             raw_prompt: params.kind === "agent" ? effectivePrompt : undefined,
             style: params.kind === "agent" ? undefined : style,
@@ -1718,11 +1844,13 @@ export default function Home() {
             audience: params.kind === "agent" ? undefined : audience,
             negative_prompt: params.negativePrompt || (params.kind === "agent" ? undefined : negativePrompt),
             aspect_ratio: params.aspect || aspect,
-            n: Math.max(1, Math.min(4, params.count || count)),
+            n: Math.max(1, Math.min(4, params.count || (params.kind === "agent" ? 1 : count))),
             ...(params.quality ? { quality: params.quality } : {}),
             ...(params.imageModel ? { image_model: params.imageModel } : {}),
             ...(params.transparent ? { background: "transparent" } : {}),
             ...(referenceImages.length ? { reference_images: referenceImages } : {}),
+            /* 非 agent 的直出路径保留旧行为：参考编辑失败时退化为文生图 */
+            ...(params.kind !== "agent" ? { allow_generation_fallback: true } : {}),
           });
         const urls = (payload.data?.images || []).map((item) => String(item.public_url || "")).filter(Boolean);
         removePlaceholder(placeholderId);
@@ -1730,19 +1858,22 @@ export default function Home() {
         for (const url of urls) {
           let finalSrc = targetAspect === "16:9" || targetAspect === "9:16" ? await cropToAspect(url, targetAspect) : url;
           if (params.transparent) finalSrc = await solidBackgroundToAlpha(finalSrc);
-          await placeImageOnCanvas(finalSrc);
+          await placeImageOnCanvas(finalSrc, params.outputName || "generated");
         }
         pushHistory({
           kind: params.kind === "agent" ? "agent-images" : "images",
           prompt: params.prompt,
           outputs: urls.map((url) => ({ url })),
         });
+        if (payload.data?.policy_fallback) {
+          pushMessage({ role: "assistant", kind: "模型切换", text: "默认图像模型的安全审核拦截了这次请求，已自动改用备用图像模型完成。" });
+        }
         return urls;
       } finally {
         removePlaceholder(placeholderId);
       }
     },
-    [apiAsyncImages, aspect, audience, brandKit.logoRef, brandText, count, createPlaceholder, designMemoryText, negativePrompt, placeImageOnCanvas, pushHistory, removePlaceholder, style],
+    [apiAsyncImages, aspect, audience, brandKit.logoRef, brandText, count, createPlaceholder, designMemoryText, negativePrompt, placeImageOnCanvas, pushHistory, pushMessage, removePlaceholder, style],
   );
 
   const doFontRestyle = useCallback(
@@ -1862,7 +1993,7 @@ export default function Home() {
       pushHistory({ kind: "material-transfer", prompt: params.instruction || "材质复刻", outputs: urls.map((url) => ({ url })) });
       return urls;
     },
-    [api, aspect, placeImageOnCanvas, pushHistory],
+    [apiAsyncImages, aspect, placeImageOnCanvas, pushHistory],
   );
 
   /* 指令式图片编辑：参考图 + 指令重绘（Quick Edit / Upscale / Remove BG / Eraser / Multi-Angles 共用管线） */
@@ -2093,7 +2224,7 @@ export default function Home() {
       pushHistory({ kind: `inpaint(${engine})`, prompt: finalInstruction, outputs: [] });
       return composed;
     },
-    [api, apiAsyncImages, placeImageOnCanvas, pushHistory],
+    [apiAsyncImages, placeImageOnCanvas, pushHistory],
   );
 
   /* ---------- 可视化拆层：矢量化按颜色分组 → 每层独立可拖拽 shape ---------- */
@@ -2180,42 +2311,139 @@ export default function Home() {
     }
   }, [getExportSvg]);
 
+  const vectorizeSrc = useCallback(
+    async (src: string) => {
+      setBusy(true);
+      setBusyLabel("矢量化");
+      try {
+        const dataUrl = await srcToDataUrl(src);
+        const mod = (await import("imagetracerjs")) as unknown as {
+          default: { imageToSVG: (url: string, cb: (svg: string) => void, preset?: string) => void };
+        };
+        const svg = await new Promise<string>((resolve) => mod.default.imageToSVG(dataUrl, resolve, "posterized2"));
+        saveBlob(new Blob([svg], { type: "image/svg+xml" }), "studio-vectorized.svg");
+        /* 同时以矢量 asset 落画布，可无损缩放 */
+        const svgDataUrl = `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`;
+        await placeImageOnCanvas(svgDataUrl, "vectorized");
+        pushHistory({ kind: "vectorize", prompt: "位图矢量化（已下载 + 落画布）", outputs: [] });
+        return svgDataUrl;
+      } finally {
+        setBusy(false);
+        setBusyLabel("");
+      }
+    },
+    [placeImageOnCanvas, pushHistory],
+  );
+
   const vectorizeSelected = useCallback(async () => {
     const src = selectionRef.current.images[0];
     if (!src) {
       setError("先选中一张图片再矢量化");
       return false;
     }
-    setBusy(true);
-    setBusyLabel("矢量化");
-    try {
-      const dataUrl = await srcToDataUrl(src);
-      const mod = (await import("imagetracerjs")) as unknown as {
-        default: { imageToSVG: (url: string, cb: (svg: string) => void, preset?: string) => void };
-      };
-      const svg = await new Promise<string>((resolve) => mod.default.imageToSVG(dataUrl, resolve, "posterized2"));
-      saveBlob(new Blob([svg], { type: "image/svg+xml" }), "studio-vectorized.svg");
-      /* 同时以矢量 asset 落画布，可无损缩放 */
-      const svgDataUrl = `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`;
-      await placeImageOnCanvas(svgDataUrl, "vectorized");
-      pushHistory({ kind: "vectorize", prompt: "位图矢量化（已下载 + 落画布）", outputs: [] });
-      return true;
-    } finally {
-      setBusy(false);
-      setBusyLabel("");
-    }
-  }, [placeImageOnCanvas, pushHistory]);
+    await vectorizeSrc(src);
+    return true;
+  }, [vectorizeSrc]);
 
   /* --------------------------- agent loop --------------------------- */
+
+  /* ---- image registry: stable #ids for every picture the agent can point at ---- */
+
+  const registerImage = useCallback(
+    async (src: string, source: TurnImageSource, label: string, turn: number, size?: { width: number; height: number }) => {
+      const existing = imageRegistryRef.current.find((item) => item.src === src);
+      if (existing) return existing;
+      let width = size?.width || 0;
+      let height = size?.height || 0;
+      if (!width || !height) {
+        try {
+          const img = await loadImage(src);
+          width = img.naturalWidth || 0;
+          height = img.naturalHeight || 0;
+        } catch {
+          /* dimensions optional */
+        }
+      }
+      const entry: TurnImage = { id: imageRegistryRef.current.length + 1, src, label, source, width, height, turn };
+      imageRegistryRef.current = [...imageRegistryRef.current, entry];
+      return entry;
+    },
+    [],
+  );
+
+  const imageById = useCallback((value: unknown): TurnImage | null => {
+    const id = Number(value);
+    if (!Number.isFinite(id)) return null;
+    return imageRegistryRef.current.find((item) => item.id === id) || null;
+  }, []);
+
+  /** Outputs of a tool become "上一版成品" and the default subject of the next turn (Lovart chip behaviour). */
+  const registerOutputs = useCallback(
+    async (urls: string[], name: string) => {
+      const turn = turnCounterRef.current;
+      const entries: TurnImage[] = [];
+      for (const [index, url] of urls.entries()) {
+        const label = urls.length > 1 ? `成品·${name}·${index + 1}` : `成品·${name}`;
+        entries.push(await registerImage(url, "output", label, turn));
+      }
+      if (entries.length) lastOutputsRef.current = entries.map((entry) => entry.id);
+      setContextChips(urls.slice(0, 2));
+      return entries;
+    },
+    [registerImage],
+  );
+
+  /** Resolve this turn's pictures in Lovart order: composer attachments → selected canvas images → last output. */
+  const collectTurnImages = useCallback(async () => {
+    const turn = turnCounterRef.current;
+    const seen = new Set<string>();
+    const result: Array<{ entry: TurnImage; ordinal: number }> = [];
+    let ordinal = 0;
+    for (const attachment of attachmentsRef.current) {
+      if (seen.has(attachment.src)) continue;
+      seen.add(attachment.src);
+      const entry = await registerImage(attachment.src, "attached", `第${turn}轮·图${cnOrdinal(ordinal)}`, turn, attachment);
+      result.push({ entry, ordinal });
+      ordinal += 1;
+    }
+    for (const src of selectionRef.current.images) {
+      if (seen.has(src)) continue;
+      seen.add(src);
+      const known = imageRegistryRef.current.find((item) => item.src === src);
+      const entry = known || (await registerImage(src, "selected", `第${turn}轮·图${cnOrdinal(ordinal)}（画布选中）`, turn));
+      result.push({ entry, ordinal });
+      ordinal += 1;
+    }
+    if (!result.length) {
+      for (const id of lastOutputsRef.current) {
+        const entry = imageRegistryRef.current.find((item) => item.id === id);
+        if (entry && !seen.has(entry.src)) {
+          seen.add(entry.src);
+          result.push({ entry, ordinal: -1 });
+        }
+      }
+    }
+    return result;
+  }, [registerImage]);
 
   const buildAgentCanvasState = useCallback(
     (plan?: DesignPlan) => {
       const sel = selectionRef.current;
+      const registry = imageRegistryRef.current.slice(-30);
       return {
         selectedImageCount: sel.images.length,
         canvasShapeCount: shapeCount,
-        referenceImageCount: references.length,
-        lastGeneratedImages: contextChips,
+        currentTurn: turnCounterRef.current,
+        images: registry.map((item) => ({
+          id: item.id,
+          label: item.label,
+          source: item.source,
+          turn: item.turn,
+          width: item.width,
+          height: item.height,
+          aspect: aspectFromSize(item.width, item.height),
+        })),
+        lastOutputIds: lastOutputsRef.current,
         defaults: { style, aspect, count, brand: brandText, audience, negativePrompt },
         brand_kit:
           brandKit.name || brandKit.palette.length || brandKit.styleWords || brandKit.fontHint || brandKit.logoRef
@@ -2252,7 +2480,7 @@ export default function Home() {
           : undefined,
       };
     },
-    [aspect, audience, brandKit, brandText, contextChips, count, designMemory, designMemoryText, negativePrompt, references.length, shapeCount, style],
+    [aspect, audience, brandKit, brandText, count, designMemory, designMemoryText, negativePrompt, shapeCount, style],
   );
 
   const requestDesignPlan = useCallback(
@@ -2278,90 +2506,194 @@ export default function Home() {
     [buildAgentCanvasState, token],
   );
 
+  const lastUserTextOf = useCallback(() => {
+    const last = [...oaiHistoryRef.current].reverse().find((m) => m.role === "user") as { content?: unknown } | undefined;
+    const content = last?.content;
+    if (typeof content === "string") return content;
+    if (Array.isArray(content)) {
+      return (content as OaiContentPart[]).map((part) => (part.type === "text" ? part.text : "")).join("\n");
+    }
+    return "";
+  }, []);
+
+  const imageModelFromMentions = useCallback(
+    (text: string, hint?: unknown) => {
+      const explicit = String(hint || "").trim();
+      if (/@Image-2\b/i.test(text)) return "gpt-image-2";
+      if (/@Image-1\.5/i.test(text)) return "gpt-image-1.5";
+      if (/@Seedream/i.test(text)) return "seedream-4-5";
+      if (["gpt-image-2", "gpt-image-1.5", "seedream-4-5"].includes(explicit)) return explicit;
+      return currentPlanRef.current?.imageModelHint;
+    },
+    [],
+  );
+
+  const qualityFromMentions = (text: string, requested?: unknown, fallback = "medium") => {
+    if (/@高画质/.test(text)) return "high";
+    if (/@中画质/.test(text)) return "medium";
+    if (/@低画质/.test(text)) return "low";
+    const value = String(requested || "").toLowerCase();
+    return ["low", "medium", "high"].includes(value) ? value : fallback;
+  };
+
+  const toolFailure = (error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    const kind = /content_policy|content policy|policy violation|moderation|safety/i.test(message) ? "content_policy" : "upstream";
+    return `失败（error_kind=${kind}）：${message.slice(0, 600)}`;
+  };
+
   const execAgentTool = useCallback(
     async (name: string, args: Record<string, unknown>) => {
       const sel = selectionRef.current;
+      const lastUserText = lastUserTextOf();
+      const resolveSrc = (value: unknown, fallbackToSelection = true) => {
+        const entry = imageById(value);
+        if (entry) return entry;
+        const lastOutput = lastOutputsRef.current
+          .map((id) => imageRegistryRef.current.find((item) => item.id === id))
+          .find(Boolean);
+        if (fallbackToSelection && sel.images[0]) {
+          const known = imageRegistryRef.current.find((item) => item.src === sel.images[0]);
+          if (known) return known;
+        }
+        return lastOutput || null;
+      };
       switch (name) {
+        case "edit_images": {
+          const base = resolveSrc(args.base_image);
+          if (!base) return "失败：找不到主图。请让用户先附上要修改的图片（对话框 + 号或直接粘贴），或在画布上选中它。";
+          const refIds = Array.isArray(args.reference_images) ? args.reference_images : [];
+          const refs = refIds
+            .map((id) => imageById(id))
+            .filter((entry): entry is TurnImage => Boolean(entry && entry.id !== base.id));
+          const requestedAspect = String(args.aspect || "auto");
+          const targetAspect = aspectOptions.includes(requestedAspect) ? requestedAspect : aspectFromSize(base.width, base.height);
+          const requestedCount = Number(args.count);
+          const outputName = String(args.output_name || "").trim() || "编辑图片";
+          const urls = await doGenerateImages({
+            prompt: String(args.prompt || ""),
+            aspect: targetAspect,
+            count: Number.isFinite(requestedCount) && requestedCount > 0 ? Math.min(4, requestedCount) : 1,
+            quality: qualityFromMentions(lastUserText, args.quality, "medium"),
+            refs: [base.src, ...refs.map((entry) => entry.src)],
+            transparent: Boolean(args.transparent_background),
+            imageModel: imageModelFromMentions(lastUserText, args.model_hint),
+            kind: "agent",
+            outputName,
+          });
+          const entries = await registerOutputs(urls, outputName);
+          pushMessage({ role: "assistant", kind: outputName, images: urls });
+          return `已完成 ${outputName}：生成 ${urls.length} 张，成品编号 ${entries.map((entry) => `#${entry.id}`).join("、")}，画幅 ${targetAspect}，主图 #${base.id}${
+            refs.length ? `，参考图 ${refs.map((entry) => `#${entry.id}`).join("、")}` : ""
+          }。链接：\n${urls.join("\n")}`;
+        }
         case "generate_images": {
-          const lastUserText = String(
-            [...oaiHistoryRef.current].reverse().find((m) => m.role === "user" && typeof (m as { content?: unknown }).content === "string")
-              ?.["content" as never] || "",
-          );
-          const imageModel = /@Image-2\b/i.test(lastUserText)
-            ? "gpt-image-2"
-            : /@Image-1\.5/i.test(lastUserText)
-              ? "gpt-image-1.5"
-              : /@Seedream/i.test(lastUserText)
-                ? "seedream-4-5"
-                : currentPlanRef.current?.imageModelHint;
-          const agentRefs = [
-            ...(args.use_selected_reference ? sel.images.slice(0, 2) : []),
-            ...(brandKit.logoRef ? [brandKit.logoRef] : []),
-          ];
+          const refIds = Array.isArray(args.reference_images) ? args.reference_images : [];
+          const refs = refIds.map((id) => imageById(id)).filter((entry): entry is TurnImage => Boolean(entry));
+          const agentRefs = [...refs.map((entry) => entry.src), ...(brandKit.logoRef ? [brandKit.logoRef] : [])];
           /* Logo mark floor: prompt rules ask high/count=3; soft-enforce if model omits them. */
           const logoMarkBrief = /(?:logo|标志|徽标|商标|字母标|品牌标|\bicon\b|\bmark\b|图标)/i.test(
             `${lastUserText}\n${String(args.prompt || "")}`,
           );
           const requestedCount = args.count != null ? Number(args.count) : NaN;
-          const count = logoMarkBrief
+          const genCount = logoMarkBrief
             ? Math.max(3, Math.min(4, Number.isFinite(requestedCount) && requestedCount > 0 ? requestedCount : 3))
             : Number.isFinite(requestedCount) && requestedCount > 0
-              ? requestedCount
+              ? Math.min(4, requestedCount)
               : 1;
-          const quality = logoMarkBrief
-            ? String(args.quality || "high")
-            : args.quality
-              ? String(args.quality)
-              : undefined;
+          const outputName = String(args.output_name || "").trim() || "生成图片";
           const urls = await doGenerateImages({
-            imageModel,
+            imageModel: imageModelFromMentions(lastUserText, args.model_hint),
             prompt: String(args.prompt || ""),
-            aspect: args.aspect ? String(args.aspect) : undefined,
-            count,
-            quality,
+            aspect: args.aspect && aspectOptions.includes(String(args.aspect)) ? String(args.aspect) : "1:1",
+            count: genCount,
+            quality: qualityFromMentions(lastUserText, args.quality, logoMarkBrief ? "high" : "medium"),
             negativePrompt: args.negative_prompt ? String(args.negative_prompt) : undefined,
             transparent: Boolean(args.transparent_background),
             refs: agentRefs.length ? agentRefs : undefined,
             kind: "agent",
+            outputName,
           });
-          pushMessage({ role: "assistant", kind: "生成图片", images: urls });
-          setContextChips(urls.slice(0, 2));
-          return `已生成 ${urls.length} 张图并放到画布。链接：\n${urls.join("\n")}`;
+          const entries = await registerOutputs(urls, outputName);
+          pushMessage({ role: "assistant", kind: outputName, images: urls });
+          return `已生成 ${urls.length} 张并放到画布，成品编号 ${entries.map((entry) => `#${entry.id}`).join("、")}。链接：\n${urls.join("\n")}`;
+        }
+        case "remove_background": {
+          const target = resolveSrc(args.image);
+          if (!target) return "失败：找不到要去底的图片，请让用户附图或选中。";
+          const { urls, degraded } = await doGpuMatting(target.src);
+          const entries = await registerOutputs(urls, "去底");
+          pushMessage({ role: "assistant", kind: degraded ? "去底（重绘降级）" : "去底", images: urls });
+          return `已去底：成品编号 ${entries.map((entry) => `#${entry.id}`).join("、")}${degraded ? "（GPU 抠图不可用，已用重绘去底）" : "（透明 PNG）"}。链接：\n${urls.join("\n")}`;
+        }
+        case "upscale_image": {
+          const target = resolveSrc(args.image);
+          if (!target) return "失败：找不到要放大的图片，请让用户附图或选中。";
+          const scale = Number(args.scale) === 4 ? 4 : 2;
+          const urls = await doGenerateImages({
+            prompt: `高清放大 ${scale} 倍：以参考图为唯一基础，提升分辨率与细节清晰度（边缘更锐利、纹理更清楚、无噪点无模糊），内容、构图、姿势、颜色、线条、文字全部与原图完全一致，不新增、不删除、不重绘任何元素。`,
+            aspect: aspectFromSize(target.width, target.height),
+            count: 1,
+            quality: "high",
+            refs: [target.src],
+            kind: "agent",
+            outputName: `高清放大${scale}x`,
+          });
+          const entries = await registerOutputs(urls, `高清放大${scale}x`);
+          pushMessage({ role: "assistant", kind: `高清放大 ${scale}x`, images: urls });
+          return `已高清放大 ${scale} 倍：成品编号 ${entries.map((entry) => `#${entry.id}`).join("、")}。链接：\n${urls.join("\n")}`;
+        }
+        case "vectorize_image":
+        case "vectorize_selected": {
+          const target = resolveSrc(args.image);
+          if (!target) return "失败：找不到要矢量化的图片，请让用户附图或选中。";
+          const svgSrc = await vectorizeSrc(target.src);
+          const entry = await registerImage(svgSrc, "output", "成品·矢量SVG", turnCounterRef.current, { width: target.width, height: target.height });
+          pushMessage({ role: "assistant", kind: "矢量化", text: `已转成矢量 SVG（成品 #${entry.id}），文件已开始下载并放到画布。` });
+          return `矢量化完成：成品编号 #${entry.id}，SVG 已下载并放到画布。矢量化只提取描边轮廓，颗粒纹理会被平滑为纯色路径。`;
         }
         case "restyle_lettering": {
-          const src = sel.images[0];
-          if (!src) return "失败：画布上没有选中的图片，请提醒用户先选中包含字体设计的图片。";
+          const target = resolveSrc(args.image);
+          if (!target) return "失败：找不到包含字体设计的图片，请让用户附图或选中。";
           const urls = await doFontRestyle({
-            src,
+            src: target.src,
             newText: String(args.new_text || ""),
             note: args.style_note ? String(args.style_note) : "",
           });
+          const entries = await registerOutputs(urls, "同风格改字");
           pushMessage({ role: "assistant", kind: "同风格改字", images: urls });
-          return `改字完成，已放到画布。链接：\n${urls.join("\n")}`;
+          return `改字完成，成品编号 ${entries.map((entry) => `#${entry.id}`).join("、")}。链接：\n${urls.join("\n")}`;
         }
         case "transfer_material": {
-          if (sel.images.length < 2) return "失败：需要同时选中两张图片（目标图案 + 材质样本），请提醒用户。";
-          const swap = Boolean(args.swap);
-          const target = swap ? sel.images[1] : sel.images[0];
-          const material = swap ? sel.images[0] : sel.images[1];
+          const targetEntry = imageById(args.target_image);
+          const materialEntry = imageById(args.material_image);
+          const target = targetEntry?.src || sel.images[0];
+          const material = materialEntry?.src || sel.images[1];
+          if (!target || !material) return "失败：需要两张图（目标图案 + 材质样本），请让用户附上两张或同时选中两张。";
           const urls = await doMaterialTransfer({ target, material, instruction: args.instruction ? String(args.instruction) : "" });
+          const entries = await registerOutputs(urls, "材质复刻");
           pushMessage({ role: "assistant", kind: "材质复刻", images: urls });
-          return `材质复刻完成，已放到画布。链接：\n${urls.join("\n")}`;
+          return `材质复刻完成，成品编号 ${entries.map((entry) => `#${entry.id}`).join("、")}。链接：\n${urls.join("\n")}`;
         }
         case "edit_selected_image": {
-          const src = sel.images[0];
-          if (!src) return "失败：画布上没有选中的图片，请提醒用户先选中要修改的图片。";
-          const urls = await doImageEdit({ src, instruction: String(args.instruction || ""), kind: "quick-edit" });
+          /* legacy alias kept for older sessions */
+          const target = resolveSrc(undefined);
+          if (!target) return "失败：画布上没有选中的图片，请提醒用户先附图或选中要修改的图片。";
+          const urls = await doGenerateImages({
+            prompt: `严格以参考图为基础重绘：${String(args.instruction || "")}。除指令要求的修改外，主体、构图、风格、配色、文字内容全部保持与参考图一致。`,
+            aspect: aspectFromSize(target.width, target.height),
+            count: 1,
+            quality: "medium",
+            refs: [target.src],
+            kind: "agent",
+            outputName: "修改图片",
+          });
+          const entries = await registerOutputs(urls, "修改图片");
           pushMessage({ role: "assistant", kind: "图片修改", images: urls });
-          setContextChips(urls.slice(0, 2));
-          return `修改完成，已放到画布。链接：\n${urls.join("\n")}`;
+          return `修改完成，成品编号 ${entries.map((entry) => `#${entry.id}`).join("、")}。链接：\n${urls.join("\n")}`;
         }
         case "image_to_video": {
           return "视频功能已迁移到独立页面 /video（画布右上角「视频」入口，或直接打开 /video）。请明确告诉用户：去 /video 上传首帧图并描述运动即可提交图生视频任务；本对话无法直接提交视频 job。";
-        }
-        case "vectorize_selected": {
-          const ok = await vectorizeSelected();
-          return ok ? "矢量化完成，SVG 已开始下载。" : "失败：画布上没有选中的图片。";
         }
         case "export_ai": {
           const ok = await exportAiFile();
@@ -2371,34 +2703,65 @@ export default function Home() {
           return `未知工具 ${name}`;
       }
     },
-    [brandKit.logoRef, doFontRestyle, doGenerateImages, doImageEdit, doMaterialTransfer, exportAiFile, pushMessage, vectorizeSelected],
+    [brandKit.logoRef, doFontRestyle, doGenerateImages, doGpuMatting, doMaterialTransfer, exportAiFile, imageById, imageModelFromMentions, lastUserTextOf, pushMessage, registerImage, registerOutputs, vectorizeSrc],
   );
 
   const sendToAgent = useCallback(async () => {
     const text = prompt.trim();
-    if (!text || agentBusy) return;
+    const hasAttachments = attachmentsRef.current.length > 0;
+    if ((!text && !hasAttachments) || agentBusy) return;
     const requestedModel = agentModelForText(text);
     setPrompt("");
     setShowMentionMenu(false);
     setError("");
-    pushMessage({ role: "user", text });
-    oaiHistoryRef.current.push({ role: "user", content: text });
+    turnCounterRef.current += 1;
     setAgentBusy(true);
     try {
-      const planActionId = pushMessage({ role: "action", label: "design_plan", done: false });
-      let plan: DesignPlan;
-      try {
-        plan = await requestDesignPlan(text);
-      } catch (planError) {
-        setMessages((prev) => prev.filter((message) => message.id !== planActionId));
-        throw planError;
-      }
-      setMessages((prev) => prev.map((message) => (message.id === planActionId && message.role === "action" ? { ...message, done: true } : message)));
-      const visiblePlan = designPlanToVisibleText(plan);
-      pushMessage({ role: "assistant", kind: "前置设计方案", text: visiblePlan });
-      oaiHistoryRef.current.push({ role: "assistant", content: visiblePlan });
+      const turnImages = await collectTurnImages();
+      const attachedOrSelected = turnImages.filter((item) => item.ordinal >= 0);
+      const defaultSubjects = turnImages.filter((item) => item.ordinal < 0);
+      const userText = text || "（仅附图，无文字）";
+      const thumbs = await Promise.all(attachedOrSelected.map((item) => downscaleForVision(item.entry.src, 160)));
+      pushMessage({ role: "user", text: userText, images: thumbs });
+      setAttachments([]);
 
-      for (let round = 0; plan.action !== "answer" && round < AGENT_MAX_ROUNDS; round += 1) {
+      /* Lovart 同款图序说明：正文 + 括注（图一=#7 …），再附图片本身给视觉模型 */
+      const mappingNote = attachedOrSelected.length
+        ? `（本轮附图 ${attachedOrSelected.length} 张：${attachedOrSelected
+            .map((item) => `图${cnOrdinal(item.ordinal)}=#${item.entry.id}${item.entry.source === "selected" ? "（画布选中）" : ""}`)
+            .join("，")}）`
+        : defaultSubjects.length
+          ? `（本轮未附新图；默认操作对象为上一版成品 ${defaultSubjects.map((item) => `#${item.entry.id}`).join("、")}）`
+          : "";
+      const visionParts: OaiContentPart[] = [];
+      for (const item of turnImages) {
+        visionParts.push({ type: "image_url", image_url: { url: await downscaleForVision(item.entry.src, 768) } });
+      }
+      const userContent: string | OaiContentPart[] = visionParts.length
+        ? [{ type: "text", text: `${userText}\n${mappingNote}` }, ...visionParts]
+        : userText;
+      oaiHistoryRef.current.push({ role: "user", content: userContent });
+
+      /* 带图 = 编辑/续改流程：直接执行（Lovart 不为改图出方案）。无图的从零生成才走前置设计规划。 */
+      let plan: DesignPlan | null = null;
+      if (!turnImages.length) {
+        const planActionId = pushMessage({ role: "action", label: "design_plan", done: false });
+        try {
+          plan = await requestDesignPlan(text);
+        } catch (planError) {
+          setMessages((prev) => prev.filter((message) => message.id !== planActionId));
+          throw planError;
+        }
+        currentPlanRef.current = plan;
+        setMessages((prev) => prev.map((message) => (message.id === planActionId && message.role === "action" ? { ...message, done: true } : message)));
+        const visiblePlan = designPlanToVisibleText(plan);
+        pushMessage({ role: "assistant", kind: "前置设计方案", text: visiblePlan });
+        oaiHistoryRef.current.push({ role: "assistant", content: visiblePlan });
+      } else {
+        currentPlanRef.current = null;
+      }
+
+      for (let round = 0; (!plan || plan.action !== "answer") && round < AGENT_MAX_ROUNDS; round += 1) {
         const rawResponse = await fetch("/api/agent-chat", {
           method: "POST",
           headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
@@ -2406,12 +2769,12 @@ export default function Home() {
             mode: "execute",
             messages: oaiHistoryRef.current,
             model: requestedModel,
-            canvas_state: buildAgentCanvasState(plan),
+            canvas_state: buildAgentCanvasState(plan || undefined),
           }),
         });
         const response = (await rawResponse.json().catch(() => ({}))) as {
           detail?: string;
-          data?: { message: { content?: string | null; tool_calls?: OaiToolCall[] } };
+          data?: { message: { content?: string | null; tool_calls?: OaiToolCall[] }; model?: string };
         };
         if (!rawResponse.ok) throw new Error(response?.detail || `Agent 请求失败 ${rawResponse.status}`);
         const assistant = response.data?.message;
@@ -2429,7 +2792,7 @@ export default function Home() {
             const args = JSON.parse(call.function.arguments || "{}") as Record<string, unknown>;
             result = await execAgentTool(call.function.name, args);
           } catch (err) {
-            result = `失败：${err instanceof Error ? err.message : String(err)}`;
+            result = toolFailure(err);
           }
           setMessages((prev) => prev.map((m) => (m.id === actionId && m.role === "action" ? { ...m, done: true } : m)));
           oaiHistoryRef.current.push({ role: "tool", tool_call_id: call.id, content: result });
@@ -2447,7 +2810,7 @@ export default function Home() {
     } finally {
       setAgentBusy(false);
     }
-  }, [agentBusy, buildAgentCanvasState, execAgentTool, prompt, pushMessage, requestDesignPlan, token]);
+  }, [agentBusy, buildAgentCanvasState, collectTurnImages, execAgentTool, prompt, pushMessage, requestDesignPlan, token]);
 
   /* --------------------------- ui handlers -------------------------- */
 
@@ -2471,7 +2834,7 @@ export default function Home() {
         setBusyLabel("");
       }
     },
-    [busy, busyLabel, pushMessage, token],
+    [busy, busyLabel, pushMessage],
   );
 
   const generateVariation = useCallback(() => {
@@ -2656,6 +3019,11 @@ export default function Home() {
   const composerHasText = prompt.trim().length > 0;
   const countdownTiles = useMemo(() => countdown.split(""), [countdown]);
   const hasConversation = messages.length > 0;
+  /* Canvas selection rides along as extra numbered attachments (after explicit ones), minus duplicates. */
+  const selectionAttachments = useMemo(() => {
+    const attached = new Set(attachments.map((item) => item.src));
+    return selection.images.filter((src) => !attached.has(src));
+  }, [attachments, selection.images]);
 
   const applySkill = (chip: { label: string; prompt: string }) => {
     if (!chip.prompt) {
@@ -2725,6 +3093,7 @@ export default function Home() {
 
           {contextMenu.open ? (
             <div className="contextMenu" style={{ left: contextMenu.x, top: contextMenu.y }}>
+              {/* eslint-disable-next-line react-hooks/refs -- Mapping renders labels and click handlers; editor refs are read only when an action runs. */}
               {contextActions.map((action) => (
                 <button
                   key={action.label}
@@ -3238,6 +3607,9 @@ export default function Home() {
                   }
                   setMessages([]);
                   oaiHistoryRef.current = [];
+                  imageRegistryRef.current = [];
+                  lastOutputsRef.current = [];
+                  turnCounterRef.current = 0;
                   setSessionId(uid());
                   setContextChips([]);
                 }}
@@ -3274,6 +3646,17 @@ export default function Home() {
                 if (message.role === "user") {
                   return (
                     <div className="msgUser" key={message.id}>
+                      {message.images?.length ? (
+                        <div className="msgUserImages">
+                          {message.images.map((src, index) => (
+                            <span className="msgUserImage" key={`${message.id}-${index}`}>
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img src={src} alt={`图${cnOrdinal(index)}`} />
+                              <em>图{cnOrdinal(index)}</em>
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
                       {message.text}
                     </div>
                   );
@@ -3285,7 +3668,7 @@ export default function Home() {
                       <div className="msgKind">
                         {message.done ? <Sparkles size={12} /> : <Loader2 className="spin" size={12} />}
                         {message.done ? `${actionLabel(message.label)} · 完成` : `正在${actionLabel(message.label)}…`}
-                        {!message.done ? <span className="actionTimer">{formatElapsed(Date.now() - message.ts)}</span> : null}
+                        {!message.done ? <span className="actionTimer">{formatElapsed(Math.max(0, tick - message.ts))}</span> : null}
                       </div>
                       {!message.done ? <div className="actionSkeleton" /> : null}
                     </div>
@@ -3357,7 +3740,32 @@ export default function Home() {
               </div>
             ) : null}
 
-            {contextChips.length ? (
+            {attachments.length || selectionAttachments.length ? (
+              <div className="attachStrip" aria-label="本轮附图">
+                {attachments.map((item, index) => (
+                  <span className="attachChip" key={item.id} title={item.name}>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={item.src} alt={item.name} />
+                    <em>图{cnOrdinal(index)}</em>
+                    <button
+                      type="button"
+                      aria-label="remove attachment"
+                      onClick={() => setAttachments((prev) => prev.filter((a) => a.id !== item.id))}
+                    >
+                      <X size={10} />
+                    </button>
+                  </span>
+                ))}
+                {selectionAttachments.map((src, index) => (
+                  <span className="attachChip selected" key={`sel-${index}`} title="画布选中的图片，会作为附图一起发送">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={src} alt="selected" />
+                    <em>图{cnOrdinal(attachments.length + index)} · 选中</em>
+                  </span>
+                ))}
+                <small>按「图一 / 图二…」指代，例如「图二参考图一，其他不变」</small>
+              </div>
+            ) : contextChips.length ? (
               <div className="contextChips">
                 {contextChips.map((url) => (
                   <span className="contextChip" key={url}>
@@ -3366,17 +3774,36 @@ export default function Home() {
                     <button
                       type="button"
                       aria-label="remove context"
-                      onClick={() => setContextChips((prev) => prev.filter((u) => u !== url))}
+                      onClick={() => {
+                        setContextChips((prev) => prev.filter((u) => u !== url));
+                        lastOutputsRef.current = lastOutputsRef.current.filter((id) => imageRegistryRef.current.find((item) => item.id === id)?.src !== url);
+                      }}
                     >
                       <X size={10} />
                     </button>
                   </span>
                 ))}
-                <em>已附为上下文，可直接追问续改</em>
+                <em>上一版成品已附为上下文，直接说改哪里即可续改</em>
               </div>
             ) : null}
 
-            <div className="composer">
+            <div
+              className={composerDragOver ? "composer dragOver" : "composer"}
+              onDragOver={(event) => {
+                if (Array.from(event.dataTransfer.types).includes("Files")) {
+                  event.preventDefault();
+                  setComposerDragOver(true);
+                }
+              }}
+              onDragLeave={() => setComposerDragOver(false)}
+              onDrop={(event) => {
+                const files = Array.from(event.dataTransfer.files || []).filter((file) => file.type.startsWith("image/"));
+                if (!files.length) return;
+                event.preventDefault();
+                setComposerDragOver(false);
+                void addAttachmentFiles(files);
+              }}
+            >
               {showMentionMenu ? (
                 <div className="mentionMenu">
                   <div className="mentionGroup">生图模型</div>
@@ -3429,9 +3856,15 @@ export default function Home() {
                     void sendToAgent();
                   }
                 }}
+                onPaste={(event) => {
+                  const files = Array.from(event.clipboardData?.files || []).filter((file) => file.type.startsWith("image/"));
+                  if (!files.length) return;
+                  event.preventDefault();
+                  void addAttachmentFiles(files);
+                }}
               />
               <div className="composerFooter">
-                <button className="ghostIcon" type="button" aria-label="add" onClick={() => fileInputRef.current?.click()}>
+                <button className="ghostIcon" type="button" aria-label="add" title="附图（也可直接粘贴 / 拖入）" onClick={() => fileInputRef.current?.click()}>
                   <Plus size={17} />
                 </button>
                 <button
@@ -3661,6 +4094,9 @@ export default function Home() {
                       setSessionId(session.id);
                       setMessages(session.messages);
                       oaiHistoryRef.current = session.oai || [];
+                      imageRegistryRef.current = [];
+                      lastOutputsRef.current = [];
+                      turnCounterRef.current = 0;
                       setShowHistory(false);
                     }}
                   >
@@ -4312,8 +4748,12 @@ function actionLabel(name: string) {
     generate_images: "生成图片",
     restyle_lettering: "同风格改字",
     transfer_material: "材质复刻",
+    edit_images: "编辑图片",
     edit_selected_image: "修改图片",
+    remove_background: "去底抠图",
+    upscale_image: "高清放大",
     image_to_video: "提交视频任务",
+    vectorize_image: "矢量化",
     vectorize_selected: "矢量化",
     export_ai: "导出 .ai",
   };

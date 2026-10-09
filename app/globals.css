@@ -1771,6 +1771,102 @@ button {
   font-size: 11px;
 }
 
+/* composer attachments (Lovart: numbered 图一/图二… chips above the input) */
+.attachStrip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 6px 4px;
+}
+.attachStrip small {
+  color: #8a8f98;
+  font-size: 11px;
+  flex: 1 1 100%;
+  padding-left: 2px;
+}
+.attachChip {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid #e4e6ea;
+  background: #fff;
+  flex: 0 0 auto;
+}
+.attachChip.selected {
+  border-style: dashed;
+  border-color: #b7bcc6;
+}
+.attachChip img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.attachChip em {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  font-style: normal;
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+  color: #fff;
+  background: rgba(20, 21, 24, 0.72);
+}
+.attachChip button {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(20, 21, 24, 0.8);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  padding: 0;
+}
+.composer.dragOver {
+  border-color: #6b7cff;
+  box-shadow: 0 0 0 3px rgba(107, 124, 255, 0.18);
+}
+.msgUserImages {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.msgUserImage {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #3a3b40;
+}
+.msgUserImage img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.msgUserImage em {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  font-style: normal;
+  font-size: 10px;
+  line-height: 15px;
+  text-align: center;
+  background: rgba(0, 0, 0, 0.55);
+}
 .contextChips {
   display: flex;
   align-items: center;
@@ -2312,3 +2408,22 @@ button {
 .videoJobState.failed { color: #d6455c; }
 .videoJobCard video { width: 100%; border-radius: 12px; background: #000; }
 .videoLink { font-size: 12px; color: #4263eb; }
+.videoModeTabs { display: flex; gap: 6px; }
+.videoModeTabs button {
+  display: inline-flex; align-items: center; gap: 5px;
+  border: 1px solid #e6e8ec; background: #fff; border-radius: 999px;
+  font-size: 12.5px; padding: 6px 13px; cursor: pointer; color: #494c52;
+}
+.videoModeTabs button.on { background: #111214; color: #fff; border-color: #111214; }
+.videoModeTabs button:disabled { opacity: 0.45; cursor: not-allowed; }
+.videoStoryHint { background: #f5f6f8; border: 1px dashed #dfe2e7; border-radius: 14px; padding: 12px 14px; }
+.videoStoryHint p { margin: 0 0 6px; font-size: 12.5px; color: #494c52; line-height: 1.55; }
+.videoStoryHint em { display: block; font-size: 11.5px; color: #9a9ea6; font-style: normal; }
+.videoModeBadge {
+  display: inline-flex; align-items: center; gap: 3px; vertical-align: middle; margin-right: 6px;
+  font-size: 10.5px; padding: 2px 7px; border-radius: 999px; background: #eef1ff; color: #4263eb; font-weight: 600;
+}
+.videoShotList { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.videoShotList li { font-size: 11px; color: #494c52; background: #f5f6f8; border-radius: 8px; padding: 3px 8px; }
+.videoShotList li b { color: #191b1f; margin-right: 3px; }
+.videoKeyframeSource { margin: 0; font-size: 11.5px; color: #9a9ea6; }

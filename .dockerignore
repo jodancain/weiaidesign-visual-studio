@@ -8,3 +8,6 @@ yarn-error.log*
 .env
 .env.*
 !.env.example
+output
+test-results
+playwright-report

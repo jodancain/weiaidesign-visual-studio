@@ -15,7 +15,14 @@ export function chatUpstreams(): ChatUpstream[] {
   if (agentBase && agentKey && agentModels.length) list.push({ base: agentBase, key: agentKey, models: agentModels });
   const relayBase = (env.IMAGE_OPENAI_BASE_URL || "").replace(/\/+$/, "");
   const relayKey = env.IMAGE_OPENAI_API_KEY || env.OPENAI_API_KEY || "";
-  if (relayBase && relayKey) list.push({ base: relayBase, key: relayKey, models: [env.AGENT_LLM_MODEL || "gpt-5.4-mini"] });
+  if (relayBase && relayKey) {
+    /* The image relay (ezr.sh) hosts the same chat models; when the agent key is bad or missing,
+       keep the vision-capable planners before dropping to the small default model. */
+    const relayModels = relayBase === agentBase
+      ? Array.from(new Set([...agentModels, env.AGENT_LLM_MODEL || "gpt-5.4-mini"]))
+      : [env.AGENT_LLM_MODEL || "gpt-5.4-mini"];
+    list.push({ base: relayBase, key: relayKey, models: relayModels });
+  }
   return list;
 }
 
