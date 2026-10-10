@@ -1,0 +1,15 @@
+{
+  "_source": "Blender EEVEE demo 'Ember Forest' by Mike Pan, CC-BY — https://mirror.blender.org/demo/eevee/ember_forest/forest.blend",
+  "_note": "Small misty clearing with one gnarled dead tree (7 m). Character stands just in front of the trunk; cameras look along world +X so the tree crowns the frame. Ground mesh is only ~17x13 m, so wide shots see the mist beyond its edge — that is the intended look.",
+  "origin": [-1.0, -1.5],
+  "yaw_deg": -90,
+  "ground_objects": ["Ground"],
+  "cameras": {
+    "cam_wide":   {"pos": [0.3, -7.5, 1.5], "target": [0.0, 1.0, 3.0], "lens": 28},
+    "cam_medium": {"pos": [0.2, -5.5, 1.4], "target": [0.0, 1.0, 2.2], "lens": 38},
+    "cam_close":  {"pos": [0.1, -3.2, 1.4], "target": [0.0, 1.0, 1.5], "lens": 55},
+    "cam_low":    {"pos": [0.4, -5.5, 0.4], "target": [0.0, 1.0, 3.5], "lens": 30}
+  },
+  "key_energy": 900,
+  "fill_energy": 250
+}

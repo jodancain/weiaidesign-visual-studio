@@ -1,0 +1,358 @@
+{
+  "schemaVersion": 1,
+  "id": "code-three-knocks",
+  "title": "三下敲门",
+  "film": "three-knocks",
+  "fps": 24,
+  "width": 1280,
+  "height": 720,
+  "totalFrames": 1440,
+  "seed": 20261002,
+  "look": {
+    "exposure": 1.05,
+    "keyIntensity": 2.4,
+    "fillIntensity": 0.55
+  },
+  "shots": [
+    {
+      "id": "s01",
+      "startFrame": 0,
+      "endFrame": 144,
+      "camera": {
+        "position": [
+          1.6,
+          1.05,
+          2
+        ],
+        "positionEnd": [
+          1.536,
+          1.0252000000000001,
+          1.9128
+        ],
+        "target": [
+          0,
+          0.43,
+          -0.18
+        ],
+        "targetEnd": [
+          0,
+          0.43,
+          -0.18
+        ],
+        "lensMm": 35
+      },
+      "action": {
+        "kind": "look-up",
+        "startFrame": 12,
+        "endFrame": 130
+      }
+    },
+    {
+      "id": "s02",
+      "startFrame": 144,
+      "endFrame": 288,
+      "camera": {
+        "position": [
+          1,
+          0.8,
+          1.5
+        ],
+        "positionEnd": [
+          0.9455999999999999,
+          0.7848,
+          1.4207999999999998
+        ],
+        "target": [
+          -0.36,
+          0.42,
+          -0.48
+        ],
+        "targetEnd": [
+          -0.36,
+          0.42,
+          -0.48
+        ],
+        "lensMm": 42
+      },
+      "action": {
+        "kind": "hear-knocks",
+        "startFrame": 12,
+        "endFrame": 130
+      }
+    },
+    {
+      "id": "s03",
+      "startFrame": 288,
+      "endFrame": 432,
+      "camera": {
+        "position": [
+          -1.05,
+          0.78,
+          0.2
+        ],
+        "positionEnd": [
+          -1.0211999999999999,
+          0.7672,
+          0.1664
+        ],
+        "target": [
+          -0.33,
+          0.46,
+          -0.64
+        ],
+        "targetEnd": [
+          -0.33,
+          0.46,
+          -0.64
+        ],
+        "lensMm": 55
+      },
+      "action": {
+        "kind": "knock-door",
+        "startFrame": 12,
+        "endFrame": 130,
+        "beatFrames": [
+          40,
+          65,
+          90
+        ]
+      }
+    },
+    {
+      "id": "s04",
+      "startFrame": 432,
+      "endFrame": 576,
+      "camera": {
+        "position": [
+          -1.05,
+          0.78,
+          0.2
+        ],
+        "positionEnd": [
+          -1.0211999999999999,
+          0.7672,
+          0.1664
+        ],
+        "target": [
+          -0.33,
+          0.46,
+          -0.64
+        ],
+        "targetEnd": [
+          -0.33,
+          0.46,
+          -0.64
+        ],
+        "lensMm": 65
+      },
+      "action": {
+        "kind": "grasp-wheel",
+        "startFrame": 12,
+        "endFrame": 130
+      }
+    },
+    {
+      "id": "s05",
+      "startFrame": 576,
+      "endFrame": 720,
+      "camera": {
+        "position": [
+          -0.36,
+          0.9,
+          -0.18
+        ],
+        "positionEnd": [
+          -0.3772,
+          0.89,
+          -0.20920000000000005
+        ],
+        "target": [
+          -0.79,
+          0.65,
+          -0.91
+        ],
+        "targetEnd": [
+          -0.79,
+          0.65,
+          -0.91
+        ],
+        "lensMm": 50
+      },
+      "action": {
+        "kind": "scout-approach",
+        "startFrame": 12,
+        "endFrame": 130
+      }
+    },
+    {
+      "id": "s06",
+      "startFrame": 720,
+      "endFrame": 864,
+      "camera": {
+        "position": [
+          -1.05,
+          0.78,
+          0.2
+        ],
+        "positionEnd": [
+          -1.0211999999999999,
+          0.7672,
+          0.1664
+        ],
+        "target": [
+          -0.33,
+          0.46,
+          -0.64
+        ],
+        "targetEnd": [
+          -0.33,
+          0.46,
+          -0.64
+        ],
+        "lensMm": 35
+      },
+      "action": {
+        "kind": "turn-wheel",
+        "startFrame": 12,
+        "endFrame": 130
+      }
+    },
+    {
+      "id": "s07",
+      "startFrame": 864,
+      "endFrame": 1008,
+      "camera": {
+        "position": [
+          0.45,
+          0.38,
+          0.56
+        ],
+        "positionEnd": [
+          0.41439999999999994,
+          0.3736,
+          0.5196000000000001
+        ],
+        "target": [
+          -0.44,
+          0.22,
+          -0.45
+        ],
+        "targetEnd": [
+          -0.44,
+          0.22,
+          -0.45
+        ],
+        "lensMm": 48
+      },
+      "action": {
+        "kind": "scout-enter",
+        "startFrame": 12,
+        "endFrame": 130
+      }
+    },
+    {
+      "id": "s08",
+      "startFrame": 1008,
+      "endFrame": 1152,
+      "camera": {
+        "position": [
+          -0.95,
+          0.36,
+          0.06
+        ],
+        "positionEnd": [
+          -0.9396,
+          0.3524,
+          0.04519999999999996
+        ],
+        "target": [
+          -0.69,
+          0.17,
+          -0.31
+        ],
+        "targetEnd": [
+          -0.69,
+          0.17,
+          -0.31
+        ],
+        "lensMm": 55
+      },
+      "action": {
+        "kind": "inspect-thruster",
+        "startFrame": 12,
+        "endFrame": 130
+      }
+    },
+    {
+      "id": "s09",
+      "startFrame": 1152,
+      "endFrame": 1296,
+      "camera": {
+        "position": [
+          0.48,
+          1.3,
+          0.42
+        ],
+        "positionEnd": [
+          0.48,
+          1.2708,
+          0.414
+        ],
+        "target": [
+          0.48,
+          0.57,
+          0.27
+        ],
+        "targetEnd": [
+          0.48,
+          0.57,
+          0.27
+        ],
+        "lensMm": 40
+      },
+      "action": {
+        "kind": "plug-cell",
+        "startFrame": 12,
+        "endFrame": 130
+      }
+    },
+    {
+      "id": "s10",
+      "startFrame": 1296,
+      "endFrame": 1440,
+      "camera": {
+        "position": [
+          1.4,
+          1.1,
+          1.85
+        ],
+        "positionEnd": [
+          1.5272000000000001,
+          1.1804000000000003,
+          2.0576000000000003
+        ],
+        "target": [
+          0.34,
+          0.43,
+          0.12
+        ],
+        "targetEnd": [
+          0.34,
+          0.43,
+          0.12
+        ],
+        "lensMm": 38
+      },
+      "action": {
+        "kind": "answer-knocks",
+        "startFrame": 12,
+        "endFrame": 130,
+        "beatFrames": [
+          40,
+          65,
+          90
+        ]
+      }
+    }
+  ]
+}

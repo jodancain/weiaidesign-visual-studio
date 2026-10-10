@@ -1,0 +1,11 @@
+# Studio's repository-context build needs only reviewed source and minimal config.
+*
+!node-gateway.mjs
+!studio/
+!studio/*.mjs
+!ops/
+!ops/config.toml
+!ops/Dockerfile*
+!studio/*.json
+!studio/code-scene-baselines/
+!studio/code-scene-baselines/*.json

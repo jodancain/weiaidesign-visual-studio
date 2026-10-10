@@ -1,0 +1,2 @@
+# Keep upstream license text byte-for-byte, including its final blank line.
+runtime/source/docs/studio-v3/licenses/* whitespace=-blank-at-eof

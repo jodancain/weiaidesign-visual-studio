@@ -1,0 +1,348 @@
+{
+  "schemaVersion": 1,
+  "id": "code-borrow-sunshine",
+  "title": "借你一块晴天",
+  "film": "borrow-sunshine",
+  "fps": 24,
+  "width": 1280,
+  "height": 720,
+  "totalFrames": 1440,
+  "seed": 20261002,
+  "look": {
+    "exposure": 1,
+    "keyIntensity": 3,
+    "fillIntensity": 0.55
+  },
+  "shots": [
+    {
+      "id": "s01",
+      "startFrame": 0,
+      "endFrame": 144,
+      "camera": {
+        "position": [
+          0.7,
+          0.55,
+          1
+        ],
+        "positionEnd": [
+          0.6747999999999998,
+          0.5372,
+          0.9648
+        ],
+        "target": [
+          0.07,
+          0.23,
+          0.12
+        ],
+        "targetEnd": [
+          0.07,
+          0.23,
+          0.12
+        ],
+        "lensMm": 45
+      },
+      "action": {
+        "kind": "put-scissors",
+        "startFrame": 12,
+        "endFrame": 130
+      }
+    },
+    {
+      "id": "s02",
+      "startFrame": 144,
+      "endFrame": 288,
+      "camera": {
+        "position": [
+          0.3,
+          0.34,
+          0.82
+        ],
+        "positionEnd": [
+          0.28319999999999995,
+          0.33320000000000005,
+          0.7919999999999999
+        ],
+        "target": [
+          -0.12,
+          0.17,
+          0.12
+        ],
+        "targetEnd": [
+          -0.12,
+          0.17,
+          0.12
+        ],
+        "lensMm": 45
+      },
+      "action": {
+        "kind": "offer-umbrella",
+        "startFrame": 12,
+        "endFrame": 130
+      }
+    },
+    {
+      "id": "s03",
+      "startFrame": 288,
+      "endFrame": 432,
+      "camera": {
+        "position": [
+          0.28,
+          0.51,
+          0.52
+        ],
+        "positionEnd": [
+          0.26940000000000003,
+          0.498,
+          0.5068
+        ],
+        "target": [
+          0.015,
+          0.21,
+          0.19
+        ],
+        "targetEnd": [
+          0.015,
+          0.21,
+          0.19
+        ],
+        "lensMm": 45
+      },
+      "action": {
+        "kind": "open-cloth-box",
+        "startFrame": 12,
+        "endFrame": 130
+      }
+    },
+    {
+      "id": "s04",
+      "startFrame": 432,
+      "endFrame": 576,
+      "camera": {
+        "position": [
+          0.62,
+          0.4,
+          0.59
+        ],
+        "positionEnd": [
+          0.6028,
+          0.3956,
+          0.5656
+        ],
+        "target": [
+          0.19,
+          0.29,
+          -0.02
+        ],
+        "targetEnd": [
+          0.19,
+          0.29,
+          -0.02
+        ],
+        "lensMm": 55
+      },
+      "action": {
+        "kind": "look-umbrella",
+        "startFrame": 12,
+        "endFrame": 130
+      }
+    },
+    {
+      "id": "s05",
+      "startFrame": 576,
+      "endFrame": 720,
+      "camera": {
+        "position": [
+          0.32,
+          0.61,
+          0.62
+        ],
+        "positionEnd": [
+          0.3118,
+          0.5942,
+          0.6044
+        ],
+        "target": [
+          0.115,
+          0.215,
+          0.23
+        ],
+        "targetEnd": [
+          0.115,
+          0.215,
+          0.23
+        ],
+        "lensMm": 45
+      },
+      "action": {
+        "kind": "cut-patch",
+        "startFrame": 12,
+        "endFrame": 130
+      }
+    },
+    {
+      "id": "s06",
+      "startFrame": 720,
+      "endFrame": 864,
+      "camera": {
+        "position": [
+          0.43,
+          0.42,
+          0.85
+        ],
+        "positionEnd": [
+          0.4092,
+          0.41079999999999994,
+          0.8223999999999999
+        ],
+        "target": [
+          -0.09,
+          0.19,
+          0.16
+        ],
+        "targetEnd": [
+          -0.09,
+          0.19,
+          0.16
+        ],
+        "lensMm": 45
+      },
+      "action": {
+        "kind": "give-umbrella",
+        "startFrame": 12,
+        "endFrame": 130
+      }
+    },
+    {
+      "id": "s07",
+      "startFrame": 864,
+      "endFrame": 1008,
+      "camera": {
+        "position": [
+          0.82,
+          0.56,
+          1.15
+        ],
+        "positionEnd": [
+          0.7839999999999999,
+          0.5468000000000001,
+          1.1043999999999998
+        ],
+        "target": [
+          -0.08,
+          0.23,
+          0.01
+        ],
+        "targetEnd": [
+          -0.08,
+          0.23,
+          0.01
+        ],
+        "lensMm": 38
+      },
+      "action": {
+        "kind": "shop-alone",
+        "startFrame": 12,
+        "endFrame": 130
+      }
+    },
+    {
+      "id": "s08",
+      "startFrame": 1008,
+      "endFrame": 1152,
+      "camera": {
+        "position": [
+          -0.02,
+          0.35,
+          0.43
+        ],
+        "positionEnd": [
+          -0.03440000000000004,
+          0.34559999999999996,
+          0.4094
+        ],
+        "target": [
+          -0.38,
+          0.24,
+          -0.085
+        ],
+        "targetEnd": [
+          -0.38,
+          0.24,
+          -0.085
+        ],
+        "lensMm": 58
+      },
+      "action": {
+        "kind": "attach-sun",
+        "startFrame": 12,
+        "endFrame": 130
+      }
+    },
+    {
+      "id": "s09",
+      "startFrame": 1152,
+      "endFrame": 1296,
+      "camera": {
+        "position": [
+          0.39,
+          0.38,
+          0.82
+        ],
+        "positionEnd": [
+          0.37,
+          0.3728,
+          0.7897999999999998
+        ],
+        "target": [
+          -0.11,
+          0.2,
+          0.065
+        ],
+        "targetEnd": [
+          -0.11,
+          0.2,
+          0.065
+        ],
+        "lensMm": 48
+      },
+      "action": {
+        "kind": "wave-thanks",
+        "startFrame": 12,
+        "endFrame": 130
+      }
+    },
+    {
+      "id": "s10",
+      "startFrame": 1296,
+      "endFrame": 1440,
+      "camera": {
+        "position": [
+          0.1,
+          0.56,
+          1.28
+        ],
+        "positionEnd": [
+          0.12880000000000003,
+          0.5984,
+          1.4276000000000002
+        ],
+        "target": [
+          -0.14,
+          0.24,
+          0.05
+        ],
+        "targetEnd": [
+          -0.14,
+          0.24,
+          0.05
+        ],
+        "lensMm": 40
+      },
+      "action": {
+        "kind": "light-shop",
+        "startFrame": 12,
+        "endFrame": 130
+      }
+    }
+  ]
+}

@@ -1,0 +1,47 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, readFile, writeFile, rm, stat, mkdir, copyFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { validateEffectsProgram, effectsSchema, effectsProgramHash } from '../../gateway/studio/effects-program.mjs';
+import { sampleEffectKeyframe, protectionTop } from './effects-browser.mjs';
+import { validateEffectsSpec, renderEffectsPngs, applyEffects, effectsAudioEvidence } from './effects.mjs';
+import { inspectVideo } from '../../gateway/studio/code-jobs.mjs';
+import { run, fileHash, sha256, runtimeHash } from './render.mjs';
+const params={glow:{radius:.15,softness:.8,pulseHz:1},particles:{count:24,size:.006,spread:.5,speedX:.03,speedY:-.06,lifeFrames:18},rain:{count:20,length:.07,width:.002,speed:.4,angle:.2},fog:{count:4,radius:.2,speedX:.03,speedY:.01},ring:{radius:.2,width:.003,periodFrames:24},'light-trail':{width:.006,trailFrames:12,segments:12},vignette:{radius:.8,softness:.6}};
+const makeProgram=()=>({schemaVersion:1,fps:24,totalFrames:24,width:320,height:180,seed:372,subtitleProtection:{enabled:true,bottomFraction:.16,paddingPx:8},layers:Object.entries(params).map(([type,parameters],i)=>({id:`fx-${i}`,type,description:`Test ${type}`,startFrame:0,endFrame:24,color:type==='vignette'?'#112244':'#ffbb55',opacity:.25,keyframes:[{frame:0,x:.3,y:.35,scale:1,opacity:1},{frame:23,x:.7,y:.4,scale:1.1,opacity:.8}],parameters}))});
+test('closed EffectsProgram rejects code, bad source, unbounded and invisible plans',()=>{
+ const p=makeProgram();assert.deepEqual(validateEffectsProgram(p),p);const schema=effectsSchema();schema.properties.fps.const=999;assert.equal(effectsSchema().properties.fps.const,24);
+ const bad=[q=>q.code='alert(1)',q=>q.layers[0].parameters.shader='x',q=>q.seed=Infinity,q=>q.layers[0].keyframes.reverse(),q=>q.layers[0].endFrame=25,q=>q.layers[1].parameters.count=257,q=>q.subtitleProtection.enabled=false,q=>q.subtitleProtection.bottomFraction=.15,q=>q.layers=[],q=>q.layers.forEach(l=>l.opacity=0),q=>q.layers[0].type='blur-source',q=>q.width=321,q=>q.layers[1].id=q.layers[0].id,q=>q.layers[0].keyframes[0].x=NaN];
+ for(const mutation of bad){const q=structuredClone(p);mutation(q);assert.throws(()=>validateEffectsProgram(q));}
+ assert.throws(()=>validateEffectsProgram(p,{source:{...p,width:1280}}),/source mismatch/);
+ const q=structuredClone(p);q.layers=Array.from({length:5},(_,i)=>({...p.layers[1],id:`p${i}`,parameters:{...p.layers[1].parameters,count:256}}));assert.throws(()=>validateEffectsProgram(q),/budget/);
+ const reverse=value=>Array.isArray(value)?value.map(reverse):value&&typeof value==='object'?Object.fromEntries(Object.entries(value).reverse().map(([k,v])=>[k,reverse(v)])):value;assert.equal(effectsProgramHash(reverse(p)),effectsProgramHash(p));
+ const before=JSON.stringify(p);validateEffectsProgram(p);assert.equal(JSON.stringify(p),before);
+});
+test('absolute frame interpolation holds outside keys and does not mutate state',()=>{
+ const p=makeProgram(),layer=p.layers[0];assert.equal(sampleEffectKeyframe(layer,-5).x,.3);assert.equal(sampleEffectKeyframe(layer,99).x,.7);assert.deepEqual(sampleEffectKeyframe(layer,7),sampleEffectKeyframe(layer,7));assert.equal(protectionTop(p),143);
+});
+test('real Canvas2D random seeks, zero-alpha subtitle band, cancellation/resume and immutable binding',async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'studio-effects-frames-'));t.after(()=>rm(dir,{recursive:true,force:true}));const program=makeProgram(),spec={schemaVersion:1,runtimeHash:await runtimeHash(),effectsProgram:program,effectsProgramHash:effectsProgramHash(program),sourceAssetId:'source',sourceHash:'a'.repeat(64),fps:24,totalFrames:24,width:320,height:180};
+ const shuffled=[23,0,12,5];await renderEffectsPngs({spec,dir,frames:shuffled});const hashes={};for(const n of shuffled)hashes[n]=await fileHash(join(dir,'effects-frames',`frame-${String(n).padStart(6,'0')}.png`));
+ const second=join(dir,'second');await renderEffectsPngs({spec,dir:second,frames:[0,5,12,23]});for(const n of shuffled)assert.equal(await fileHash(join(second,'effects-frames',`frame-${String(n).padStart(6,'0')}.png`)),hashes[n]);
+ const inspect=JSON.parse(await run(process.env.STUDIO_PYTHON_BIN||'python3',['-c',`from PIL import Image\nimport json,sys\nim=Image.open(sys.argv[1]).convert('RGBA')\na=im.getchannel('A')\nprint(json.dumps({'protectedMax':a.crop((0,143,320,180)).getextrema()[1],'visibleMax':a.getextrema()[1],'mode':im.mode}))`,join(dir,'effects-frames','frame-000012.png')]));assert.equal(inspect.protectedMax,0);assert.ok(inspect.visibleMax>0);assert.equal(inspect.mode,'RGBA');
+ const abort=new AbortController();await assert.rejects(renderEffectsPngs({spec,dir,signal:abort.signal,progress:p=>{if(p.completedFrames>=8)abort.abort();}}),/abort/i);
+ const result=await renderEffectsPngs({spec,dir});assert.ok(result.receipt.reusedFrames>=8);assert.equal(result.receipt.frameCount,24);assert.equal(result.receipt.renderedNow+result.receipt.reusedFrames,24);
+ await writeFile(join(dir,'effects-frames','frame-000006.png'),'corrupt');const fixed=await renderEffectsPngs({spec,dir});assert.equal(fixed.receipt.renderedNow,1);
+ await assert.rejects(renderEffectsPngs({spec:{...spec,sourceHash:'b'.repeat(64)},dir}),/immutable input/);
+ await assert.rejects(renderEffectsPngs({spec:{...spec,runtimeHash:'b'.repeat(64)},dir:join(dir,'wrong-runtime')}),/runtime unavailable/);
+ await assert.rejects(renderEffectsPngs({spec:{...spec,effectsProgramHash:'b'.repeat(64)},dir:join(dir,'wrong-program')}),/hash mismatch/);
+});
+test('real MP4 composition preserves all AAC packet bytes and timestamps and produces two decodable roles',async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'studio-effects-media-'));t.after(()=>rm(dir,{recursive:true,force:true}));const source=join(dir,'source.mp4');
+ await run(process.env.FFMPEG_BIN||'ffmpeg',['-v','error','-nostdin','-y','-f','lavfi','-i','testsrc2=s=320x180:r=24:d=1','-f','lavfi','-i','sine=frequency=440:sample_rate=48000:duration=1','-vf','drawbox=x=35:y=158:w=250:h=12:color=white:t=fill,drawbox=x=50:y=160:w=220:h=8:color=black:t=fill','-c:v','libx264','-threads','2','-pix_fmt','yuv420p','-c:a','aac','-b:a','128k','-video_track_timescale','24000','-movflags','+faststart',source]);
+ const program=makeProgram(),hash=await fileHash(source),audio=await effectsAudioEvidence(source),spec={schemaVersion:1,runtimeHash:await runtimeHash(),sourceAssetId:'source',sourceHash:hash,effectsProgram:program,effectsProgramHash:effectsProgramHash(program),fps:24,totalFrames:24,width:320,height:180,sourceMedia:{fps:24,totalFrames:24,width:320,height:180,hasAudio:true,audioPacketHash:audio.payloadHash,audioTimelineHash:audio.timelineHash}},assets=[{id:'source',hash,mime:'video/mp4',path:source}];
+ const gatewayMedia=await inspectVideo(source);assert.equal(audio.payloadHash,gatewayMedia.audioPacketHash);assert.equal(audio.timelineHash,gatewayMedia.audioTimelineHash);
+ validateEffectsSpec(spec,assets);assert.throws(()=>validateEffectsSpec({...spec,effectsProgramHash:'0'.repeat(64)},assets),/hash mismatch/);assert.throws(()=>validateEffectsSpec(spec,[{...assets[0],id:'other'}]),/selected frozen/);
+ const result=await applyEffects({spec,assets,dir:join(dir,'job')});assert.equal(result.receipt.media.frames,24);assert.equal(result.receipt.media.fps,'24/1');assert.equal(result.receipt.comparisonMedia.width,640);assert.equal(result.receipt.comparisonMedia.frames,24);assert.deepEqual(result.receipt.media.audio,audio);assert.deepEqual(result.receipt.comparisonMedia.audio,audio);assert.equal(result.receipt.media.fullDecode,true);assert.equal(result.receipt.comparisonMedia.fullDecode,true);assert.equal(await fileHash(source),hash);
+ const roi=JSON.parse(await run(process.env.STUDIO_PYTHON_BIN||'python3',['-c',`import subprocess,json,sys\nimport numpy as np\ndef pixels(p):\n b=subprocess.check_output([sys.argv[3],'-v','error','-i',p,'-vf','crop=320:36:0:144','-frames:v','1','-f','rawvideo','-pix_fmt','rgb24','-'])\n return np.frombuffer(b,np.uint8).astype(float)\na,b=pixels(sys.argv[1]),pixels(sys.argv[2])\nprint(json.dumps({'mae':float(abs(a-b).mean())}))`,source,result.effects,process.env.FFMPEG_BIN||'ffmpeg']));assert.ok(roi.mae<5,JSON.stringify(roi));
+ const jobDir=join(dir,'job');await writeFile(join(jobDir,'job.json'),JSON.stringify({jobRef:'effects-local-test',inputHash:'a'.repeat(64),kind:'effects-render',spec,assets,status:'running',stage:'loading',outputs:[],retries:[]}));await run(process.execPath,[resolve('workers/code-video/run-job.mjs'),jobDir]);const completed=JSON.parse(await readFile(join(jobDir,'job.json'),'utf8'));assert.equal(completed.status,'complete');assert.deepEqual(completed.outputs.map(o=>o.role),['effects','comparison']);assert.equal(completed.receipt.frames.reusedFrames,24);assert.equal(completed.receipt.runtimeHash,spec.runtimeHash);
+ const evidence=process.env.STUDIO_EFFECTS_TEST_EVIDENCE;if(evidence){await mkdir(evidence,{recursive:true});for(const [path,name]of [[source,'synthetic-source.mp4'],[result.effects,'synthetic-effects.mp4'],[result.comparison,'synthetic-comparison.mp4'],[join(dir,'job','effects-frames','frame-000012.png'),'transparent-frame-12.png']])await copyFile(path,join(evidence,name));await writeFile(join(evidence,'media-test-receipt.json'),JSON.stringify({...result.receipt,protectedROI:roi,sourcePreserved:true},null,2));}
+});

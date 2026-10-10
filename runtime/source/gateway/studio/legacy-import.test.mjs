@@ -1,0 +1,31 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createServer } from 'node:http';
+import { once } from 'node:events';
+import { createStudioRouter } from './router.mjs';
+
+test('v1 imports preserve distinct instances, Z-up placement/facing, exact camera and reference identity; browser url works without expanding origins', async t => {
+  const dir=mkdtempSync(join(tmpdir(),'studio-v3-import-')),requests=[];
+  const router=createStudioRouter({dataDir:dir,token:'offline-import-test',startJobs:false,legacyAssetOrigins:['https://old.test/api/v1'],fetchImpl:async url=>{requests.push(String(url));return new Response(Buffer.from('local fixture bytes'),{headers:{'content-type':String(url).endsWith('.png')?'image/png':'video/mp4'}});}});
+  const server=createServer((req,res)=>{router.handle(req,res).then(handled=>{if(!handled){res.writeHead(404);res.end();}});});
+  server.listen(0,'127.0.0.1');await once(server,'listening');
+  t.after(async()=>{await new Promise(resolve=>server.close(resolve));await router.close();rmSync(dir,{recursive:true,force:true});});
+  const old={id:'old-one',objects:[{id:'person',name:'Person',type:'actor'}],blender:{scene:{stage:{origin_m:[36,-31,32.2]}},subjects:[{id:'left',object_id:'person',position_m:[2,3],elevation_m:.5,rotation_deg:90},{id:'right',object_id:'person',position_m:[-1,-2],face:'left'}]},anchors:[{id:'identity',kind:'identity',object_id:'person',image:{public_url:'https://old.test/id.png'}},{id:'first',image:{public_url:'https://old.test/first.png'},greybox:{camera:{location:[8,4,2],target:[1,2,1],focal_mm:35}}},{id:'last',image:{public_url:'https://unconfigured.test/last.png'}}],shots:[{id:'old-shot',duration_s:1.25,start_anchor:'first',end_anchor:'last'}]};
+  const before=JSON.stringify(old);
+  const response=await fetch(`http://127.0.0.1:${server.address().port}/api/v3/projects/import`,{method:'POST',headers:{authorization:'Bearer offline-import-test','content-type':'application/json'},body:JSON.stringify({ontology:old,videoJobs:[{id:'browser-job',state:'done',url:'https://old.test/video.mp4'}]})});
+  const body=await response.json();assert.equal(response.status,200,JSON.stringify(body));const p=body.data,s=p.scenes[0];
+  assert.equal(JSON.stringify(old),before);assert.equal(s.objects.length,2);assert.notEqual(s.objects[0].id,s.objects[1].id);
+  assert.deepEqual(s.objects[0].transform.position,[2,.5,-3]);assert.deepEqual(s.objects[1].transform.position,[-1,0,2]);
+  assert.ok(Math.abs(s.objects[0].transform.rotation[1]-1)<1e-12);assert.ok(Math.abs(s.objects[0].transform.rotation[3])<1e-12);
+  const expected=(Math.atan2(5,3)+Math.PI/2)/2;assert.ok(Math.abs(s.objects[1].transform.rotation[1]-Math.sin(expected))<1e-12);
+  assert.equal(s.cameras.length,1);assert.deepEqual(s.cameras[0].position,[8,2,-4]);assert.deepEqual(s.cameras[0].target,[1,1,-2]);assert.equal(s.cameras[0].focalLength,35);
+  assert.equal(p.totalFrames,30);assert.equal(p.shots[0].cameraId,s.cameras[0].id);assert.ok(p.shots[0].firstAssetId);assert.equal(p.shots[0].lastAssetId,undefined);assert.equal(p.shots[0].approval,undefined);
+  const subjects=p.nodes.filter(n=>n.type==='subject');assert.equal(subjects.length,2);assert.ok(subjects.every(n=>n.assetId===subjects[0].assetId&&n.assetId));
+  assert.equal(p.assets.filter(a=>a.kind==='video').length,1);assert.ok(p.nodes.some(n=>n.type==='video'));assert.equal(requests.length,3);assert.ok(requests.every(u=>u.startsWith('https://old.test/')));
+  assert.ok(p.nodes.some(n=>n.text?.includes('legacy media origin is not configured')));
+  const provenance=JSON.parse(p.nodes.filter(n=>n.type==='text'&&n.label.startsWith('旧项目来源')).map(n=>n.text).join(''));
+  assert.equal(provenance.anchors.find(a=>a.id==='last').imageUrl,'https://unconfigured.test/last.png');assert.equal(provenance.videoJobs[0].url,'https://old.test/video.mp4');
+});

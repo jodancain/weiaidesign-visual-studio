@@ -1,0 +1,9 @@
+{
+  "camera": "cam_medium",
+  "pose_id": "arm_up_point",
+  "character_anchor": "anchor_center",
+  "resolution": [
+    540,
+    960
+  ]
+}

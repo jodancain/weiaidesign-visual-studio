@@ -1,0 +1,10 @@
+{
+  "camera": "cam_medium",
+  "pose_id": "look_back_turn",
+  "character_anchor": "anchor_center",
+  "resolution": [
+    540,
+    960
+  ],
+  "character_rotation": 135
+}

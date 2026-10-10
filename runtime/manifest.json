@@ -1,0 +1,818 @@
+{
+  "schemaVersion": 1,
+  "createdAt": "2026-10-10T13:17:43.335506+00:00",
+  "frontendBaseline": "1c6227c14e8214709e19ef549ace2bb23fa1f7c3",
+  "files": {
+    ".env.example": {
+      "sha256": "deb5a263cdb6b412354f236dd45267666581db950bf755a6e1fe31ad7323c7ea",
+      "bytes": 2182,
+      "mode": 420,
+      "sourceSha256": "7086da8ae9b926305d35d4772e8664618c30556a13f7bfa9483ddb68d7fbf29c"
+    },
+    "docker-compose.studio.yml": {
+      "sha256": "71521bb2ae6e90bb832d503446f55711549df287900be8cecbfedaf4269b12df",
+      "bytes": 2608,
+      "mode": 420
+    },
+    "docs/STUDIO_V3_IMPLEMENTATION.md": {
+      "sha256": "c4dff8e7c6bd63e4ef2cdc78d9832d8849a0219404b8fba16f59c391ae132e90",
+      "bytes": 10199,
+      "mode": 420,
+      "sourceSha256": "108ee7b658da9cc41763b02125992a16eedbf4cd9fb8c238175b0c9ef233e3c9"
+    },
+    "docs/studio-v3/ATTRIBUTION.md": {
+      "sha256": "cad24e654df90c49bd8d73f1e1428942b2fca5b1972275cc3ea771b3d0c51ac4",
+      "bytes": 2826,
+      "mode": 420,
+      "sourceSha256": "3ca4f90a78929a01812e85d2592566bb96d7891bfccecc32f9cff3bba386dcff"
+    },
+    "docs/studio-v3/MODE4_EFFECTS.md": {
+      "sha256": "2df88ecf7346b86c24907975ccde5b8855ad5322fe01f259959359637ea9f371",
+      "bytes": 2856,
+      "mode": 420,
+      "sourceSha256": "f39249a752c2578e39a7d7087becdd7f5ace61c777c244d822288400b03d4e19"
+    },
+    "docs/studio-v3/licenses/react-three-drei-LICENSE": {
+      "sha256": "2e36b208b403882158daf95cae207087bbb830db4d434a79ebafffca177244c8",
+      "bytes": 1069,
+      "mode": 420
+    },
+    "docs/studio-v3/licenses/react-virtualized-LICENSE": {
+      "sha256": "5949e37f2f4750f0e486cf8dd9db6f7bba26c0eab3596febeeb1d2317d6818da",
+      "bytes": 1080,
+      "mode": 420
+    },
+    "docs/studio-v3/licenses/remotion-LICENSE.md": {
+      "sha256": "bd65083b940f61904f6ef298aade918a7cad72a3e35bc406e36fab365844b673",
+      "bytes": 2823,
+      "mode": 420
+    },
+    "docs/studio-v3/licenses/three-LICENSE": {
+      "sha256": "8b378ebe60e2fe500158cb0ac71cb5e8b7d92953c2abcc63a0eb90499653b5bc",
+      "bytes": 1081,
+      "mode": 420
+    },
+    "docs/studio-v3/licenses/xyflow-react-LICENSE": {
+      "sha256": "023119ac20fb1c8c9930abe0bcd196989a1960388529a96fc43cebf96f07c9ff",
+      "bytes": 1073,
+      "mode": 420
+    },
+    "examples/node-client.mjs": {
+      "sha256": "855ba794e9dfcb95a98d68babcc6655f22604b076e8b35dd4128e59bae2f0ac7",
+      "bytes": 1836,
+      "mode": 420
+    },
+    "examples/python_client.py": {
+      "sha256": "4ee402614e2a59932992e3ddc79c07f791da60d62219bc595e5699fa28891a0b",
+      "bytes": 1597,
+      "mode": 420
+    },
+    "gateway/.dockerignore": {
+      "sha256": "b2662231f439883030e288ae4106ccd61beee47377ca7c9f5c1b1539070e1766",
+      "bytes": 247,
+      "mode": 420,
+      "sourceSha256": "61f67a28786777b35bd6e96e3b6603398d5f63323c31dd10e0d90fb6efa6da58"
+    },
+    "gateway/Dockerfile": {
+      "sha256": "6e16f7c50a31843871bfb54c618b4b847bffd84d6b34a45abbd0513924b9479e",
+      "bytes": 240,
+      "mode": 420
+    },
+    "gateway/app.py": {
+      "sha256": "e0c0c82c74a58c2e56935e7c7c6a913a34609c4310a0fc2a20935a3205c0646f",
+      "bytes": 79157,
+      "mode": 420
+    },
+    "gateway/node-gateway.mjs": {
+      "sha256": "ab2f8483f50b5ab2bda862cdc7deb5519e10e21fc5cc7f7ad8b7e8a8527076ad",
+      "bytes": 132763,
+      "mode": 420
+    },
+    "gateway/ops/Dockerfile": {
+      "sha256": "a512a94baa14ed2b63f0c63d0a8df7c10f7d785efe52ff5f5f6ac4ca9528dce9",
+      "bytes": 749,
+      "mode": 420
+    },
+    "gateway/ops/Dockerfile.studio": {
+      "sha256": "0c0d6c831c8a3c5e8c728921d65af140ba7d0ce8af08abc6a5cc8c99968880d6",
+      "bytes": 590,
+      "mode": 420
+    },
+    "gateway/ops/config.toml": {
+      "sha256": "f30331fe98d56a598c79ed285ef287fd0a600942989089d32f4fc43849442181",
+      "bytes": 666,
+      "mode": 420
+    },
+    "gateway/ops/test-studio-image.ps1": {
+      "sha256": "0e964ed65b402639550f06257b26ef38778a9f7d5cd254b24a8f2ed64fd7935e",
+      "bytes": 4163,
+      "mode": 420
+    },
+    "gateway/ops/test-studio-persistence.ps1": {
+      "sha256": "86456afcccc6157bbf9b71be6ba077f2fc10c7f925b4c144a51b6cabfde4aef1",
+      "bytes": 2904,
+      "mode": 420
+    },
+    "gateway/requirements.txt": {
+      "sha256": "f81abd3652314579613378f8fdb2715ad355e99192cfe78c7aca13fbdab17d84",
+      "bytes": 57,
+      "mode": 420
+    },
+    "gateway/studio/CODE_TASKS.md": {
+      "sha256": "1019f883aed0cce2672cfb719e36e7603975f45a484f203575063a3c2f03f2a2",
+      "bytes": 15829,
+      "mode": 420
+    },
+    "gateway/studio/README.md": {
+      "sha256": "6d176533465c2727d3776724d0344141871c458937347d17fb0ce7b2007eef72",
+      "bytes": 11247,
+      "mode": 420,
+      "sourceSha256": "33f9fda2c526ad7b772b9940c32f3ae79194eeac88decc0c2871978c3af4af51"
+    },
+    "gateway/studio/ai-capture.test.mjs": {
+      "sha256": "6dfbd761c5ce70d583371bb1083b6bd0944ab83e369bf607d421427f3695df73",
+      "bytes": 9211,
+      "mode": 420
+    },
+    "gateway/studio/ai-vision.test.mjs": {
+      "sha256": "d726ab6633cad705bf0984736c52f803d5b48c37c46f336d9ccfab4570388cb4",
+      "bytes": 2323,
+      "mode": 420
+    },
+    "gateway/studio/archive-metadata.test.mjs": {
+      "sha256": "e0607fa11187d051716276183262590efa55beefa29eadc7f1f0fbc6808b0323",
+      "bytes": 3992,
+      "mode": 420
+    },
+    "gateway/studio/backend.test.mjs": {
+      "sha256": "618f4bed455d55e3dd3978c2b46e1c5e72489b74827c771e39e1c74f7cba7413",
+      "bytes": 28896,
+      "mode": 420
+    },
+    "gateway/studio/code-jobs.mjs": {
+      "sha256": "cb704ff4bef92223abaf6c1c4cef91b67ebff74e07bdfc5fa3c9f2f386c87d5e",
+      "bytes": 30493,
+      "mode": 420
+    },
+    "gateway/studio/code-routes.mjs": {
+      "sha256": "7e933426e745e746da00be49b083b8ea5f4b76b2dd836a362075d719d252d158",
+      "bytes": 18527,
+      "mode": 420
+    },
+    "gateway/studio/code-scene-baselines/borrow-sunshine-engineering-baseline.json": {
+      "sha256": "b0730ccd5641f52a17bd3254a4b9f77037afd297332788b4b867e94ce618ee20",
+      "bytes": 6155,
+      "mode": 420
+    },
+    "gateway/studio/code-scene-baselines/last-seed-of-light-engineering-baseline.json": {
+      "sha256": "d0d612deec86b258f0e5f476e511a42bb2109dbd46407c13660f988253857ca8",
+      "bytes": 6099,
+      "mode": 420
+    },
+    "gateway/studio/code-scene-baselines/three-knocks-engineering-baseline.json": {
+      "sha256": "28e994053d85de46fe09dcfc73aa171f2a59791f625159235dba9cd4ca7ddaf0",
+      "bytes": 6266,
+      "mode": 420
+    },
+    "gateway/studio/code-scene-registry.json": {
+      "sha256": "af898488e79bcf7c7f979328650f27eb4fd0ac6467b0644463c20dc5ecb257ae",
+      "bytes": 8070,
+      "mode": 420
+    },
+    "gateway/studio/code-scene-schema.json": {
+      "sha256": "085fa5ec7a9ceb9fa76ddec5d034c9978e2cca55405d28beab3e1883ad991ef4",
+      "bytes": 7832,
+      "mode": 420
+    },
+    "gateway/studio/code-schema.mjs": {
+      "sha256": "c4b45c902ad5f4033d054b7477d45c870a710fdc231c3f6bbc99f84b4b2ffd9c",
+      "bytes": 4070,
+      "mode": 420
+    },
+    "gateway/studio/code-tasks.test.mjs": {
+      "sha256": "d23b3388994219f6974efaff582bf33e699237eed2b43a6daff3dd8d9fd65e57",
+      "bytes": 36687,
+      "mode": 420
+    },
+    "gateway/studio/compositor.mjs": {
+      "sha256": "37d9c101dd2312d89158c060a704e219aa191c4e669a30b36a199ea9b540b63a",
+      "bytes": 13021,
+      "mode": 420
+    },
+    "gateway/studio/compositor.test.mjs": {
+      "sha256": "3f1c0783946123b2414e8ee80031af77124b77a9cd49f608dd38ee4ecc7fd0cf",
+      "bytes": 10364,
+      "mode": 420
+    },
+    "gateway/studio/container-persistence.mjs": {
+      "sha256": "9bf057073ded15f25d8d5957fa65274c397035d90ded0e1338bba263834e90a0",
+      "bytes": 5063,
+      "mode": 420
+    },
+    "gateway/studio/domain.mjs": {
+      "sha256": "e4cc28a56ccf27c8ec57804979c754bc8a58424134f7f53e2dddda3380e03cfd",
+      "bytes": 29047,
+      "mode": 420
+    },
+    "gateway/studio/effects-import.mjs": {
+      "sha256": "43e2f308d1cbc6f9b22b93852c0be32d0c1c323dfb9b5a2fb90e772c8964c3c8",
+      "bytes": 4342,
+      "mode": 420
+    },
+    "gateway/studio/effects-program.mjs": {
+      "sha256": "d71e9b233e6a19a7c840e326a6ea5af01ede0d19585a89f387f8e2545e25b90d",
+      "bytes": 6426,
+      "mode": 420
+    },
+    "gateway/studio/effects-source.mjs": {
+      "sha256": "a5247ac0bbb86c95351dd00f60238bbcc3ae143e2e4f85c14455bca037b813cd",
+      "bytes": 7464,
+      "mode": 420
+    },
+    "gateway/studio/effects-source.test.mjs": {
+      "sha256": "301a4497624d7e1ea5b47a189d364472e101f9644ff54e57478b3784b01707b7",
+      "bytes": 9981,
+      "mode": 420
+    },
+    "gateway/studio/effects-tasks.test.mjs": {
+      "sha256": "1259b628121acc710e8f6aa40b1024ec61575c047eaf448483b0c9e99c07ca86",
+      "bytes": 27530,
+      "mode": 420
+    },
+    "gateway/studio/fault-injection.test.mjs": {
+      "sha256": "11e7222333093a45f713abd96733f34df796b70ae49741544ad10948b9b009ce",
+      "bytes": 9833,
+      "mode": 420
+    },
+    "gateway/studio/glb.mjs": {
+      "sha256": "0bb525286d7caf754a6ce297e4b7b7737e46797fcb0c9c17d6f874f3cac7ea2e",
+      "bytes": 2620,
+      "mode": 420
+    },
+    "gateway/studio/image-acceptance.mjs": {
+      "sha256": "920172b3fa57a21d4439b338eff338198cb2057b8bcdcbd869c8fe99016c5767",
+      "bytes": 2594,
+      "mode": 420
+    },
+    "gateway/studio/integrity.test.mjs": {
+      "sha256": "97baa03179c5151890285381462f64bae449eed7da4d27dfac449593760406f7",
+      "bytes": 19295,
+      "mode": 420
+    },
+    "gateway/studio/jobs.mjs": {
+      "sha256": "390f37a2f286ded55ac2e91ef3213de15a225689ed56544f468072adf11f4bf2",
+      "bytes": 15624,
+      "mode": 420
+    },
+    "gateway/studio/legacy-import.test.mjs": {
+      "sha256": "4f75ab4dec5d6cee35db1f740dffa84265662ce8f45c38b0803824ece8208bf3",
+      "bytes": 3993,
+      "mode": 420
+    },
+    "gateway/studio/provider-contract.test.mjs": {
+      "sha256": "b890afa5d539f1709367da8c6c170e84291b856d4119ffbdd818efb774996093",
+      "bytes": 8532,
+      "mode": 420
+    },
+    "gateway/studio/provider.mjs": {
+      "sha256": "c3104f30db56a0c83120a9e0b76fc2b64872de3d4e540929cd62243d986ace02",
+      "bytes": 24636,
+      "mode": 420
+    },
+    "gateway/studio/router.mjs": {
+      "sha256": "8812e3af1406c505546ddaa9fff365f69abb1a714dbabd609a7cdfc80a7e1a4f",
+      "bytes": 31098,
+      "mode": 420
+    },
+    "gateway/studio/store.mjs": {
+      "sha256": "6b21c75cdfc4d507fba9a33222073abf940265ec805f6fec322d84f324f9e0dc",
+      "bytes": 18078,
+      "mode": 420
+    },
+    "gateway/studio/text-to-video.test.mjs": {
+      "sha256": "dd5038b9e98047104207daf2a74dc365a66fdf0b1f1e87ee09eb320aafc6a704",
+      "bytes": 17710,
+      "mode": 420
+    },
+    "gateway/studio/worker-receipt.test.mjs": {
+      "sha256": "372d3912c6a84a6c051ac6502b96ffc12aa2376c13720434c4da0929990508fa",
+      "bytes": 3875,
+      "mode": 420
+    },
+    "nas-storage/.env.example": {
+      "sha256": "bc725b9784b92688700b537da71084ebf9a6686badbc433539894b87caecd2e1",
+      "bytes": 252,
+      "mode": 420,
+      "sourceSha256": "081330b4ebc1912f2f33c639c28f0fd986f93dc48a148fb5ee759c4f7cb2e44c"
+    },
+    "nas-storage/README.md": {
+      "sha256": "a8b54f0fbf8d357d65564a22e4472ceb280cc88e074093dda5d0aeea9a734ea7",
+      "bytes": 1379,
+      "mode": 420
+    },
+    "nas-storage/server.py": {
+      "sha256": "289964f2fd25e7ef9adfa97d968369f5afdbd228a19b6610881b75e360b7ff88",
+      "bytes": 13245,
+      "mode": 420,
+      "sourceSha256": "989762b85751a03e60f054eece23d2b17a9d7c0eaa5bb6f96535f6bc85f08d47"
+    },
+    "nas-storage/start.sh": {
+      "sha256": "33da374278962eb3af198d796730ef77e1e9d4fd49e5dd964ed2e48ddc881019",
+      "bytes": 459,
+      "mode": 420
+    },
+    "nas-storage/status.sh": {
+      "sha256": "2f60d627a98b8969384f9256bfe19fdffb45facdf74b11ed36a0839c198e032d",
+      "bytes": 362,
+      "mode": 420
+    },
+    "nas-storage/stop.sh": {
+      "sha256": "207322b698e9d02a0af5ebdbc4ca02f615ef7bcd3e290e6fb345ea5fe2662980",
+      "bytes": 347,
+      "mode": 420
+    },
+    "nas-storage/test_atomic_upload.py": {
+      "sha256": "df112a79fc73e41b3a9a6507fcf06aa916ca78ead4b8397f091bc96785644fca",
+      "bytes": 3702,
+      "mode": 420
+    },
+    "relay-proxy/youngtuo-relay-proxy.mjs": {
+      "sha256": "a7590f9a15ad121bf2af7a6932421f3fb0026c170e6c4f062e382e89d80b9bc9",
+      "bytes": 22218,
+      "mode": 420,
+      "sourceSha256": "082b290336a346f736f93d54de087df20a628b72fb97889c6609b9f20a276d7b"
+    },
+    "scripts/studio-export-release-data.py": {
+      "sha256": "1be4081d803933f5da3adab01386dac2f8da6b60eadd68b7671a8eea9afd86ef",
+      "bytes": 4003,
+      "mode": 420
+    },
+    "scripts/studio-prepare-acceptance.py": {
+      "sha256": "4636e7a27984ffaf540bb7e7134de5e69f1d98480520e8f9ebba7a52b3817883",
+      "bytes": 5970,
+      "mode": 420
+    },
+    "scripts/studio-source-snapshot.py": {
+      "sha256": "b5b9f0cd14bf603ff82c2133eb8c2920774414e9d31562f72f946f64d85980d9",
+      "bytes": 1582,
+      "mode": 420
+    },
+    "scripts/studio-switch-web-origin.py": {
+      "sha256": "2b3a74b190cca8af65fe4bda3b0f97d90a9320b83ba36a8fd1787e8419b9331e",
+      "bytes": 2787,
+      "mode": 420
+    },
+    "workers/blender-story/README.md": {
+      "sha256": "c807e07a5d0c6976fd6f224f953b48e156eb112902dad0c23d292c95c0b298c8",
+      "bytes": 9111,
+      "mode": 420
+    },
+    "workers/blender-story/adapt_scene.py": {
+      "sha256": "e883884b5f4f27c37053c6285ccbdc6fecffdeaf98f853049ac620bdbbd20bea",
+      "bytes": 11584,
+      "mode": 420
+    },
+    "workers/blender-story/app.py": {
+      "sha256": "f0015c100e0a9b6409a65364ecd318ba10b87c31fa150dcc2f585f143b09f5ba",
+      "bytes": 20541,
+      "mode": 420
+    },
+    "workers/blender-story/assets/manifest.json": {
+      "sha256": "3406dfd577aa671755c5bfdb41906905fdd37379b26903d29d2c1774477a227c",
+      "bytes": 8184,
+      "mode": 420
+    },
+    "workers/blender-story/assets/poses/actions.json": {
+      "sha256": "7dc6f41bf5475eb18db2a54371882bd025cabcc1988d0bd343903b0cd7e8797f",
+      "bytes": 324,
+      "mode": 420
+    },
+    "workers/blender-story/assets/poses/library.json": {
+      "sha256": "c7ded4c691d9618e0b9c6566bc2e98547738c31fdab6395ab93ece00adddd517",
+      "bytes": 7632,
+      "mode": 420
+    },
+    "workers/blender-story/build_manifest.py": {
+      "sha256": "5e714c1b69ad463d42ebc2f2efd5b967d1d290b732b4770c592199a0e46ae97f",
+      "bytes": 7865,
+      "mode": 420
+    },
+    "workers/blender-story/build_scene_warehouse.py": {
+      "sha256": "9eb054844889c8691f8de0d197c4ab5d18eccb4dbf8503cc63014abedf78b61b",
+      "bytes": 8557,
+      "mode": 420
+    },
+    "workers/blender-story/examples/pose-arm_up_point.json": {
+      "sha256": "d91c405e6e95354e9a4ec7592ac005377d23741590cb02981ad65d9007235555",
+      "bytes": 136,
+      "mode": 420
+    },
+    "workers/blender-story/examples/pose-arms_crossed.json": {
+      "sha256": "a583a2f4c1c72d7804b424eff6a58ed9daf43b480a427c9f94e85fd3362f26a3",
+      "bytes": 136,
+      "mode": 420
+    },
+    "workers/blender-story/examples/pose-crouch_ready.json": {
+      "sha256": "8f6e5a474bbcc03c968e7f5d57f5d11716fd365b2628a297260b5f1045722081",
+      "bytes": 136,
+      "mode": 420
+    },
+    "workers/blender-story/examples/pose-idle_neutral.json": {
+      "sha256": "c25dfa19199ff3b111a6c8dc5f1e2c689ba8d36a96ad56ec9540f25b771302b3",
+      "bytes": 136,
+      "mode": 420
+    },
+    "workers/blender-story/examples/pose-look_back_turn.json": {
+      "sha256": "018d7b11b7f5d3482ccfffa665e21a6ab54d97ba6ac58566061f257460a0056e",
+      "bytes": 167,
+      "mode": 420
+    },
+    "workers/blender-story/examples/pose-reach_forward.json": {
+      "sha256": "6e530072ea3c8f706160e0e577d52c05e4745f55578fb292e4bf129724862d9c",
+      "bytes": 137,
+      "mode": 420
+    },
+    "workers/blender-story/examples/pose-sit_ground.json": {
+      "sha256": "e7287402da7000aa492d7aa3d156097146933b6b4334c426757ad61541b9eb61",
+      "bytes": 134,
+      "mode": 420
+    },
+    "workers/blender-story/examples/pose-walk_stride.json": {
+      "sha256": "27108587b3195ef7ae8bea06e1f60379aba310c5c38b61c4137964ea6ba347d5",
+      "bytes": 135,
+      "mode": 420
+    },
+    "workers/blender-story/inspect_scene.py": {
+      "sha256": "c63edad12730eb325c3bab8ba68739db451ac485d5d09979a2e7d7d07d7241fd",
+      "bytes": 3621,
+      "mode": 420
+    },
+    "workers/blender-story/ops/adapt-all-scenes.ps1": {
+      "sha256": "ddf7bd272d8e8baba5c4278e8b79898b1eff820f600d8fd9e60099928d4dc27e",
+      "bytes": 833,
+      "mode": 420
+    },
+    "workers/blender-story/ops/download-demo-scenes.ps1": {
+      "sha256": "3e3931b81d5c3f87382e7048b1038c9d994629108554d5262190c48284a90196",
+      "bytes": 1030,
+      "mode": 420
+    },
+    "workers/blender-story/ops/inspect-downloads.ps1": {
+      "sha256": "c5ee9b047fcff79442ecc7f015d04e7e822a341fdfed27fdf70ab00b1389e632",
+      "bytes": 692,
+      "mode": 420
+    },
+    "workers/blender-story/ops/preview-all-scenes.ps1": {
+      "sha256": "aebf043574feece4c09b056281379ef71214f01af9672a8fe68e17b3e6799428",
+      "bytes": 1819,
+      "mode": 420
+    },
+    "workers/blender-story/ops/studio_install.ps1": {
+      "sha256": "566ff62a58dc651e083a094de09fd25025de48e823813292606fd927aaff3a0f",
+      "bytes": 2737,
+      "mode": 420,
+      "sourceSha256": "ccdc8ace77af138108cdbfc8404dbab3224222c05c40a7666566e5e97d064a5a"
+    },
+    "workers/blender-story/ops/studio_run.ps1": {
+      "sha256": "3bc4980cdd5524c74265469abadab6dee977c251d41ebada66bb75e4cb8244db",
+      "bytes": 1854,
+      "mode": 420,
+      "sourceSha256": "3c4f4b4fe22826780ba721964ed2735a50c06748a3153b4ad63154108e8ace93"
+    },
+    "workers/blender-story/probe_positions.py": {
+      "sha256": "9a816dbbbc2946f08e976f03f799fca32a88deac6a5243f667cfc481a0bdbbac",
+      "bytes": 1092,
+      "mode": 420
+    },
+    "workers/blender-story/render_grid.py": {
+      "sha256": "c9b6bcd2b124b1829c0a178d2d7f32f3d550b21a4416d4d4e62dafb82646381e",
+      "bytes": 8034,
+      "mode": 420
+    },
+    "workers/blender-story/render_ontology.py": {
+      "sha256": "a6536cc4134ed6967716bcaac073ddaac61250157198cea6ffe66e8df68ad055",
+      "bytes": 29474,
+      "mode": 420
+    },
+    "workers/blender-story/render_ontology_v1.py": {
+      "sha256": "a4743179179a13e59e177b21b3f0491cd7ae8d157b4d6fd181669355abdbb86a",
+      "bytes": 18862,
+      "mode": 420
+    },
+    "workers/blender-story/render_shot.py": {
+      "sha256": "d9942d5afb587beabd32ca6d56eb92ec57c1b95a571bdea0599cd6aa1f6726cb",
+      "bytes": 6309,
+      "mode": 420
+    },
+    "workers/blender-story/scene_configs/ancient_hall.json": {
+      "sha256": "19ce2c17bb28e3611b09be595e2c29e85a7663fa73c506ac05b6e639d2356da9",
+      "bytes": 1400,
+      "mode": 420
+    },
+    "workers/blender-story/scene_configs/mist_forest.json": {
+      "sha256": "691211ff1f7cb0d32a582693d0d90306954a33c64714feff727faef33d33f203",
+      "bytes": 890,
+      "mode": 420
+    },
+    "workers/blender-story/scene_configs/pagoda_mountain.json": {
+      "sha256": "434255862cd80208998f217dce0452e685d45406513e36f0d637f42cf723f9fd",
+      "bytes": 1433,
+      "mode": 420
+    },
+    "workers/blender-story/start.ps1": {
+      "sha256": "2010ea1baf3d68b979a09f3fd57e88487bf3f26dbb2aa3feeaf4d28a469e79eb",
+      "bytes": 2472,
+      "mode": 420
+    },
+    "workers/blender-story/status.ps1": {
+      "sha256": "48377bc2798c7c763ce61238e32ef11f2d963c575dafe83192f48f1c5f7c4de6",
+      "bytes": 237,
+      "mode": 420
+    },
+    "workers/blender-story/stop.ps1": {
+      "sha256": "f27a65a2a30147c6854ec4f7674dff444552cb2d84a22261dadef7ee7e508f50",
+      "bytes": 458,
+      "mode": 420
+    },
+    "workers/blender-story/studio_README.md": {
+      "sha256": "d17df1c5631e4e66b2f172f0d9c77504c60659a75240dab6753d39f3ce35fdf3",
+      "bytes": 7396,
+      "mode": 420
+    },
+    "workers/blender-story/studio_gpu.py": {
+      "sha256": "ae59b81b308ead44b19d45c55654b6e0bad42a275da8e845deeb9ff9e0808348",
+      "bytes": 3601,
+      "mode": 420
+    },
+    "workers/blender-story/studio_jobs.py": {
+      "sha256": "bffb2b7a2c11248a1dd91be34345af296160d7aec75f4954378e4fca551bca27",
+      "bytes": 18033,
+      "mode": 420
+    },
+    "workers/blender-story/studio_jobs_test.py": {
+      "sha256": "660bf92243de1e29101e305b3efbff92dd73a9aecca355e21c9ff714703b6a06",
+      "bytes": 10149,
+      "mode": 420
+    },
+    "workers/blender-story/studio_package.py": {
+      "sha256": "4d04a74c66ab84e5186dbcae1f92a6080d2c22a6e9286f51f4fb07c71925e7c9",
+      "bytes": 1970,
+      "mode": 420
+    },
+    "workers/blender-story/studio_render.py": {
+      "sha256": "4b0126c041669b5563f555f6df23cc4f34b76bcee3efa6681288a3b14b8614b7",
+      "bytes": 12408,
+      "mode": 420
+    },
+    "workers/blender-story/studio_service.py": {
+      "sha256": "e15903433cb4d14cdd4a9ef42e63f7b90b1ba4781630e1d862419c57efd8abc3",
+      "bytes": 3358,
+      "mode": 420
+    },
+    "workers/blender-story/studio_service_test.py": {
+      "sha256": "84b02b69117ea5e8dca9fc718209113d98021f191a26cce62feac214a8122101",
+      "bytes": 2954,
+      "mode": 420
+    },
+    "workers/code-video/audio-timeline.test.mjs": {
+      "sha256": "60329df851ed689e0c2a68197ed83520961c23fc9647158e33c4eade6ba528c1",
+      "bytes": 2702,
+      "mode": 420
+    },
+    "workers/code-video/browser-runtime.test.mjs": {
+      "sha256": "4c14e8b2b94763b33454c9d65ae461d88ca58cf3db7fe655146f8115086adb4b",
+      "bytes": 5051,
+      "mode": 420
+    },
+    "workers/code-video/browser-runtime.ts": {
+      "sha256": "4a32a706b6a36b339a75e49f0d88b214045200c63f86387ddb2444296dd88628",
+      "bytes": 3980,
+      "mode": 420
+    },
+    "workers/code-video/daemon-job.ps1": {
+      "sha256": "f255a44b4451a9441fb07e63ba42da405d149fbe048e44e429a46247d9d5574e",
+      "bytes": 7723,
+      "mode": 420
+    },
+    "workers/code-video/durable-io.mjs": {
+      "sha256": "4ec96b0e67cc0c08e4aa8b990c5860ab96d34a94ee97fc916309e7fcab2688f2",
+      "bytes": 2629,
+      "mode": 420
+    },
+    "workers/code-video/durable-io.test.mjs": {
+      "sha256": "b19ec7179217fe4e240b9e986d668f500f3d0c9e6af92d43ff989d0b61672c19",
+      "bytes": 9425,
+      "mode": 420
+    },
+    "workers/code-video/effects-browser.mjs": {
+      "sha256": "a07cc58dccbdf06fa5fee6f7557ba58ddb8d1d23b8d2b23b4248a8cf9663452f",
+      "bytes": 5513,
+      "mode": 420
+    },
+    "workers/code-video/effects.mjs": {
+      "sha256": "d776e0c6aa8f332561608ce99e00240540074ff379cf82665f6553f9a5eb2f29",
+      "bytes": 15661,
+      "mode": 420
+    },
+    "workers/code-video/effects.test.mjs": {
+      "sha256": "6229ff842c9042d16f1980558100db0b94d0542ee8ac06a26c9ef21e85a79f09",
+      "bytes": 9467,
+      "mode": 420
+    },
+    "workers/code-video/enhance.mjs": {
+      "sha256": "505079988b0afd4be48da6c2d9746c277a18255bd98b0871bfa8ef206f7e34c3",
+      "bytes": 5683,
+      "mode": 420
+    },
+    "workers/code-video/fixtures/audio-timeline-ffprobe7-9.json": {
+      "sha256": "b7e6c661fd94024cdb0693388ac56146b6b7edb8a27f257ec8afeba4128ddb1e",
+      "bytes": 3879,
+      "mode": 420
+    },
+    "workers/code-video/generate-approved-scenes.mjs": {
+      "sha256": "9bc4a017f1e524a8a9e5e23b2e4774bd59fc1458840cc294df699206ef679f6d",
+      "bytes": 3687,
+      "mode": 420
+    },
+    "workers/code-video/register-worker.ps1": {
+      "sha256": "863f9dd498c4522af26d0ef47026c02e6ec65c2d541f6f8dc1d36cc037876de7",
+      "bytes": 3046,
+      "mode": 420
+    },
+    "workers/code-video/remotion-entry.tsx": {
+      "sha256": "09d6a34e608e73442086b047308fb0c262fea8645a2c53245a854b80115aa878",
+      "bytes": 3246,
+      "mode": 420
+    },
+    "workers/code-video/render.mjs": {
+      "sha256": "701cb3ff6fc07ba9f2e253ae420ccdcf9d1a72b11d10ed800ab50ba5f322c897",
+      "bytes": 16538,
+      "mode": 420
+    },
+    "workers/code-video/run-isolated.ps1": {
+      "sha256": "19938cd368ebd405e2d4029b3413d25a81c787c5a166bbbf401b60669e7b7694",
+      "bytes": 8290,
+      "mode": 420
+    },
+    "workers/code-video/run-job.mjs": {
+      "sha256": "498ae49559f6b77d6f3c881a74ea5512f4a76b5a479872a5f3e6ffc7a2828128",
+      "bytes": 5309,
+      "mode": 420
+    },
+    "workers/code-video/short-render.test.mjs": {
+      "sha256": "0ea7146d70d904b16c294a00738de5a01377d903533832114d7c5c3ca0a3da6c",
+      "bytes": 5041,
+      "mode": 420
+    },
+    "workers/code-video/start-worker.ps1": {
+      "sha256": "23984e6dc503b59d2ad8c6340501841c4b73f1b6456342370a2808db26f2de96",
+      "bytes": 1608,
+      "mode": 420,
+      "sourceSha256": "79430d62af9e3e12e25a20f430c683f67a0b9ddf4fdd2754cc6d25b62750667f"
+    },
+    "workers/code-video/stress.mjs": {
+      "sha256": "ffbdfa1e60a3be8f512af06541a4aeb25d842996c20b70ab2adf87b7601e425a",
+      "bytes": 1622,
+      "mode": 420
+    },
+    "workers/code-video/three-entry.ts": {
+      "sha256": "c9fe19b1b39f37e5d6ce223c95b44e7746326f7042d1e68690bd456852a5c309",
+      "bytes": 1452,
+      "mode": 420
+    },
+    "workers/code-video/worker.mjs": {
+      "sha256": "f2cdddbccdd974691f8c715c4ee0a38101d96b4af8c16c4026eca1620502d8b0",
+      "bytes": 14435,
+      "mode": 420
+    },
+    "workers/code-video/worker.test.mjs": {
+      "sha256": "eea0de81f3fb08bc8a6a385b9017499309cb2615312c8a6a059d7718cb76134f",
+      "bytes": 9397,
+      "mode": 420
+    },
+    "workers/local-i2v/README.md": {
+      "sha256": "f11449f43ed0ce358a23b7b8bb4d7fe1bdad467efcf65628a7dbee4eb7cf87e5",
+      "bytes": 4489,
+      "mode": 420,
+      "sourceSha256": "0b2f73639faf0891774675d64dae933e5f9e90ef7b11a40dbe43fbc9fd2631a9"
+    },
+    "workers/local-i2v/app.py": {
+      "sha256": "06fe4357217bff267310e5d8dda86af4ece3a9307b13b4b6c7c45566abb505af",
+      "bytes": 19953,
+      "mode": 420
+    },
+    "workers/local-i2v/requirements.txt": {
+      "sha256": "21deb2477fa104516349c842d0a97cc95d0106751c1c37c141ec17bb858bd664",
+      "bytes": 74,
+      "mode": 420
+    },
+    "workers/local-i2v/start.sh": {
+      "sha256": "4b957df8b830bffb6609e6d8c66996ac6f250ac0837ad2321e539d093957a6fd",
+      "bytes": 1109,
+      "mode": 420,
+      "sourceSha256": "df89bfd93e2581d4cb9f8ec8a14d1842b56826d8e8a2a80af907bf4deee4640c"
+    },
+    "workers/local-i2v/status.sh": {
+      "sha256": "3246a3127f130c7f5f792257492d8144be87baf0a66b93129c60b07bcd8ca5b8",
+      "bytes": 373,
+      "mode": 420
+    },
+    "workers/local-i2v/stop.sh": {
+      "sha256": "52323eb49dae895e54423961baba767977adafdc5edc4413e19b23291483d1e9",
+      "bytes": 376,
+      "mode": 420
+    },
+    "workers/local-i2v/workflows/wanvideo_2_1_14B_I2V_example_03.json": {
+      "sha256": "e9da590389b56825ba61533aa5be3f21d27572328b054384d5fbe4dc775df946",
+      "bytes": 31346,
+      "mode": 420
+    }
+  },
+  "packagingAdjustments": [
+    {
+      "path": "gateway/.dockerignore",
+      "reason": "Include required Studio schemas, registry and baseline JSON in the repository-context Docker build."
+    },
+    {
+      "path": ".env.example",
+      "reason": "Publish a portable source example without operator names, private-network addresses or internal acceptance history."
+    },
+    {
+      "path": "docs/studio-v3/MODE4_EFFECTS.md",
+      "reason": "Publish a portable source example without operator names, private-network addresses or internal acceptance history."
+    },
+    {
+      "path": "nas-storage/.env.example",
+      "reason": "Publish a portable source example without operator names, private-network addresses or internal acceptance history."
+    },
+    {
+      "path": "nas-storage/server.py",
+      "reason": "Publish a portable source example without operator names, private-network addresses or internal acceptance history."
+    },
+    {
+      "path": "relay-proxy/youngtuo-relay-proxy.mjs",
+      "reason": "Publish a portable source example without operator names, private-network addresses or internal acceptance history."
+    },
+    {
+      "path": "workers/blender-story/ops/studio_install.ps1",
+      "reason": "Publish a portable source example without operator names, private-network addresses or internal acceptance history."
+    },
+    {
+      "path": "workers/blender-story/ops/studio_run.ps1",
+      "reason": "Publish a portable source example without operator names, private-network addresses or internal acceptance history."
+    },
+    {
+      "path": "workers/code-video/start-worker.ps1",
+      "reason": "Publish a portable source example without operator names, private-network addresses or internal acceptance history."
+    },
+    {
+      "path": "workers/local-i2v/README.md",
+      "reason": "Publish a portable source example without operator names, private-network addresses or internal acceptance history."
+    },
+    {
+      "path": "workers/local-i2v/start.sh",
+      "reason": "Publish a portable source example without operator names, private-network addresses or internal acceptance history."
+    },
+    {
+      "path": "relay-proxy/youngtuo-relay-proxy.mjs",
+      "reason": "Require operator-provided Drive folder and Python configuration; omit personal cloud resource defaults."
+    },
+    {
+      "path": "docs/STUDIO_V3_IMPLEMENTATION.md",
+      "reason": "Link to the public setup guide instead of private historical operations records."
+    },
+    {
+      "path": "docs/studio-v3/MODE4_EFFECTS.md",
+      "reason": "Exclude historical operations and acceptance details from the public product contract."
+    },
+    {
+      "path": "docs/studio-v3/ATTRIBUTION.md",
+      "reason": "Keep license texts and attribution, omit private acceptance and personal licensing assertions."
+    },
+    {
+      "path": "gateway/studio/README.md",
+      "reason": "Avoid referring to private production migration scripts omitted from the public snapshot."
+    },
+    {
+      "path": "workers/code-video/start-worker.ps1",
+      "reason": "Make optional NR executable location configurable without a private dated pilot path."
+    }
+  ],
+  "publicationScope": "public-source-only; runtime credentials, private handoff, production receipts and operator-specific instructions excluded",
+  "excludedPrivateOrHistoricalFiles": [
+    "AGENTS.md",
+    "CLAUDE.md",
+    "docs/PROJECT_STATUS_20261001.md",
+    "docs/studio-v3/ACCEPTANCE_20261001.md",
+    "docs/studio-v3/OPERATIONS.md",
+    "docs/studio-v3/QA_LOOP.md",
+    "docs/studio-v3/CODE_VIDEO_OPERATIONS.md",
+    "gateway/test/fake-ezr.mjs",
+    "gateway/test/make_greybox.py",
+    "gateway/test/poll-story.sh",
+    "gateway/test/smoke-gateway.sh",
+    "docs/studio-v3/EFFECTS_AI_SOURCE_20261008.md",
+    "gateway/ops/prep-env.ps1",
+    "gateway/ops/swap-gateway.ps1"
+  ]
+}

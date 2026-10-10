@@ -1,0 +1,71 @@
+# Isolated Studio v3 evaluation only. This file was statically checked, not started.
+# Set STUDIO_RUNTIME_ENV_FILE to an operator-selected, existing server env file.
+# Do not use the legacy root Compose or a production volume for this evaluation.
+name: weiai-studio-v3-eval
+
+services:
+  gateway:
+    image: weiai-studio-v3-gateway:${STUDIO_IMAGE_TAG:-eval}
+    build:
+      context: ./gateway
+      dockerfile: ops/Dockerfile.studio
+    restart: unless-stopped
+    env_file:
+      - ${STUDIO_RUNTIME_ENV_FILE:?Set STUDIO_RUNTIME_ENV_FILE to an existing server env file}
+    environment:
+      PORT: "18082"
+      STUDIO_DATA_DIR: /data/studio
+      MPT_CONFIG_PATH: /config.toml
+      MPT_LOCAL_VIDEO_DIR: /data/studio/v1-local-videos
+      IMAGE_OUTPUT_DIR: /data/studio/v1-generated-images
+      PUBLIC_BASE_URL: ${STUDIO_EVAL_PUBLIC_BASE_URL:-http://127.0.0.1:18094/api/v1}
+      BLENDER_STORY_WORKER_URL: ${STUDIO_BLENDER_WORKER_URL:-http://host.docker.internal:18087}
+      # Evaluation must not archive fixtures through credentials inherited above.
+      VIDEO_STORAGE_BASE_URL: ""
+      VIDEO_STORAGE_TOKEN: ""
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    ports:
+      - "127.0.0.1:${STUDIO_GATEWAY_HOST_PORT:-18092}:18082"
+    volumes:
+      - studio-data:/data/studio
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:18082/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  web:
+    image: weiai-studio-v3-web:${STUDIO_IMAGE_TAG:-eval}
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      gateway:
+        condition: service_healthy
+    env_file:
+      - ${STUDIO_RUNTIME_ENV_FILE:?Set STUDIO_RUNTIME_ENV_FILE to an existing server env file}
+    environment:
+      PORT: "18084"
+      HOSTNAME: "0.0.0.0"
+      NODE_ENV: production
+      STUDIO_GATEWAY_URL: http://gateway:18082
+      VIDEO_API_PROXY_BASE_URL: http://gateway:18082/api/v1
+      REQUIRE_ACCESS_TOKEN: ${STUDIO_REQUIRE_ACCESS_TOKEN:-1}
+      STUDIO_V3_DEFAULT: ${STUDIO_V3_DEFAULT:-0}
+      STUDIO_PUBLIC_ORIGIN: ${STUDIO_EVAL_PUBLIC_ORIGIN:-}
+      IMAGE_OUTPUT_DIR: /data/generated_images
+      VIDEO_STORAGE_BASE_URL: ""
+      VIDEO_STORAGE_TOKEN: ""
+    ports:
+      - "127.0.0.1:${STUDIO_WEB_HOST_PORT:-18094}:18084"
+    volumes:
+      - web-data:/data
+
+volumes:
+  studio-data:
+    name: ${STUDIO_EVAL_DATA_VOLUME:-weiai-studio-v3-eval-data}
+  web-data:
+    name: ${STUDIO_EVAL_WEB_VOLUME:-weiai-studio-v3-eval-web-data}
