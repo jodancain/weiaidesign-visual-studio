@@ -15,23 +15,33 @@ async function forward(request: Request, context: { params: Promise<{ path: stri
   if (path.some(part => !part || part === '..' || part.includes('/') || part.includes('\\'))) {
     return Response.json({ detail: 'invalid route' }, { status: 400 });
   }
-  const configured = process.env.STUDIO_GATEWAY_URL || process.env.VIDEO_API_PROXY_BASE_URL;
-  if (!configured) return Response.json({ detail: '视频工作台服务尚未配置（STUDIO_GATEWAY_URL）' }, { status: 503 });
-  const base = configured.replace(/\/api\/v[13]\/?$/, '').replace(/\/$/, '');
+  const image2 = path[0] === 'image2';
+  const configured = image2 ? process.env.IMAGE2_API_URL : process.env.STUDIO_GATEWAY_URL || process.env.VIDEO_API_PROXY_BASE_URL;
+  const token = image2 ? process.env.IMAGE2_API_TOKEN : process.env.VIDEO_API_PROXY_TOKEN || process.env.VIDEO_API_TOKEN;
+  if (!configured || (image2 && !token)) return Response.json({ detail: image2 ? '图片工作台服务尚未配置' : '视频工作台服务尚未配置（STUDIO_GATEWAY_URL）' }, { status: 503 });
+  let base: string;
+  if (image2) {
+    try {
+      const origin = new URL(configured);
+      if (!['http:', 'https:'].includes(origin.protocol) || origin.username || origin.password || origin.pathname !== '/' || origin.search || origin.hash) throw new Error('invalid origin');
+      base = origin.origin;
+    } catch { return Response.json({ detail: '图片工作台服务地址配置无效' }, { status: 503 }); }
+  } else base = configured.replace(/\/api\/v[13]\/?$/, '').replace(/\/$/, '');
   const incoming = new URL(request.url);
   const headers = new Headers();
   for (const name of ['content-type', 'range', 'if-none-match']) {
     const value = request.headers.get(name);
     if (value) headers.set(name, value);
   }
-  const token = process.env.VIDEO_API_PROXY_TOKEN || process.env.VIDEO_API_TOKEN;
   if (token) headers.set('authorization', `Bearer ${token}`);
   // Never forward an identity supplied by JavaScript. Only the signed HttpOnly cookie is trusted.
   headers.set('x-studio-visitor-id', visitor.id);
   try {
+    const body = ['GET', 'HEAD'].includes(request.method) ? undefined : await request.arrayBuffer();
+    if (image2 && body && body.byteLength > 96 * 1024 * 1024) return Response.json({ detail: '上传内容超过96MB上限' }, { status: 413 });
     const upstream = await fetch(`${base}/api/v3/${path.map(encodeURIComponent).join('/')}${incoming.search}`, {
       method: request.method, headers,
-      body: ['GET', 'HEAD'].includes(request.method) ? undefined : await request.arrayBuffer(),
+      body,
       cache: 'no-store', signal: AbortSignal.timeout(180_000),
     });
     const outputHeaders = new Headers();
@@ -44,7 +54,7 @@ async function forward(request: Request, context: { params: Promise<{ path: stri
     if (!visitor.existing) outputHeaders.set('set-cookie', visitor.cookie);
     return new Response(request.method === 'HEAD' ? null : upstream.body, { status: upstream.status, headers: outputHeaders });
   } catch {
-    return Response.json({ detail: '视频工作台服务连接失败，请检查服务状态后重试。' }, { status: 502 });
+    return Response.json({ detail: image2 ? '图片工作台暂时连接失败；已提交任务会保留，请稍后恢复。' : '视频工作台服务连接失败，请检查服务状态后重试。' }, { status: 502 });
   }
 }
 export const GET = forward;

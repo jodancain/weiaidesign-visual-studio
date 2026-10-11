@@ -11,7 +11,11 @@
     "typecheck": "tsc --noEmit",
     "test:studio": "tsx --test tests/*.test.ts components/studio/director/*.test.ts",
     "test:studio:ui": "playwright test --config=playwright.studio.config.ts",
-    "test:studio:loop": "playwright test --config=playwright.studio-loop.config.ts"
+    "test:studio:loop": "playwright test --config=playwright.studio-loop.config.ts",
+    "test:image2": "npm test --prefix services/image2",
+    "test:image2:client": "tsx --test tests/image2-client.test.ts tests/image2-templates.test.ts tests/image2-submissions.test.ts tests/image2-submissions-http.test.ts",
+    "test:image2:browser": "playwright test --config=tests/image2-integration.config.ts",
+    "test:image2:ui": "playwright test --config=tests/image2.playwright.config.ts"
   },
   "dependencies": {
     "@react-three/drei": "10.7.9",

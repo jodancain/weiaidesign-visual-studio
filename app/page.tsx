@@ -2027,7 +2027,7 @@ export default function Home() {
     [apiAsyncImages, aspect, createPlaceholder, placeImageOnCanvas, pushHistory, removePlaceholder],
   );
 
-  /* GPU 专业抠图（BiRefNet）；503/失败时降级到 doImageEdit remove-bg */
+  /* GPU 专业抠图（BiRefNet）；不可用时保留原图，不自动重绘主体。 */
   const doGpuMatting = useCallback(
     async (src: string) => {
       const imageB64 = await srcToDataUrl(src);
@@ -2046,20 +2046,14 @@ export default function Home() {
       } catch (error) {
         removePlaceholder(placeholderId);
         const message = error instanceof Error ? error.message : String(error);
-        // 503 / not configured / network → fall back to GPT remove-bg path
+        // Model/network unavailability is not permission to synthesize a different subject.
         if (/503|not configured|GPU ComfyUI|fetch failed|Failed to fetch|timed out|超时/i.test(message)) {
-          const urls = await doImageEdit({
-            src,
-            instruction: "完整保留主体，把背景替换为纯白色（#FFFFFF）纯净平涂，无阴影无渐变，主体边缘干净利落，主体本身完全不变",
-            kind: "remove-bg",
-            transparent: true,
-          });
-          return { urls, degraded: true as const };
+          throw new Error("精细抠图暂不可用，原图已保留，请稍后重试。");
         }
         throw error;
       }
     },
-    [apiAsyncImages, createPlaceholder, doImageEdit, placeImageOnCanvas, pushHistory, removePlaceholder],
+    [apiAsyncImages, createPlaceholder, placeImageOnCanvas, pushHistory, removePlaceholder],
   );
 
   /* GPU 语义拆层（SAM2）；失败时不破坏原有拆分图层能力 */
@@ -2290,7 +2284,7 @@ export default function Home() {
     const result = await getExportSvg();
     if (!result) return false;
     setBusy(true);
-    setBusyLabel("导出 .ai");
+    setBusyLabel("导出 PDF");
     try {
       const { jsPDF } = await import("jspdf");
       await import("svg2pdf.js");
@@ -2303,7 +2297,7 @@ export default function Home() {
       await (
         pdf as unknown as { svg: (el: Element, opts: Record<string, number>) => Promise<unknown> }
       ).svg(element, { x: 0, y: 0, width: result.width, height: result.height });
-      saveBlob(pdf.output("blob"), "studio-canvas.ai");
+      saveBlob(pdf.output("blob"), "studio-canvas.pdf");
       return true;
     } finally {
       setBusy(false);
@@ -2697,7 +2691,7 @@ export default function Home() {
         }
         case "export_ai": {
           const ok = await exportAiFile();
-          return ok ? ".ai 文件已开始下载（PDF 兼容，Illustrator 可直接打开）。" : "失败：画布上还没有内容。";
+          return ok ? "PDF 文件已开始下载，Illustrator 可直接打开。" : "失败：画布上还没有内容。";
         }
         default:
           return `未知工具 ${name}`;
@@ -3310,7 +3304,7 @@ export default function Home() {
                       void exportAiFile();
                     }}
                   >
-                    <Download size={14} /> 导出 .ai（Illustrator）
+                    <Download size={14} /> 导出 PDF（Illustrator）
                   </button>
                   <button
                     type="button"
@@ -3498,7 +3492,7 @@ export default function Home() {
               </button>
               <button type="button" onClick={() => void exportAiFile()}>
                 <Download size={14} />
-                .ai
+                PDF
               </button>
             </div>
           ) : null}
@@ -4755,7 +4749,7 @@ function actionLabel(name: string) {
     image_to_video: "提交视频任务",
     vectorize_image: "矢量化",
     vectorize_selected: "矢量化",
-    export_ai: "导出 .ai",
+    export_ai: "导出 PDF",
   };
   return labels[name] || `执行 ${name}`;
 }

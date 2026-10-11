@@ -1,0 +1,5 @@
+paddleocr==3.3.2
+paddlex[ocr-core]==3.3.8
+paddlepaddle==3.2.2
+numpy==1.26.4
+Pillow==11.3.0

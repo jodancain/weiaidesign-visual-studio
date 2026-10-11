@@ -10,6 +10,7 @@ const nextConfig: NextConfig = {
         source: "/",
         headers: [{ key: "Cache-Control", value: "no-cache, must-revalidate" }],
       },
+      { source: "/image2", headers: [{ key: "Cache-Control", value: "no-cache, must-revalidate" }] },
     ];
   },
 };

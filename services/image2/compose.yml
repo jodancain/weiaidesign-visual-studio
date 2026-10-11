@@ -1,0 +1,53 @@
+name: weiai-image2
+services:
+  image2:
+    image: weiai-image2:${IMAGE2_IMAGE_TAG:-2.0.0}
+    build: { context: ., dockerfile: Dockerfile }
+    restart: unless-stopped
+    environment:
+      IMAGE2_API_TOKEN: ${IMAGE2_API_TOKEN:?Set an independent internal token}
+      IMAGE2_DATA_DIR: /data/image2
+      IMAGE2_OCR_URL: http://image2-ocr:8080
+      IMAGE2_OCR_TOKEN: ${IMAGE2_OCR_TOKEN:?Set an independent OCR token}
+      IMAGE_OPENAI_BASE_URL: ${IMAGE_OPENAI_BASE_URL:-}
+      IMAGE_OPENAI_API_KEY: ${IMAGE_OPENAI_API_KEY:-}
+      IMAGE_OPENAI_MODEL: ${IMAGE_OPENAI_MODEL:-gpt-image-2}
+      IMAGE_OPENAI_QUALITY: ${IMAGE_OPENAI_QUALITY:-medium}
+      AGENT_LLM_BASE_URL: ${AGENT_LLM_BASE_URL:-}
+      AGENT_LLM_API_KEY: ${AGENT_LLM_API_KEY:-}
+      AGENT_LLM_MODELS: ${AGENT_LLM_MODELS:-claude-sonnet-5,gpt-5.5,kimi-k2.7-code}
+      GPU_COMFY_BASE_URL: ${GPU_COMFY_BASE_URL:-}
+      GPU_COMFY_TOKEN: ${GPU_COMFY_TOKEN:-}
+      IMAGE2_SR_MODEL_X2: ${IMAGE2_SR_MODEL_X2:-RealESRGAN_x2plus.pth}
+      IMAGE2_SR_MODEL_X4: ${IMAGE2_SR_MODEL_X4:-RealESRGAN_x4plus.pth}
+    volumes: [image2-data:/data/image2]
+    networks:
+      app: { aliases: [image2] }
+      vision: {}
+    depends_on: [image2-ocr]
+  image2-ocr:
+    image: weiai-image2-ocr:${IMAGE2_IMAGE_TAG:-2.0.0}
+    build: { context: ./vision-worker, dockerfile: Dockerfile }
+    restart: unless-stopped
+    environment:
+      IMAGE2_OCR_TOKEN: ${IMAGE2_OCR_TOKEN:?Set an independent OCR token}
+      IMAGE2_OCR_MODEL_DIR: /models/ocr
+      OMP_NUM_THREADS: "2"
+      MKL_NUM_THREADS: "2"
+    volumes:
+      - type: bind
+        source: ${IMAGE2_OCR_MODELS_DIR:?Prepare the pinned models explicitly first}
+        target: /models/ocr
+        read_only: true
+    networks: [vision]
+    read_only: true
+    tmpfs: [/tmp]
+volumes:
+  image2-data:
+    name: ${IMAGE2_DATA_VOLUME:-weiai-image2-data}
+networks:
+  app:
+    external: true
+    name: ${IMAGE2_WEB_NETWORK:?Use the actual existing Web Docker network}
+  vision:
+    internal: true

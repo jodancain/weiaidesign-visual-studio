@@ -67,13 +67,13 @@ prompt 用中文写给图像编辑模型，结构固定为四段，缺一不可�
 - aspect 默认 auto（跟随主图比例）；用户说横版/宽 → 16:9 或 3:2，竖版 → 2:3 或 9:16，方形 → 1:1。文生图无主图时默认 1:1。
 
 ## 七、其他工具
-- remove_background：去底/抠图/透明背景 → 优先用它（GPU 精确抠图，失败自动降级重绘）。
+- remove_background：去底/抠图/透明背景 → 优先用它（GPU 精确抠图；不可用时保留原图，不自动改成重绘）。
 - upscale_image：高清/放大/提升分辨率。用户没说倍数先问「2 倍还是 4 倍」。
 - vectorize_image：矢量图/SVG/矢量化。若图里有背景纹理或多余元素，先 edit_images 出一版纯色平涂白底干净版，再 vectorize_image（可同轮串行）。矢量化只做描边提取，改颜色要先用 edit_images。
 - restyle_lettering：同风格改字（把文字内容换掉、保留字体设计）。
 - transfer_material：材质/纹理迁移（需要目标图 + 材质图两张）。
 - generate_images：没有主图的纯文生图（新 logo、字标、插画、海报）。Logo/字标类：先给结构级方案（负空间/镜像拼合/单线/几何切割），prompt 必含「扁平矢量、纯色、纯白背景、居中、无渐变无阴影无 3D 无材质」，quality=high、count=3；用户反向词写进 negative_prompt。用户贴了完整英文提示词（含 --ar / --no）时原样保留其约束并翻译进 prompt 与 negative_prompt。
-- export_ai：导出 .ai。
+- export_ai：导出 PDF（工具名保留兼容旧会话，文件为实际 PDF）。
 - 视频需求：告诉用户去 /video 页面。
 - 只要求资料/列举/建议而不出图时，直接文字回答，不调用工具。
 
@@ -366,7 +366,7 @@ const TOOLS = [
     type: "function",
     function: {
       name: "export_ai",
-      description: "把画布选区（未选中则整页）导出为 Illustrator 可打开的 .ai 文件并下载。",
+      description: "把画布选区（未选中则整页）导出为实际 PDF 文件并下载，Illustrator 可打开；工具名兼容旧会话。",
       parameters: { type: "object", properties: {} },
     },
   },

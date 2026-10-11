@@ -1,0 +1,19 @@
+{
+  "ocr_version": "PP-OCRv5",
+  "source_document": "https://github.com/PaddlePaddle/PaddleOCR/blob/release/3.3/docs/version3.x/pipeline_usage/OCR.en.md",
+  "hash_provenance": "SHA-256 pinned from HTTPS downloads of official versioned archives, verified on 2026-10-10. These are repository-pinned hashes, not vendor-published signatures.",
+  "models": {
+    "det": {
+      "name": "PP-OCRv5_server_det",
+      "url": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv5_server_det_infer.tar",
+      "bytes": 88340480,
+      "sha256": "22a33e0ba6a21425ea4192da03bf4395c9a0c67902bd924b7328fc859073045d"
+    },
+    "rec": {
+      "name": "PP-OCRv5_server_rec",
+      "url": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv5_server_rec_infer.tar",
+      "bytes": 84869120,
+      "sha256": "d99be2ffd348943ab52876179168be4fb5b14f5f0812f2ae4c76d89ec2ea750a"
+    }
+  }
+}

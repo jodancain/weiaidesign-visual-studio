@@ -11,6 +11,12 @@ npm run dev
 
 Configure server credentials using `.env.example`. Studio v3 calls the separate backend through `STUDIO_GATEWAY_URL`.
 
+## Image Studio 2.0
+
+The `/image2` preview entry uses a separate Node 22 service and SQLite volume. Install its dependencies with `npm ci --prefix services/image2`. CPU edits, real Chinese text/SVG layers, pixel-preserving layer restoration and persistent candidate jobs share one operation registry. The original entry remains available.
+
+See [the service README](services/image2/README.md), [implementation and acceptance scope](docs/IMAGE2_2.0.md), and [Docker deployment and recovery](docs/IMAGE2_DEPLOYMENT.md). Image2-specific tests are `npm run test:image2`, `npm run test:image2:client` and `npm run test:image2:browser`; the real CPU OCR smoke is explicit. These commands do not authorize production deployment or paid model submissions.
+
 ## Complete Studio source workspace
 
 [runtime/](runtime/README.md) contains the gateway, Blender and code-video workers, optional archive/relay services, deployment helpers, static scene definitions and attribution notices. Its SHA-256 manifest excludes runtime data and credentials.

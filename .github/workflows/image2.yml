@@ -1,0 +1,32 @@
+name: Image Studio 2.0
+on:
+  push:
+    paths: ['services/image2/**', 'app/image2/**', 'components/image2/**', 'lib/image2/**', 'tests/image2*', 'app/api/v3/**', 'package*.json', '.github/workflows/image2.yml']
+  pull_request:
+    paths: ['services/image2/**', 'app/image2/**', 'components/image2/**', 'lib/image2/**', 'tests/image2*', 'app/api/v3/**', 'package*.json', '.github/workflows/image2.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            services/image2/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: sudo apt-get update && sudo apt-get install -y poppler-utils
+      - run: npm ci && npm ci --prefix services/image2
+      - run: npm run test:image2 && npm run test:image2:client
+      - run: pip install Pillow==11.3.0 && python -m unittest discover -s services/image2/vision-worker -p test_worker.py
+      - run: npm run lint && npm run build && npm run typecheck
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:image2:ui && npm run test:image2:browser
