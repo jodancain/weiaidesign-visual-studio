@@ -63,7 +63,7 @@ export async function inspectAsset(bytes,mime) {
   if(['OTTO','wOFF','wOF2','true','ttcf'].includes(signature)||(b.length>=4&&b.readUInt32BE(0)===0x00010000)){
     const font=fontkit.create(b);
     if(!font.familyName||!font.postscriptName)throw processingError('A single font face is required; font collections are not supported');
-    return {mime:signature==='wOFF'?'font/woff':signature==='wOF2'?'font/woff2':signature==='OTTO'?'font/otf':'font/ttf',metadata:{family:font.familyName,postscriptName:font.postscriptName,fullName:font.fullName,subfamily:font.subfamilyName,unitsPerEm:font.unitsPerEm,numGlyphs:font.numGlyphs}};
+    return {mime:signature==='wOFF'?'font/woff':signature==='wOF2'?'font/woff2':signature==='OTTO'?'font/otf':'font/ttf',metadata:{family:font.familyName,postscriptName:font.postscriptName,fullName:font.fullName,subfamily:font.subfamilyName,unitsPerEm:font.unitsPerEm,numGlyphs:font.numGlyphs,weight:Number(font['OS/2']?.usWeightClass)||400}};
   }
   if(b.subarray(0,5).toString()==='%PDF-')return {mime:'application/pdf',metadata:{format:'pdf'}};
   if(b.length>=4&&[0x04034b50,0x06054b50,0x08074b50].includes(b.readUInt32LE(0)))return {mime:'application/zip',metadata:{format:'zip'}};
@@ -141,7 +141,10 @@ export function compositeProtected(original,result,mask,protect) {
 }
 function layerCommands(request,ctx,asset,extras={}) {
   const target=ctx.document.layers.find(l=>l.id===request.targetLayerId);
-  const keepLayout=target&&['resize','super_resolution'].includes(request.operation)&&request.params?.resizeLayout!==true;
+  // Pixel edits replace an asset in its existing canvas frame. A downsampled
+  // source must not shrink a scaled/rotated object when only its pixels change.
+  const pixelEdits=['recolor','erase','repair','fill','color_key','inpaint','matting','trace','flip'];
+  const keepLayout=target&&(pixelEdits.includes(request.operation)||['resize','super_resolution'].includes(request.operation)&&request.params?.resizeLayout!==true);
   const patch={assetId:asset.id,width:keepLayout?target.width:asset.width,height:keepLayout?target.height:asset.height,...extras,maskAssetId:null,metadata:{...target?.metadata,...asset.metadata,...extras.metadata}};
   if(target)return [{type:'layer.update',layerId:target.id,patch}];
   // Null clears a property in update commands; newly added layers must omit absent IDs.
@@ -194,18 +197,41 @@ async function prepareText(request,ctx,base,raw){
   const maskAsset=await saveResult(request,ctx,await encodePNG({...raw,data:glyph}),'image/png',{role:'glyph_mask',sourcePatchAssetId:metadata.sourcePatchAssetId||base.id},'text_glyph_mask');
   return {commands:[{type:'layer.update',layerId:base.target.id,patch:{metadata:{...metadata,cleanBackgroundAssetId:backgroundAsset.id,glyphMaskAssetId:maskAsset.id,backgroundStatus:'ready',backgroundMethod:'near_solid_glyph_difference',fontConfirmed:false,fontStatus:'unknown',sourcePatchAssetId:metadata.sourcePatchAssetId||base.id,...(base.activeMaskId?{sourceMaskAssetId:base.activeMaskId}: {})}}}],output:{cleanBackgroundAssetId:backgroundAsset.id,cleanBgAssetId:backgroundAsset.id,glyphMaskAssetId:maskAsset.id,backgroundStatus:'ready',backgroundRGBA:background,glyphPixels,sourcePatchAssetId:metadata.sourcePatchAssetId||base.id},needsReview:false};
 }
+/** Source provenance describes the original extraction; visibility describes the current
+ * processed pixels that a mask may reveal. Never derive a processed layer from stale
+ * provenance: doing so would silently undo its crop, orientation and colour edits. */
+async function visibilitySource(base,ctx,current){
+  const target=base.target,metadata=target?.metadata||{};
+  let id=metadata.visibilitySourceAssetId,rect=metadata.visibilitySourceRect;
+  let legacyOriginal=false;
+  // Compatibility for original restoration patches. Old processed results have no valid
+  // transform history, so retain their current pixels instead of guessing a transform.
+  const processed=metadata.operation||base.asset.metadata?.operation;
+  if(!id&&(!processed||processed==='restore_layers')&&target?.sourceAssetId&&Array.isArray(target.sourceRect)){
+    id=target.sourceAssetId;rect=target.sourceRect;legacyOriginal=true;
+  }
+  if(!id){id=base.id;rect=undefined;}
+  const record=id===base.id?base:await ctx.getAsset(id);
+  let raw=await decodeRGBA(record.bytes,record.asset.mime,ctx.config?.maxPixels);
+  if(rect!==undefined){
+    if(!Array.isArray(rect)||rect.length!==4||!rect.every(Number.isInteger))throw processingError('Visibility source rectangle must use integer source pixels','SOURCE_RECT',{status:422});
+    const [x,y,width,height]=rect;
+    if(x<0||y<0||width<1||height<1||x+width>raw.width||y+height>raw.height)throw processingError('Visibility source rectangle is outside its immutable asset','SOURCE_RECT',{status:422});
+    if(x!==0||y!==0||width!==raw.width||height!==raw.height)raw=await decodeRGBA(await sharp(raw.data,{raw:{width:raw.width,height:raw.height,channels:4}}).extract({left:x,top:y,width,height}).png().toBuffer(),'image/png');
+  }
+  if(raw.width!==current.width||raw.height!==current.height)raw=await decodeRGBA(await sharp(raw.data,{raw:{width:raw.width,height:raw.height,channels:4}}).resize(current.width,current.height,{fit:'fill'}).png().toBuffer(),'image/png');
+  const canExpand=legacyOriginal||metadata.visibilityCanExpand===true||raw.data.some((alpha,i)=>i%4===3&&alpha>current.data[i]);
+  return {raw,id,canExpand,legacyOriginal};
+}
+async function saveVisibilitySource(request,ctx,state,raw,method){
+  const inputs=[...(request.inputs||[]),{role:'visibility_source',assetId:state.id}];
+  return saveResult({...request,inputs},ctx,await encodePNG(raw),'image/png',{role:'visibility_source',method,hiddenContent:'not_reconstructed'},'visibility_source');
+}
 async function refineMask(request,ctx,base,current){
   const target=base.target,p=request.params||{};
   if(target?.type!=='raster'&&!unknownTextPatch(target))throw processingError('请选择像素图层或未确认字体的文字裁片。','MASK_TARGET',{status:422});
   const masks=await masksFor(request,ctx,current);if(!masks.edit)throw processingError('Refine mask requires a new white-visible mask','MASK_REQUIRED');
-  let source=current,canExpand=false;const rect=target.sourceRect,originalId=target.sourceAssetId;
-  if(originalId&&Array.isArray(rect)&&rect.length===4){
-    const original=await ctx.getAsset(originalId),raw=await decodeRGBA(original.bytes,original.asset.mime,ctx.config?.maxPixels);
-    const [x,y,width,height]=rect;
-    if(!rect.every(Number.isInteger)||x<0||y<0||width<1||height<1||x+width>raw.width||y+height>raw.height)throw processingError('Original source rectangle is not a valid source-pixel crop','SOURCE_RECT',{status:422});
-    const bytes=await sharp(raw.data,{raw:{width:raw.width,height:raw.height,channels:4}}).extract({left:x,top:y,width,height}).resize(current.width,current.height,{fit:'fill'}).png().toBuffer();
-    source=await decodeRGBA(bytes,'image/png');canExpand=true;
-  }
+  const state=await visibilitySource(base,ctx,current),source=state.raw,canExpand=state.canExpand;
   const visibility=effectiveMask(current.width,current.height,masks.edit,null,p.feather),data=Buffer.from(source.data);
   for(let i=0;i<visibility.length;i++){
     const j=i*4;
@@ -213,8 +239,10 @@ async function refineMask(request,ctx,base,current){
     data[j+3]=Math.round(source.data[j+3]*visibility[i]/255);
     if(data[j+3]===0)data[j]=data[j+1]=data[j+2]=0;
   }
-  const metadata={...target.metadata,operation:'refine_mask',method:canExpand?'original_visible_source_crop':'existing_visible_patch',canExpandWithinSourceRect:canExpand,hiddenContent:'not_reconstructed',...(base.activeMaskId?{sourceMaskAssetId:base.activeMaskId}: {})};
-  const asset=await saveResult(canExpand?{...request,inputs:[...(request.inputs||[]),{role:'original_source',assetId:originalId}]}:request,ctx,await encodePNG({...current,data}),'image/png',metadata);
+  checkpointCancel(ctx);
+  const visibilityAsset=await saveVisibilitySource(request,ctx,state,source,'current_processed_visible_pixels');
+  const metadata={...target.metadata,operation:'refine_mask',method:canExpand?'processed_visible_source':'existing_visible_patch',canExpandWithinSourceRect:canExpand,visibilitySourceAssetId:visibilityAsset.id,visibilitySourceRect:[0,0,source.width,source.height],visibilityCanExpand:canExpand,hiddenContent:'not_reconstructed',...(base.activeMaskId?{sourceMaskAssetId:base.activeMaskId}: {})};
+  const asset=await saveResult({...request,inputs:[...(request.inputs||[]),{role:'visibility_source',assetId:visibilityAsset.id},...(state.legacyOriginal?[{role:'original_source',assetId:state.id}]:[])]},ctx,await encodePNG({...current,data}),'image/png',metadata);
   const layerMeta={...target.metadata,...metadata};
   if(unknownTextPatch(target)){
     layerMeta.originalSourcePatchAssetId=target.metadata.originalSourcePatchAssetId||target.metadata.sourcePatchAssetId||base.id;
@@ -264,6 +292,66 @@ function repairPixels(raw,mask,p){
   }
   return {raw:{...raw,data:current},method:'boundary_propagation_harmonic',needsReview:true};
 }
+const geometricOperations=new Set(['resize','crop','pad','rotate','flip']);
+async function geometryBytes(operation,raw,p){
+  const image=()=>sharp(raw.data,{raw:{width:raw.width,height:raw.height,channels:4}});
+  switch(operation){
+    case 'resize':return image().resize(positiveInt(p.width,'width'),positiveInt(p.height,'height'),{fit:'fill',kernel:p.kernel==='nearest'?'nearest':'lanczos3'}).png().toBuffer();
+    case 'crop':{
+      const x=Number(p.x),y=Number(p.y),width=positiveInt(p.width,'width'),height=positiveInt(p.height,'height');
+      if(!Number.isInteger(x)||!Number.isInteger(y)||x<0||y<0||x+width>raw.width||y+height>raw.height)throw processingError('Crop rectangle is outside the source');
+      return image().extract({left:x,top:y,width,height}).png().toBuffer();
+    }
+    case 'pad':{
+      const width=positiveInt(p.width,'width'),height=positiveInt(p.height,'height');
+      const x=p.offsetX==null?Math.floor((width-raw.width)/2):Number(p.offsetX),y=p.offsetY==null?Math.floor((height-raw.height)/2):Number(p.offsetY);
+      if(!Number.isInteger(x)||!Number.isInteger(y)||x<0||y<0||x+raw.width>width||y+raw.height>height)throw processingError('Padding must contain the whole source');
+      return image().extend({left:x,top:y,right:width-x-raw.width,bottom:height-y-raw.height,background:parseColor(p.fill,{r:0,g:0,b:0,alpha:0})}).png().toBuffer();
+    }
+    case 'rotate':{
+      if(!Number.isFinite(Number(p.degrees)))throw processingError('degrees must be finite');
+      return image().rotate(Number(p.degrees),{background:{r:0,g:0,b:0,alpha:0}}).png().toBuffer();
+    }
+    case 'flip':{
+      if(!['horizontal','vertical','x','y'].includes(p.axis))throw processingError('axis must be horizontal or vertical');
+      return (['horizontal','x'].includes(p.axis)?image().flop():image().flip()).png().toBuffer();
+    }
+    default:throw processingError('Unknown pixel geometry operation');
+  }
+}
+function colorPixels(operation,raw,p){
+  const out={...raw,data:Buffer.from(raw.data)};
+  const color=operation==='erase'?null:parseColor(p.color),tolerance=Math.max(0,Math.min(255,finite(p.tolerance,30)));
+  if(operation==='recolor'&&p.mode&&!['flatten','luminance','hsv'].includes(p.mode))throw processingError('Unknown recolor mode');
+  for(let i=0;i<raw.width*raw.height;i++){
+    const j=i*4;
+    if(operation==='recolor'){const rgb=texturedColor([raw.data[j],raw.data[j+1],raw.data[j+2]],color,p);out.data[j]=rgb[0];out.data[j+1]=rgb[1];out.data[j+2]=rgb[2];}
+    else if(operation==='fill'){out.data[j]=color.r;out.data[j+1]=color.g;out.data[j+2]=color.b;out.data[j+3]=Math.round(color.alpha*255);}
+    else if(operation==='erase')out.data[j+3]=0;
+    else if(Math.max(Math.abs(raw.data[j]-color.r),Math.abs(raw.data[j+1]-color.g),Math.abs(raw.data[j+2]-color.b))<=tolerance)out.data[j+3]=0;
+  }
+  return out;
+}
+async function processedVisibility(request,ctx,base,current,result,masks){
+  const state=await visibilitySource(base,ctx,current),op=request.operation,p=request.params||{};
+  let raw=state.raw;
+  if(geometricOperations.has(op))raw=await decodeRGBA(await geometryBytes(op,raw,p),'image/png');
+  else if(op==='super_resolution')raw=await decodeRGBA(await geometryBytes('resize',raw,{width:result.width,height:result.height}),'image/png');
+  else if(['recolor','fill','repair'].includes(op)){
+    const transformed=op==='repair'?repairPixels(raw,masks.effective,p).raw:colorPixels(op,raw,p);
+    raw=(masks.edit||masks.protect)?compositeProtected(raw,transformed,masks.effective,masks.protect):transformed;
+  }
+  if(raw.width!==result.width||raw.height!==result.height)throw processingError('Visibility source dimensions do not match processed pixels','MASK_GEOMETRY');
+  // The current visible result is authoritative. Preserve its RGB exactly, while retaining
+  // known alpha behind masks/erasures. Transparent source pixels never acquire invented RGB.
+  const data=Buffer.from(raw.data);
+  for(let i=0;i<result.width*result.height;i++){
+    const j=i*4;
+    if(result.data[j+3]>0){result.data.copy(data,j,j,j+3);data[j+3]=Math.max(raw.data[j+3],result.data[j+3]);}
+  }
+  const asset=await saveVisibilitySource(request,ctx,state,{...raw,data},`${op}_visible_pixels`);
+  return {asset,canExpand:state.canExpand||data.some((alpha,i)=>i%4===3&&alpha>result.data[i])};
+}
 async function traceSVG(raw,options,ctx){
   if(raw.width*raw.height>(ctx.config?.maxTracePixels||4000000))throw processingError('Image exceeds tracing pixel budget; source retained','PIXEL_BUDGET');
   const data=new Uint8ClampedArray(raw.data);
@@ -298,7 +386,7 @@ async function computeOperation(request,ctx) {
   const preparingBackground=p.purpose==='text_background';
   if(preparingBackground&&(!['repair','inpaint','fill'].includes(op)||!unknownTextPatch(base.target)))throw backgroundRequired('文字背景修补需要尚未确认字体的原文字裁片。');
   const masks=await masksFor(request,ctx,raw);
-  let out,bytes,mime='image/png',meta={...base.target?.metadata,operation:op,sourceAssetId:base.id,...(base.activeMaskId?{sourceMaskAssetId:base.activeMaskId}: {})};
+  let out,bytes,mime='image/png',meta={...base.target?.metadata,operation:op,processingSourceAssetId:base.id,...(base.activeMaskId?{sourceMaskAssetId:base.activeMaskId}: {})};
   if(op==='trace') {
     const options={ltres:1,qtres:1,pathomit:8,numberofcolors:16,mincolorratio:0,scale:1,roundcoords:3,desc:false};
     const presets={monochrome:{numberofcolors:2,colorsampling:0},color:{numberofcolors:16},logo:{numberofcolors:8,pathomit:0,ltres:.5,qtres:.5},posterized2:{...ImageTracer.optionpresets.posterized2}};
@@ -352,28 +440,8 @@ async function computeOperation(request,ctx) {
     out=await decodeRGBA(await sharp(out.data,{raw:{width:out.width,height:out.height,channels:4}}).extract({left,top,width,height}).resize(raw.width,raw.height,{fit:'fill'}).png().toBuffer(),'image/png');
     meta={...meta,...result.metadata,modelFrame:{...frame,sourceRect:[left,top,width,height],sourceToFrame:[width/raw.width,0,0,height/raw.height,left,top],frameToSource:[raw.width/width,0,0,raw.height/height,-left*raw.width/width,-top*raw.height/height]},resampledToSource:true};
   } else {
-    const image=()=>sharp(raw.data,{raw:{width:raw.width,height:raw.height,channels:4}});
     switch(op){
-      case 'resize':bytes=await image().resize(positiveInt(p.width,'width'),positiveInt(p.height,'height'),{fit:'fill',kernel:p.kernel==='nearest'?'nearest':'lanczos3'}).png().toBuffer();break;
-      case 'crop':{
-        const x=Number(p.x),y=Number(p.y),width=positiveInt(p.width,'width'),height=positiveInt(p.height,'height');
-        if(!Number.isInteger(x)||!Number.isInteger(y)||x<0||y<0||x+width>raw.width||y+height>raw.height)throw processingError('Crop rectangle is outside the source');
-        bytes=await image().extract({left:x,top:y,width,height}).png().toBuffer();break;
-      }
-      case 'pad':{
-        const width=positiveInt(p.width,'width'),height=positiveInt(p.height,'height');
-        const x=p.offsetX==null?Math.floor((width-raw.width)/2):Number(p.offsetX),y=p.offsetY==null?Math.floor((height-raw.height)/2):Number(p.offsetY);
-        if(!Number.isInteger(x)||!Number.isInteger(y)||x<0||y<0||x+raw.width>width||y+raw.height>height)throw processingError('Padding must contain the whole source');
-        bytes=await image().extend({left:x,top:y,right:width-x-raw.width,bottom:height-y-raw.height,background:parseColor(p.fill,{r:0,g:0,b:0,alpha:0})}).png().toBuffer();break;
-      }
-      case 'rotate':{
-        if(!Number.isFinite(Number(p.degrees)))throw processingError('degrees must be finite');
-        bytes=await image().rotate(Number(p.degrees),{background:{r:0,g:0,b:0,alpha:0}}).png().toBuffer();break;
-      }
-      case 'flip':{
-        if(!['horizontal','vertical','x','y'].includes(p.axis))throw processingError('axis must be horizontal or vertical');
-        bytes=await (['horizontal','x'].includes(p.axis)?image().flop():image().flip()).png().toBuffer();break;
-      }
+      case 'resize':case 'crop':case 'pad':case 'rotate':case 'flip':bytes=await geometryBytes(op,raw,p);break;
       case 'repair':{
         if(!masks.edit)throw processingError('Traditional repair requires an explicit edit mask');
         const repaired=repairPixels(raw,masks.effective,p);
@@ -381,17 +449,8 @@ async function computeOperation(request,ctx) {
         out=repaired.raw;meta={...meta,method:repaired.method,needsReview:repaired.needsReview,warning:repaired.warning};break;
       }
       case 'recolor':case 'erase':case 'color_key':case 'fill':{
-        out={...raw,data:Buffer.from(raw.data)};
-        const color=op==='erase'?null:parseColor(p.color);const tolerance=Math.max(0,Math.min(255,finite(p.tolerance,30)));
-        if(op==='recolor'&&p.mode&&!['flatten','luminance','hsv'].includes(p.mode))throw processingError('Unknown recolor mode');
+        out=colorPixels(op,raw,p);
         if(op==='recolor')meta.mode=p.mode|| (p.preserveLuminance===false?'flatten':'luminance');
-        for(let i=0;i<raw.width*raw.height;i++){
-          const j=i*4;
-          if(op==='recolor'){const rgb=texturedColor([raw.data[j],raw.data[j+1],raw.data[j+2]],color,p);out.data[j]=rgb[0];out.data[j+1]=rgb[1];out.data[j+2]=rgb[2];}
-          else if(op==='fill'){out.data[j]=color.r;out.data[j+1]=color.g;out.data[j+2]=color.b;out.data[j+3]=Math.round(color.alpha*255);}
-          else if(op==='erase')out.data[j+3]=0;
-          else if(Math.max(Math.abs(raw.data[j]-color.r),Math.abs(raw.data[j+1]-color.g),Math.abs(raw.data[j+2]-color.b))<=tolerance)out.data[j+3]=0;
-        }
         break;
       }
       default:throw processingError(`Operation ${op} has no processor`);
@@ -404,12 +463,27 @@ async function computeOperation(request,ctx) {
     bytes=await encodePNG(out);
     meta.protectedPixelsExact=true;
   }else if(masks.edit||masks.protect)throw processingError('Vector tracing with pixel masks is not supported; source preserved','MASK_GEOMETRY');
-  const asset=await saveResult(request,ctx,bytes,mime,meta);
   if(preparingBackground){
+    const asset=await saveResult(request,ctx,bytes,mime,meta);
     const metadata=base.target.metadata||{};
     return {commands:[{type:'layer.update',layerId:base.target.id,patch:{metadata:{...metadata,...meta,cleanBackgroundAssetId:asset.id,backgroundStatus:'ready',backgroundMethod:op,sourcePatchAssetId:metadata.sourcePatchAssetId||base.id,fontStatus:'unknown',fontConfirmed:false}}}],output:{assetId:asset.id,cleanBackgroundAssetId:asset.id,cleanBgAssetId:asset.id,sourcePatchAssetId:metadata.sourcePatchAssetId||base.id,width:asset.width,height:asset.height,metadata:meta},needsReview:op!=='fill'};
   }
-  return {commands:layerCommands(request,ctx,asset,{sourceAssetId:base.target?.sourceRect&&base.target?.sourceAssetId?base.target.sourceAssetId:base.id,...(op==='trace'?{type:'vector',editability:'path'}:{type:'raster',editability:'pixels'})}),output:{assetId:asset.id,width:asset.width,height:asset.height,metadata:meta},needsReview:['matting','inpaint','trace'].includes(op)||meta.needsReview===true};
+  let saveRequest=request;
+  if(mime==='image/png'){
+    const visibility=await processedVisibility(request,ctx,base,raw,out,masks);
+    meta={...meta,visibilitySourceAssetId:visibility.asset.id,visibilitySourceRect:[0,0,out.width,out.height],visibilityCanExpand:visibility.canExpand};
+    if(geometricOperations.has(op)||op==='super_resolution'){
+      // Stored screen selections use the old pixel frame, even when a flip/rotation keeps
+      // its dimensions. Require a fresh selection rather than silently editing wrong pixels.
+      for(const key of ['editMaskAssetId','protectMaskAssetId','visibilityMaskAssetId','visibilityProtectMaskAssetId']){
+        if(typeof meta[key]==='string')meta[`previous${key[0].toUpperCase()}${key.slice(1)}`]=meta[key];
+        meta[key]=null;
+      }
+    }
+    saveRequest={...request,inputs:[...(request.inputs||[]),{role:'visibility_source',assetId:visibility.asset.id}]};
+  }
+  const asset=await saveResult(saveRequest,ctx,bytes,mime,meta);
+  return {commands:layerCommands(request,ctx,asset,{sourceAssetId:base.target?.sourceAssetId||base.id,...(op==='trace'?{type:'vector',editability:'path'}:{type:'raster',editability:'pixels'})}),output:{assetId:asset.id,width:asset.width,height:asset.height,metadata:meta},needsReview:['matting','inpaint','trace'].includes(op)||meta.needsReview===true};
 }
 
 export async function executeOperation(request,ctx){

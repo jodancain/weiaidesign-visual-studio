@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import * as fontkit from 'fontkit';
 import {createImageService} from '../server.mjs';
-import {agentTools} from '../agent.mjs';
+import {agentTools,prepareAgentMessages} from '../agent.mjs';
 import {encodePNG,decodeRGBA,executeOperation,registry} from '../processors.mjs';
 
 const OWNER='11111111-1111-4111-8111-111111111111',TOKEN='synthetic-agent-test-token';
@@ -131,4 +131,59 @@ test('a synthetic image provider tool records one generation call and keeps newl
   }});
   const document=await f.json('/documents',{name:'mock generation',width:256,height:160}),{job}=await f.run(document),done=await f.terminal(job.id);assert.equal(done.state,'complete',done.error||done.output?.message);assert.equal(done.metrics.llmCalls,2);assert.equal(done.metrics.generationCalls,1);assert.equal(generationPosts,1);assert.equal(llmPosts,2);
   const branch=await f.json(`/documents/${done.output.branchDocumentId}`);assert.equal(branch.layers.length,1);assert.equal(branch.layers[0].type,'raster');assert.deepEqual(await f.bytes(branch.layers[0].assetId),generated);assert.equal((await f.json(`/documents/${document.id}`)).layers.length,0);assert.equal((await f.json(`/documents/${document.id}`)).revision,0);
+});
+
+test('Agent sees ordered immutable reference pixels and frozen conversation history after main assets change',async t=>{
+  let posts=0,expected,jobId;const f=await harness(t,{fetchImpl:async(url,init)=>{
+    assert.equal(String(url),'https://llm.fixture.invalid/v1/chat/completions');posts++;
+    const body=JSON.parse(init.body),user=body.messages.find(message=>message.role==='user'&&Array.isArray(message.content));
+    assert.ok(user);assert.match(user.content[1].text,/Reference 1 \/ 图一/);assert.match(user.content[1].text,new RegExp(expected.logoAsset.id));
+    assert.match(user.content[3].text,/Reference 2 \/ 图二/);assert.match(user.content[3].text,new RegExp(expected.asset.id));
+    const previews=user.content.filter(part=>part.type==='image_url');assert.equal(previews.length,2);
+    const logo=await decodeRGBA(Buffer.from(previews[0].image_url.url.split(',')[1],'base64'),'image/png'),base=await decodeRGBA(Buffer.from(previews[1].image_url.url.split(',')[1],'base64'),'image/png');
+    assert.deepEqual([logo.width,logo.height],[24,24]);assert.deepEqual([...logo.data.subarray(0,4)],[0,0,0,255]);assert.deepEqual(base.data,(await decodeRGBA(expected.source,'image/png')).data);
+    assert.ok(!JSON.stringify(body.messages).includes('later-message-must-not-enter-this-run'));
+    const context=body.messages.at(-1).content;assert.ok(context.includes('editMaskAssetId'));assert.ok(context.includes('protectMaskAssetId'));
+    const record=f.service.store.jobRecord(jobId);assert.ok(record.private.agentState.referencePlan.images.length===2);assert.equal(record.private.agentState.phase,'llm_submitting');
+    assert.match(JSON.stringify(record.private.agentState.messages),/image2-preview:/);assert.ok(!JSON.stringify(record.private.agentState.messages).includes('data:image/png;base64'));
+    return answer({content:'按图一与图二的明确素材关系完成分析。'});
+  }});
+  expected=await f.sourceDocument({logo:true});await f.service.runner.stop();
+  const masked=await f.json(`/documents/${expected.document.id}/commands`,{baseRevision:1,commandId:'maskrefs',commands:[{type:'layer.update',layerId:'base',patch:{metadata:{editMaskAssetId:expected.asset.id,protectMaskAssetId:expected.asset.id}}}]});
+  const conversation=await f.json('/conversations',{documentId:masked.id}),submitted=await f.json(`/conversations/${conversation.id}/messages`,{text:'结合图一和图二',references:[{assetId:expected.logoAsset.id,layerId:'logo',revision:masked.revision},{assetId:expected.asset.id,layerId:'base',revision:masked.revision}],idempotencyKey:'ordered-image-refs'});jobId=submitted.job.id;
+  const replacement=await f.json('/assets',{documentId:masked.id,name:'newer.png',mime:'image/png',data:(await pixels(4,4)).toString('base64')});
+  await f.json(`/documents/${masked.id}/commands`,{baseRevision:masked.revision,commandId:'replace-after-submit',commands:[{type:'layer.update',layerId:'base',patch:{assetId:replacement.id,width:4,height:4}}]});
+  f.service.store.addMessage(conversation.id,OWNER,{role:'user',text:'later-message-must-not-enter-this-run',references:[{assetId:replacement.id}],idempotencyKey:'later-only'});
+  f.service.runner.start();const done=await f.terminal(jobId);assert.equal(done.state,'complete',done.error);assert.equal(posts,1);assert.equal(done.metrics.llmCalls,1);assert.equal(done.metrics.generationCalls||0,0);
+  const state=f.service.store.jobRecord(jobId).private.agentState;assert.equal(state.referencePlan.images.find(image=>image.assetId===expected.asset.id).sourceHash,expected.asset.hash);assert.deepEqual(await f.bytes(expected.asset.id),expected.source);
+});
+
+test('requested chat model prioritizes a configured allowlist entry, persists it and rejects arbitrary overrides atomically',async t=>{
+  const seen=[];const f=await harness(t,{config:{agent:{models:['default-model','chosen-model']}},fetchImpl:async(url,init)=>{seen.push(JSON.parse(init.body).model);return answer({content:'完成'});}});
+  const {document}=await f.sourceDocument(),conversation=await f.json('/conversations',{documentId:document.id});
+  assert.deepEqual((await f.json('/capabilities')).agent.models,['default-model','chosen-model']);
+  const invalid=await f.request(`/conversations/${conversation.id}/messages`,{text:'invalid',model:'https://arbitrary.invalid/model',idempotencyKey:'invalid-model'});assert.equal(invalid.status,422);assert.equal((await f.json(`/documents/${document.id}/runs`)).length,0);assert.equal((await f.json(`/conversations/${conversation.id}/messages`)).length,0);assert.equal(seen.length,0);
+  const body={text:'selected',model:'chosen-model',idempotencyKey:'chosen'},submitted=await f.json(`/conversations/${conversation.id}/messages`,body),done=await f.terminal(submitted.job.id);assert.equal(done.state,'complete',done.error);assert.deepEqual(seen,['chosen-model']);assert.equal(done.output.model,'chosen-model');
+  assert.equal(f.service.store.jobRecord(submitted.job.id).private.input.model,'chosen-model');assert.equal(f.service.store.runRecord(submitted.run.id).private.input.model,'chosen-model');
+  f.service.runner.config.agent.models=['new-config'];const replay=await f.json(`/conversations/${conversation.id}/messages`,body);assert.equal(replay.job.id,submitted.job.id);assert.equal(seen.length,1);
+});
+
+test('Agent inline export defaults to visible infinite-canvas bounds rather than clipping negative objects at 1024',async t=>{
+  let posts=0;const f=await harness(t,{fetchImpl:async()=>{posts++;return posts===1?answer({tool_calls:[tool('move','apply_commands',{commands:[{type:'layer.update',layerId:'base',patch:{x:-50,y:-40}}]}),tool('export','export_document',{format:'png'})]}):answer({content:'已导出'});}});
+  const {document,source}=await f.sourceDocument(),{job}=await f.run(document),done=await f.terminal(job.id);assert.equal(done.state,'complete',done.error||done.output?.message);
+  const output=f.service.store.jobRecord(job.id).private.toolOutputs.tool_1_1,raw=await decodeRGBA(await f.bytes(output.assetId),'image/png');assert.deepEqual([raw.width,raw.height],[8,6]);assert.deepEqual(raw.data,(await decodeRGBA(source,'image/png')).data);
+  const asset=(await f.json(`/documents/${done.output.branchDocumentId}/assets`)).find(item=>item.id===output.assetId);assert.deepEqual(asset.metadata.bounds,{x:-50,y:-40,width:8,height:6});
+  assert.equal(done.metrics.generationCalls||0,0);assert.equal(posts,2);
+});
+
+test('vision reference preparation bounds dimensions and unique pixels without duplicating repeated asset payloads',async t=>{
+  const f=await harness(t,{fetchImpl:async()=>{throw new Error('preview preparation must not contact providers');}}),doc=await f.json('/documents',{name:'bounded-reference-plan'}),references=[];
+  for(let index=0;index<17;index++) {
+    const width=index?4:4000,height=index?4:8,data=Buffer.alloc(width*height*4);for(let i=0;i<data.length;i+=4)data.set([index*11,40,120,255],i);
+    const asset=await f.json('/assets',{documentId:doc.id,name:`reference-${index}.png`,mime:'image/png',data:(await encodePNG({width,height,data})).toString('base64')});references.push({assetId:asset.id,revision:0});
+  }
+  references.push(...references.slice(0,10));
+  const prepared=await prepareAgentMessages(f.service.store,OWNER,[{id:'message',documentId:doc.id,role:'user',text:'ordered',revision:0,references}]),content=prepared.messages[0].content;
+  assert.equal(prepared.referencePlan.images.length,16);assert.equal(content.filter(part=>part.type==='image_url').length,16);assert.equal(content.filter(part=>part.type==='text').length,28);assert.ok(prepared.referencePlan.images.every(image=>Math.max(image.width,image.height)<=1536));
+  assert.ok(content.some(part=>part.type==='text'&&part.text.includes('Reference 17')&&part.text.includes('pixel budget')));assert.ok(prepared.referencePlan.totalBytes<=12*1024*1024);
 });

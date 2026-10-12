@@ -118,6 +118,14 @@ export async function restoreLayers(request,ctx){
   const commands=target?[{type:'layer.update',layerId:target.id,patch:{type:'group',sourceAssetId:base.id,maskAssetId:null,metadata:{...target.metadata,role:'restored_flat',sourceAssetId:base.id,sourceWidth:raw.width,sourceHeight:raw.height,...(base.activeMaskId?{sourceMaskAssetId:base.activeMaskId}: {}),requiresReview:true}}}]:ctx.document.layers.map(layer=>({type:'layer.remove',layerId:layer.id}));
   if(!target)commands.push({type:'document.update',patch:{width:raw.width,height:raw.height}});
   const sx=target?target.width/raw.width:1,sy=target?target.height/raw.height:1;
+  // An existing source mask is part of the visible source being restored. Freeze it once
+  // so later mask expansion cannot reveal pixels that were hidden before restoration.
+  let visibilitySourceId=base.id,visibilitySourceHash=base.asset.hash||createHash('sha256').update(base.bytes).digest('hex');
+  if(base.activeMaskId){
+    const visibleBytes=await encodePNG(raw);
+    const visibilitySource=await ctx.saveAsset('restore_visibility_source',{name:'还原可见源.png',mime:'image/png',width:raw.width,height:raw.height,inputs:[{role:'base',assetId:base.id,hash:visibilitySourceHash},{role:'active_mask',assetId:base.activeMaskId,hash:base.activeMaskRecord.asset.hash||createHash('sha256').update(base.activeMaskRecord.bytes).digest('hex')}],metadata:{role:'visibility_source',sourceAssetId:base.id,sourceMaskAssetId:base.activeMaskId,hiddenContent:'not_reconstructed'}},visibleBytes);
+    visibilitySourceId=visibilitySource.id;visibilitySourceHash=visibilitySource.hash||createHash('sha256').update(visibleBytes).digest('hex');
+  }
   let fitFont;
   if(patches.some(patch=>patch.region.type==='text'))try{fitFont=await createFontCandidateFitter(ctx);}catch{warnings.push('Font candidate geometry unavailable; original text pixels retained');}
   const ids=[];
@@ -128,10 +136,12 @@ export async function restoreLayers(request,ctx){
       patch.region.metadata={...patch.region.metadata,originalFont:'unknown',fontCandidates,fontConfirmed:false,fontStatus:'unknown'};
     }
     const bytes=await encodePNG(patch),maskBytes=await encodePNG({...patch,data:patch.mask});
-    const asset=await ctx.saveAsset(`restore_patch_${patch.id}`,{name:`${patch.region.name}.png`,mime:'image/png',width:patch.width,height:patch.height,inputs:[{role:'base',assetId:base.id,hash:base.asset.hash||createHash('sha256').update(base.bytes).digest('hex')},...(base.activeMaskId?[{role:'active_mask',assetId:base.activeMaskId,hash:base.activeMaskRecord.asset.hash||createHash('sha256').update(base.activeMaskRecord.bytes).digest('hex')}]:[])],metadata:{...patch.region.metadata,sourceAssetId:base.id,sourceRect:[patch.x,patch.y,patch.width,patch.height],...(base.activeMaskId?{sourceMaskAssetId:base.activeMaskId}: {})}},bytes);
+    const visibilitySourceRect=[patch.x,patch.y,patch.width,patch.height];
+    const visibilityMetadata={visibilitySourceAssetId:visibilitySourceId,visibilitySourceRect,visibilityCanExpand:true};
+    const asset=await ctx.saveAsset(`restore_patch_${patch.id}`,{name:`${patch.region.name}.png`,mime:'image/png',width:patch.width,height:patch.height,inputs:[{role:'base',assetId:base.id,hash:base.asset.hash||createHash('sha256').update(base.bytes).digest('hex')},...(base.activeMaskId?[{role:'active_mask',assetId:base.activeMaskId,hash:base.activeMaskRecord.asset.hash||createHash('sha256').update(base.activeMaskRecord.bytes).digest('hex')}]:[]),...(visibilitySourceId!==base.id?[{role:'visibility_source',assetId:visibilitySourceId,hash:visibilitySourceHash}]:[])],metadata:{...patch.region.metadata,...visibilityMetadata,sourceAssetId:base.id,sourceRect:visibilitySourceRect,...(base.activeMaskId?{sourceMaskAssetId:base.activeMaskId}: {})}},bytes);
     const mask=await ctx.saveAsset(`restore_mask_${patch.id}`,{name:`${patch.region.name}蒙版.png`,mime:'image/png',width:patch.width,height:patch.height,metadata:{role:'ownership_mask',sourceAssetId:base.id}},maskBytes);
     ids.push(asset.id);
-    commands.push({type:'layer.add',layer:{id:randomUUID(),type:patch.region.type,name:patch.region.name,x:patch.x*sx,y:patch.y*sy,width:patch.width*sx,height:patch.height*sy,rotation:0,opacity:1,visible:true,locked:false,z,...(target?{parentId:target.id}:{}),assetId:asset.id,maskAssetId:mask.id,sourceAssetId:base.id,sourceRect:[patch.x,patch.y,patch.width,patch.height],editability:patch.region.type==='text'?'text':'pixels',...(patch.region.type==='text'?{text:patch.region.text}:{}),metadata:{...patch.region.metadata,sourcePatchAssetId:asset.id,ownedPixelCount:patch.area,missingBehindObjects:patch.region.type!=='text'}}});
+    commands.push({type:'layer.add',layer:{id:randomUUID(),type:patch.region.type,name:patch.region.name,x:patch.x*sx,y:patch.y*sy,width:patch.width*sx,height:patch.height*sy,rotation:0,opacity:1,visible:true,locked:false,z,...(target?{parentId:target.id}:{}),assetId:asset.id,maskAssetId:mask.id,sourceAssetId:base.id,sourceRect:visibilitySourceRect,editability:patch.region.type==='text'?'text':'pixels',...(patch.region.type==='text'?{text:patch.region.text}:{}),metadata:{...patch.region.metadata,...visibilityMetadata,sourcePatchAssetId:asset.id,ownedPixelCount:patch.area,missingBehindObjects:patch.region.type!=='text'}}});
   }
   await ctx.checkpoint({restoreValidation:{sourceAssetId:base.id,pixels:n,coveredPixels:patches.reduce((s,p)=>s+p.area,0),differentChannels:diff}});
   return {commands,output:{assetIds:ids,layerCount:patches.length,sourceAssetId:base.id,targetGroupId:target?.id,width:raw.width,height:raw.height,coverage:1,differentChannels:diff,warnings,fonts:'unknown',hiddenContent:'not_reconstructed'},needsReview:true};

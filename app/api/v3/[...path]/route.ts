@@ -39,11 +39,19 @@ async function forward(request: Request, context: { params: Promise<{ path: stri
   try {
     const body = ['GET', 'HEAD'].includes(request.method) ? undefined : await request.arrayBuffer();
     if (image2 && body && body.byteLength > 96 * 1024 * 1024) return Response.json({ detail: '上传内容超过96MB上限' }, { status: 413 });
-    const upstream = await fetch(`${base}/api/v3/${path.map(encodeURIComponent).join('/')}${incoming.search}`, {
+    const fetchUpstream = () => fetch(`${base}/api/v3/${path.map(encodeURIComponent).join('/')}${incoming.search}`, {
       method: request.method, headers,
       body,
       cache: 'no-store', signal: AbortSignal.timeout(180_000),
     });
+    let upstream: Response;
+    try { upstream = await fetchUpstream(); }
+    catch (error) {
+      // A stale connection may fail a read before headers arrive. Retry only the same read;
+      // mutations use the client's frozen receipt ledger and are never replayed by the BFF.
+      if (!image2 || !['GET', 'HEAD'].includes(request.method) || ['AbortError', 'TimeoutError'].includes((error as Error).name)) throw error;
+      upstream = await fetchUpstream();
+    }
     const outputHeaders = new Headers();
     for (const name of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'content-disposition', 'etag']) {
       const value = upstream.headers.get(name);

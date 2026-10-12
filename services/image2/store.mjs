@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, existsSync, openSync, writeFileSync, fsyncSync, closeSync, renameSync, unlinkSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import * as fontkit from 'fontkit';
+import { fontWeight } from './fonts.mjs';
 import { fail, ImageError, clone, canonical, digest, timestamp, requireOwner, validId, createImageDocument, validateDocument, applyCommands, mergeBranch, inspectBytes, publicJob, publicRun } from './domain.mjs';
 
 const JOB_STATES = new Set(['queued','running','complete','failed','uncertain','cancelled','awaiting_user']);
@@ -23,6 +24,7 @@ export class ImageStore {
       CREATE TABLE IF NOT EXISTS revisions(document_id TEXT NOT NULL, revision INTEGER NOT NULL, json TEXT NOT NULL, kind TEXT NOT NULL, PRIMARY KEY(document_id,revision), FOREIGN KEY(document_id) REFERENCES documents(id));
       CREATE TABLE IF NOT EXISTS history(document_id TEXT NOT NULL, seq INTEGER NOT NULL, before_json TEXT NOT NULL, after_json TEXT NOT NULL, PRIMARY KEY(document_id,seq), FOREIGN KEY(document_id) REFERENCES documents(id));
       CREATE TABLE IF NOT EXISTS command_receipts(document_id TEXT NOT NULL, command_id TEXT NOT NULL, request_hash TEXT NOT NULL, response_json TEXT NOT NULL, PRIMARY KEY(document_id,command_id), FOREIGN KEY(document_id) REFERENCES documents(id));
+      CREATE TABLE IF NOT EXISTS branch_acceptances(branch_document_id TEXT PRIMARY KEY,document_id TEXT NOT NULL,accepted_at TEXT NOT NULL,accepted_revision INTEGER NOT NULL,FOREIGN KEY(branch_document_id) REFERENCES documents(id),FOREIGN KEY(document_id) REFERENCES documents(id));
       CREATE TABLE IF NOT EXISTS assets(id TEXT PRIMARY KEY, document_id TEXT NOT NULL, json TEXT NOT NULL, path TEXT NOT NULL, FOREIGN KEY(document_id) REFERENCES documents(id));
       CREATE TABLE IF NOT EXISTS document_assets(document_id TEXT NOT NULL, asset_id TEXT NOT NULL, PRIMARY KEY(document_id,asset_id), FOREIGN KEY(document_id) REFERENCES documents(id), FOREIGN KEY(asset_id) REFERENCES assets(id));
       CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY, document_id TEXT NOT NULL, request_key TEXT NOT NULL, input_hash TEXT NOT NULL, json TEXT NOT NULL, private_json TEXT NOT NULL, UNIQUE(document_id,request_key), FOREIGN KEY(document_id) REFERENCES documents(id));
@@ -47,6 +49,8 @@ export class ImageStore {
   getDocument(id, owner) {
     const document = parse(this.documentRow(id, owner));
     document.assetIds = this.db.prepare('SELECT asset_id FROM document_assets WHERE document_id=? ORDER BY rowid').all(id).map(r => r.asset_id);
+    const accepted=this.db.prepare('SELECT * FROM branch_acceptances WHERE branch_document_id=?').get(id);
+    if(accepted)document.metadata={...document.metadata,acceptedAt:accepted.accepted_at,acceptedRevision:accepted.accepted_revision,acceptedIntoDocumentId:accepted.document_id};
     return document;
   }
   createDocument(owner, body = {}) {
@@ -118,6 +122,11 @@ export class ImageStore {
       faces.set(fontId, this.fontFace(asset.hash, bytes));
     }
     for (const layer of document.layers) {
+      if (layer.type === 'text' && faces.has(layer.fontAssetId)) {
+        const face = faces.get(layer.fontAssetId);
+        layer.fontWeight = fontWeight(face);
+        layer.fontFamily = face.familyName;
+      }
       if (layer.type !== 'text' || layer.metadata?.fontConfirmed !== true) continue;
       fail(layer.fontAssetId && faces.has(layer.fontAssetId), 'confirmed text requires a registered font file', 422, 'FONT_ASSET_REQUIRED');
       const face = faces.get(layer.fontAssetId), missing = [];
@@ -256,7 +265,7 @@ export class ImageStore {
     fail(inputs.length <= 100, 'too many asset inputs');
     const asset = { id: descriptor.assignedId || randomUUID(), documentId, name: descriptor.name, ...inspected, hash, bytes: bytes.length, createdAt: timestamp(),
       ...(inspected.width === undefined && Number.isSafeInteger(descriptor.width) && Number.isSafeInteger(descriptor.height) ? { width: descriptor.width, height: descriptor.height } : {}),
-      ...(descriptor.metadata || font ? { metadata: { ...clone(descriptor.metadata || {}), ...(font ? { family: font.familyName, postscriptName: font.postscriptName, fullName: font.fullName, numGlyphs: font.numGlyphs } : {}) } } : {}), ...(inputs.length ? { inputs } : {}) };
+      ...(descriptor.metadata || font ? { metadata: { ...clone(descriptor.metadata || {}), ...(font ? { family: font.familyName, postscriptName: font.postscriptName, fullName: font.fullName, numGlyphs: font.numGlyphs, weight: fontWeight(font) } : {}) } } : {}), ...(inputs.length ? { inputs } : {}) };
     asset.url = `/api/v3/image2/assets/${asset.id}/content`;
     const file = this.writeBlob(bytes, hash);
     return this.transaction(() => {
@@ -342,17 +351,25 @@ export class ImageStore {
       this.db.prepare('INSERT INTO revisions VALUES(?,?,?,?)').run(branch.id, 0, json(branch), 'branch'); return branch;
     });
   }
-  listBranches(documentId, owner) { this.getDocument(documentId, owner); return this.db.prepare('SELECT id FROM documents WHERE parent_id=? AND owner=? ORDER BY rowid DESC').all(documentId, requireOwner(owner)).map(r => this.getDocument(r.id, owner)); }
+  listBranches(documentId, owner) { this.getDocument(documentId, owner); return this.db.prepare('SELECT id FROM documents WHERE parent_id=? AND owner=? AND id NOT IN (SELECT branch_document_id FROM branch_acceptances) ORDER BY rowid DESC').all(documentId, requireOwner(owner)).map(r => this.getDocument(r.id, owner)); }
   acceptBranch(documentId, owner, body) {
     return this.transaction(() => {
       const current = this.getDocument(documentId, owner), request = { type: 'accept', ...body };
       if (this.receipt(documentId, body.commandId, request)) return current;
-      fail(current.revision === body.baseRevision, 'document changed; reload and retry', 409, 'revision_conflict');
       const row = this.documentRow(body.branchDocumentId, owner); fail(row.parent_id === documentId && row.base_json, 'branch belongs to another document', 409);
-      const branch = this.getDocument(body.branchDocumentId, owner); let merged;
-      try { merged = mergeBranch(parse(row, 'base_json'), current, branch); } catch (error) { if (error instanceof ImageError) { error.status = 409; error.code = 'branch_conflict'; } throw error; }
+      const consumed=this.db.prepare('SELECT document_id FROM branch_acceptances WHERE branch_document_id=?').get(body.branchDocumentId);
+      if(consumed){fail(consumed.document_id===documentId,'branch accepted into another document',409);this.db.prepare('INSERT INTO command_receipts VALUES(?,?,?,?)').run(documentId,body.commandId,digest(request),json(current));return current;}
+      fail(current.revision === body.baseRevision, 'document changed; reload and retry', 409, 'revision_conflict');
+      const branch = this.getDocument(body.branchDocumentId, owner),base=parse(row,'base_json'); let merged;
+      const producers=this.db.prepare("SELECT id FROM jobs WHERE document_id=? AND json_extract(private_json,'$.branchDocumentId')=?").all(documentId,branch.id).map(item=>this.getJob(item.id,owner));
+      fail(!producers.some(job=>['queued','running'].includes(job.state)),'候选任务仍在执行，请完成或取消后接受',409,'candidate_not_ready');
+      fail(!producers.some(job=>job.state!=='complete')||branch.revision>0||canonical(branch.layers)!==canonical(base.layers),'候选分支尚无已完成编辑，请保留任务回执等待处理',409,'candidate_empty');
+      try { merged = mergeBranch(base, current, branch); } catch (error) { if (error instanceof ImageError) { error.status = 409; error.code = 'branch_conflict'; } throw error; }
       for (const id of branch.assetIds) this.linkAsset(documentId, id);
-      return this.commit(documentId, current, merged, body.commandId, request, 'accept-branch');
+      const authored=doc=>canonical({name:doc.name,width:doc.width,height:doc.height,layers:doc.layers,metadata:doc.metadata});
+      const unchanged=authored(current)===authored(merged),accepted=unchanged?this.getDocument(documentId,owner):this.commit(documentId, current, merged, body.commandId, request, 'accept-branch');
+      if(unchanged)this.db.prepare('INSERT INTO command_receipts VALUES(?,?,?,?)').run(documentId,body.commandId,digest(request),json(accepted));
+      this.db.prepare('INSERT INTO branch_acceptances VALUES(?,?,?,?)').run(branch.id,documentId,timestamp(),accepted.revision);return accepted;
     });
   }
   createConversation(owner, { documentId }) {

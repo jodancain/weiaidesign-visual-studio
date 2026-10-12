@@ -6,7 +6,7 @@ import { fail, ImageError, digest, clone } from './domain.mjs';
 import { registry, executeOperation, inspectAsset, capabilities as processorCapabilities } from './processors.mjs';
 import { configFromEnv } from './providers.mjs';
 import { ImageAgent, agentConfig } from './agent.mjs';
-import { exportDocument, importProjectBundle } from './exports.mjs';
+import { exportDocument, importProjectBundle, scopedExportDocument, exportCanvasBounds } from './exports.mjs';
 
 export class ImageRunner {
   constructor({ store, config = {}, fetchImpl = fetch, processor = executeOperation }) {
@@ -18,7 +18,7 @@ export class ImageRunner {
   async capabilities() {
     if (this.capabilityCache && Date.now() - this.capabilityCache.at < 15000) return this.capabilityCache.value;
     const c = await processorCapabilities(this.config, this.fetchImpl);
-    const value = { ...c, operations: c.operations.map(op => ({ ...op, name: op.operation, available: op.available })), agent: { available: Boolean(this.config.agent.baseUrl && this.config.agent.apiKey), model: this.config.agent.models[0], maxRounds: 6, maxGenerations: this.config.agent.maxGenerations }, ocr: c.providers.ocr, defaultFont: { available: existsSync(this.defaultFontPath()), family: 'Noto Sans CJK SC' }, limits: { bodyBytes: 96 * 1024 * 1024, inputPixels: 40000000, restorePixels: 16000000, imageCount: 4 } };
+    const value = { ...c, operations: c.operations.map(op => ({ ...op, name: op.operation, available: op.available })), agent: { available: Boolean(this.config.agent.baseUrl && this.config.agent.apiKey), model: this.config.agent.models[0],models:[...new Set((this.config.agent.upstreams||[{models:this.config.agent.models}]).flatMap(upstream=>upstream.models||[]))], maxRounds: 6, maxGenerations: this.config.agent.maxGenerations }, ocr: c.providers.ocr, defaultFont: { available: existsSync(this.defaultFontPath()), family: 'Noto Sans CJK SC' }, limits: { bodyBytes: 96 * 1024 * 1024, inputPixels: 40000000, restorePixels: 16000000, imageCount: 4 } };
     this.capabilityCache = { at: Date.now(), value }; return value;
   }
   defaultFontPath() { return this.config.defaultFontPath || fileURLToPath(new URL('./fonts/NotoSansCJKsc-Regular.otf', import.meta.url)); }
@@ -77,13 +77,14 @@ export class ImageRunner {
   async submitRun(owner, conversationId, body) {
     const conversation = this.store.getConversation(conversationId, owner);
     const result = this.store.transaction(() => {
-    const run = this.store.createRun(conversationId, owner, { text: body.text, references: body.references || [], idempotencyKey: body.idempotencyKey });
+    const run = this.store.createRun(conversationId, owner, { text: body.text, references: body.references || [], idempotencyKey: body.idempotencyKey, ...(body.model===undefined?{}:{model:body.model}) });
     if (run.jobId) return { run, job: this.store.getJob(run.jobId, owner) };
+    if(body.model!==undefined){const configured=(this.config.agent.upstreams||[{models:this.config.agent.models}]).flatMap(upstream=>upstream.models||[]);fail(typeof body.model==='string'&&configured.includes(body.model),'所选聊天模型不在已配置模型列表中',422,'agent_model_unavailable');}
     const doc = this.store.getDocument(conversation.documentId, owner);
     this.store.addMessage(conversationId, owner, { role: 'user', text: body.text, references: body.references || [], idempotencyKey: `run-user:${run.id}` });
     const branch = this.store.createBranch(doc.id, owner, { baseRevision: doc.revision, metadata: { runId: run.id } });
-    const job = this.store.createJob(doc.id, owner, { kind: 'agent', idempotencyKey: `run:${run.id}`, input: { runId: run.id, text: body.text, references: body.references || [] } });
-    this.store.updateJob(job.id, { output: { branchDocumentId: branch.id } }, { snapshot: clone(doc), branchDocumentId: branch.id });
+    const job = this.store.createJob(doc.id, owner, { kind: 'agent', idempotencyKey: `run:${run.id}`, input: { runId: run.id, text: body.text, references: body.references || [],...(body.model===undefined?{}:{model:body.model}) } });
+    this.store.updateJob(job.id, { output: { branchDocumentId: branch.id } }, { snapshot: clone(doc), branchDocumentId: branch.id,conversationMessageIds:this.store.listMessages(conversationId,owner).map(message=>message.id) });
     const saved = this.store.updateRun(run.id, { jobId: job.id, branchDocumentId: branch.id });
     return { run: saved, job: this.store.getJob(job.id, owner) };
     });
@@ -96,6 +97,7 @@ export class ImageRunner {
     const job = this.store.createJob(doc.id, owner, { kind: 'export', idempotencyKey: body.idempotencyKey, input: body });
     if (!this.store.jobRecord(job.id).private.snapshot) {
       fail(body.baseRevision === doc.revision, '工程已修改，请刷新后导出', 409, 'revision_conflict');
+      if (body.format !== 'project') scopedExportDocument(doc, body);
       this.store.updateJob(job.id, {}, { snapshot: clone(doc), exportRevisions: this.store.listRevisions(doc.id, owner).filter(revision => revision.revision <= doc.revision) });
     }
     return this.store.getJob(job.id, owner);
@@ -181,12 +183,15 @@ export class ImageRunner {
     const applied = result.commands?.length ? this.store.command(branchId, owner, { baseRevision: doc.revision, commandId: `${id}:${namespace}`, commands: result.commands }) : latest;
     return { ...result.output, branchDocumentId: branchId, revision: applied.revision, needsReview: result.needsReview };
   }
-  async exportInline(id, documentId, owner, format, namespace) {
+  async exportInline(id, documentId, owner, format, namespace, options={}) {
     const checkpoint = this.store.jobRecord(id).private.checkpoints?.[`${namespace}:export`];
     if (checkpoint) { const { asset } = this.store.getAsset(checkpoint, owner); return { assetId: asset.id, url: asset.url, mime: asset.mime, filename: asset.name }; }
-    const doc = this.store.getDocument(documentId, owner), ctx = this.context(id, doc, owner, namespace);
-    const exported = await exportDocument(format, doc, { getAsset: ctx.getAsset, revisions: this.store.listRevisions(documentId, owner) });
-    const asset = await ctx.saveAsset('export', { name: exported.name, mime: exported.mime, metadata: { role: 'export', format, sourceDocumentId: doc.id, sourceRevision: doc.revision } }, exported.bytes);
+    const prior=this.store.jobRecord(id).private.toolStates?.[namespace],current=this.store.getDocument(documentId,owner),doc=prior?.exportSourceRevision===undefined?current:this.store.getRevision(documentId,owner,prior.exportSourceRevision);
+    const scope=prior?.exportScope||{layerIds:options.layerIds,bounds:options.bounds||exportCanvasBounds(doc,options.layerIds)};
+    if(prior?.exportSourceRevision===undefined){const live=this.store.jobRecord(id).private;this.store.updateJob(id,{}, {toolStates:{...live.toolStates,[namespace]:{...prior,exportSourceRevision:doc.revision,exportScope:scope}}});}
+    const ctx = this.context(id, doc, owner, namespace);
+    const exported = await exportDocument(format, doc, { ...scope,getAsset: ctx.getAsset, revisions: this.store.listRevisions(documentId, owner).filter(revision=>revision.revision<=doc.revision) });
+    const asset = await ctx.saveAsset('export', { name: exported.name, mime: exported.mime, metadata: { role: 'export', format, sourceDocumentId: doc.id, sourceRevision: doc.revision,...(format==='project'?{}:scope) } }, exported.bytes);
     return { assetId: asset.id, url: asset.url, mime: asset.mime, filename: asset.name };
   }
   async execute(id) {
@@ -203,8 +208,8 @@ export class ImageRunner {
         let asset;
         if (cached) asset = this.store.getAsset(cached, record.owner).asset;
         else {
-          const ctx = this.context(id, record.private.snapshot, record.owner), exported = await exportDocument(record.private.input.format, record.private.snapshot, { getAsset: ctx.getAsset, revisions: record.private.exportRevisions || this.store.listRevisions(record.job.documentId, record.owner).filter(revision => revision.revision <= record.private.snapshot.revision) });
-          asset = await ctx.saveAsset('export', { name: exported.name, mime: exported.mime, metadata: { role: 'export', format: record.private.input.format, sourceDocumentId: record.private.snapshot.id, sourceRevision: record.private.snapshot.revision } }, exported.bytes);
+          const ctx = this.context(id, record.private.snapshot, record.owner), scope = { layerIds: record.private.input.layerIds, bounds: record.private.input.bounds }, exported = await exportDocument(record.private.input.format, record.private.snapshot, { ...scope, getAsset: ctx.getAsset, revisions: record.private.exportRevisions || this.store.listRevisions(record.job.documentId, record.owner).filter(revision => revision.revision <= record.private.snapshot.revision) });
+          asset = await ctx.saveAsset('export', { name: exported.name, mime: exported.mime, metadata: { role: 'export', format: record.private.input.format, sourceDocumentId: record.private.snapshot.id, sourceRevision: record.private.snapshot.revision, ...(record.private.input.format !== 'project' ? scope : {}) } }, exported.bytes);
         }
         if (this.cancelled(id)) throw new ImageError('任务已取消，已生成文件仍保留', 409, 'CANCELLED');
         this.store.updateJob(id, { state: 'complete', progress: 1, stage: 'export_complete', output: { assetId: asset.id, url: asset.url, mime: asset.mime, filename: asset.name } }); return;

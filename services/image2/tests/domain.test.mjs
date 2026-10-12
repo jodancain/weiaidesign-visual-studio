@@ -50,3 +50,22 @@ test('server text defaults match the editor while explicit typography remains un
   assert.deepEqual(['fontSize','fill','lineHeight','tracking','fontWeight'].map(k=>d.layers[0][k]),[24,'#20232b',1.2,0,400]);
   assert.equal(d.layers[1].fontSize,48);assert.equal(d.layers[1].fill,'#ff0000');
 });
+
+test('document metadata updates are validated and permit acknowledged legacy import completion', () => {
+  const base = createImageDocument({metadata:{legacyProjectId:'original',legacyImportComplete:false}});
+  const updated=applyCommands(base,[{type:'document.update',patch:{metadata:{...base.metadata,legacyImportComplete:true}}}]);
+  assert.equal(updated.metadata.legacyImportComplete,true);assert.equal(base.metadata.legacyImportComplete,false);
+  for(const metadata of [null,[],{value:'x'.repeat(2000001)}])assert.throws(()=>applyCommands(base,[{type:'document.update',patch:{metadata}}]));
+  assert.throws(()=>applyCommands(base,[{type:'document.update',patch:{id:'replacement'}}]));
+});
+
+test('branch metadata merges disjoint authored keys and rejects same-key conflicts without leaking execution bookkeeping', () => {
+  const base=createImageDocument({metadata:{legacyProjectId:'original',legacyImportComplete:false,title:'base'}});
+  const live=applyCommands(base,[{type:'document.update',patch:{metadata:{...base.metadata,legacyImportComplete:true}}}]);
+  const branch=applyCommands(base,[{type:'document.update',patch:{metadata:{...base.metadata,title:'candidate',runId:'run-only',candidateJobId:'job-only'}}}]);
+  const merged=mergeBranch(base,live,branch);assert.deepEqual(merged.metadata,{legacyProjectId:'original',legacyImportComplete:true,title:'candidate'});
+  const conflicting=applyCommands(base,[{type:'document.update',patch:{metadata:{...base.metadata,title:'main'}}}]);
+  assert.throws(()=>mergeBranch(base,conflicting,branch),e=>e.code==='branch_conflict'&&/metadata:title/.test(e.message));
+  const removed=applyCommands(base,[{type:'document.update',patch:{metadata:{legacyProjectId:'original',legacyImportComplete:false}}}]);
+  assert.equal(mergeBranch(base,base,removed).metadata.title,undefined);
+});

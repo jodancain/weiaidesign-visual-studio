@@ -62,6 +62,19 @@ test('pixel outputs without a selected target add a valid new layer with absent 
   assert.equal(layer.maskAssetId,undefined);assert.doesNotThrow(()=>normalizeLayer(layer));assert.deepEqual([layer.width,layer.height],[16,12]);
   assert.equal(f.ctx.document.layers[0].assetId,'base');assert.deepEqual([f.ctx.document.layers[0].width,f.ctx.document.layers[0].height],[8,6]);
 });
+test('CPU pixel edits preserve the scaled canvas frame, position and rotation instead of shrinking to asset pixels',async()=>{
+  for(const operation of ['recolor','erase','repair','fill','color_key','trace','flip']){
+    const f=await fixture(),target=f.ctx.document.layers[0];
+    Object.assign(target,{x:-317,y:205,width:60,height:45,rotation:17});
+    f.ctx.fetchImpl=async()=>{throw Error('No model is permitted for a pixel edit');};
+    const masked=['erase','repair','fill'].includes(operation);
+    if(masked)f.assets.set('edit',{asset:{id:'edit',mime:'image/png'},bytes:await image(8,6,(x,y)=>x>=2&&x<5&&y>=2&&y<4?[255,255,255,255]:[0,0,0,255])});
+    const result=await f.run(operation,{color:'#168a55',preset:'logo',colors:2,pathomit:0,axis:'horizontal'},masked?[{role:'edit_mask',assetId:'edit'}]:[]);
+    const next=applyCommands(createImageDocument({width:1024,height:1024,layers:[target],assetIds:[...f.assets.keys()]}),result.commands).layers[0];
+    assert.deepEqual([next.x,next.y,next.width,next.height,next.rotation],[-317,205,60,45,17],operation);
+    assert.notEqual(next.assetId,'base',operation);
+  }
+});
 test('real Noto source glyphs receive bounded geometry candidates without confirming fonts or altering restored RGBA',async()=>{
   const fontPath=fileURLToPath(new URL('../fonts/NotoSansCJKsc-Regular.otf',import.meta.url)),fontBytes=await readFile(fontPath);
   const text='中文 MAI',size=48,width=520,height=120;

@@ -19,6 +19,7 @@
     "imagetracerjs": "1.2.6",
     "pdfkit": "^0.17.2",
     "sharp": "^0.34.5",
-    "svg-to-pdfkit": "^0.1.8"
+    "svg-to-pdfkit": "^0.1.8",
+    "wawoff2": "2.0.1"
   }
 }

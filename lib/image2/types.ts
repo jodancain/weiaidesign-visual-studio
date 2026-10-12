@@ -19,7 +19,7 @@ export type DocumentCommand =
   | { type: 'layer.update'; layerId: string; patch: Partial<ImageLayer> }
   | { type: 'layer.remove'; layerId: string }
   | { type: 'layer.reorder'; layerIds: string[] }
-  | { type: 'document.update'; patch: { name?: string; width?: number; height?: number } };
+  | { type: 'document.update'; patch: { name?: string; width?: number; height?: number; metadata?: Record<string, unknown> } };
 export interface ImageAsset {
   id: string; documentId: string; name: string; mime: string; hash: string; bytes: number;
   width?: number; height?: number; createdAt: string | number; metadata?: Record<string, unknown>;

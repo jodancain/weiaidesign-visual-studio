@@ -1,6 +1,6 @@
 # 图片工作台 2.0 部署与恢复
 
-本次提供构建与部署文件。默认页面仍是原版，2.0 在 `/image2`；无需修改 DNS 或 Cloudflare 隧道。本地验证不代表生产镜像已经构建或线上模型已经验收。
+本次提供构建与部署文件。图片 2.0 功能已接入原首页 `/` 的原按钮、弹窗与聊天，主布局保持；`/image2` 仅作内部测试入口。原界面接入说明见 [IMAGE2_ORIGINAL_UI.md](IMAGE2_ORIGINAL_UI.md)。无需修改 DNS 或 Cloudflare 隧道。本地验证不代表生产镜像已经构建或线上模型已经验收。
 
 ## 部署准备
 
@@ -28,11 +28,11 @@ docker run --rm --user 0 -v /private/image2-models:/models \
 docker compose --env-file /private/image2.env -f services/image2/compose.yml up -d
 ```
 
-5. 给现有 Web 私有环境添加 `IMAGE2_API_URL=http://image2:18088` 与同一 `IMAGE2_API_TOKEN`，保留 `STUDIO_VISITOR_SECRET`。按既有方式构建 Web 并显式安排灰度上线。不要改默认入口。
+5. 给现有 Web 私有环境添加 `IMAGE2_API_URL=http://image2:18088` 与同一 `IMAGE2_API_TOKEN`，保留 `STUDIO_VISITOR_SECRET`。按既有方式构建 Web 并显式安排原首页功能灰度上线，保留上一版 Web 镜像用于回滚。缺配置会明确提示不可用，不回退旧生成链路。
 
 ## 上线后的验收
 
-验 `/image2` 的签名访客、跨工程访问拒绝、实际字体字节、PNG/SVG/PDF/工程包下载和 Range。先执行 CPU 操作和已准备的 OCR，不提交未知旧任务。
+从 `/` 原按钮验签名访客、跨工程访问拒绝、实际字体字节、PNG/SVG/PDF/工程包下载和 Range。复跑原首页功能与恢复矩阵；`/image2` 通过不能替代原首页验收。先执行 CPU 操作和已准备的 OCR，不提交未知旧任务。
 
 ComfyUI 目录存在只说明节点菜单存在：另行验 BiRefNet、SAM 2.1，以及 2×/4× 输出实际尺寸/透明通道。生成/Agent 付费验收需按获准素材和预算明确执行；超时或回执未知先读原任务，不换幂等键补跑。
 
@@ -52,6 +52,6 @@ docker compose --env-file /private/image2.env -f services/image2/compose.yml sto
 
 ## 回滚
 
-保留原入口。回滚 Web 镜像/移除灰度链接，停止 image2 即可；保留图片命名卷和私有配置以便恢复。不要把 2.0 数据硬塞回旧画布项目。显式导入保存原快照/旧 ID 映射，缺失素材保留缺失记录，不重新生成。
+回滚到上一版 Web 镜像，停止 image2 即可；保留图片命名卷和私有配置以便恢复。不要把 2.0 数据硬塞回旧画布项目。显式导入保存原快照/旧 ID 映射，缺失素材保留缺失记录，不重新生成。
 
 Cloudflare 1033 是入口隧道连接问题，与图片超分处理分开排查。此部署未更改入口隧道，不能把图片服务上线当作隧道故障已经解决。

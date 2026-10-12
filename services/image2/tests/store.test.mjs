@@ -78,6 +78,32 @@ test('branches merge only compatible edits, inherit immutable assets, and stay t
   f.store.command(d.id, OWNER, { baseRevision: 2, commandId: 'later', commands: [{ type: 'layer.update', layerId: 'a', patch: { text: 'new-human' } }] });
   assert.throws(() => f.store.acceptBranch(d.id, OWNER, { baseRevision: 3, branchDocumentId: conflict.id, commandId: 'reject' }), e => e.status === 409 && e.code === 'branch_conflict');
 });
+
+test('accepted candidates are consumed durably and repeated fresh commands cannot overwrite newer edits',t=>{
+  const f=fixture(t),main=f.store.createDocument(OWNER,{layers:[layer('text')]}),branch=f.store.createBranch(main.id,OWNER,{baseRevision:0});
+  f.store.command(branch.id,OWNER,{baseRevision:0,commandId:'candidate-text',commands:[{type:'layer.update',layerId:'text',patch:{text:'candidate'}}]});
+  const accepted=f.store.acceptBranch(main.id,OWNER,{baseRevision:0,branchDocumentId:branch.id,commandId:'accept-first'});assert.equal(accepted.revision,1);assert.deepEqual(f.store.listBranches(main.id,OWNER),[]);
+  const status=f.store.getDocument(branch.id,OWNER).metadata;assert.ok(status.acceptedAt);assert.equal(status.acceptedRevision,1);assert.equal(status.acceptedIntoDocumentId,main.id);
+  f.store.command(main.id,OWNER,{baseRevision:1,commandId:'later-author',commands:[{type:'layer.update',layerId:'text',patch:{text:'later original edit'}}]});
+  // Even changing user-editable metadata cannot reset the server acceptance ledger.
+  f.store.command(branch.id,OWNER,{baseRevision:1,commandId:'erase-status',commands:[{type:'document.update',patch:{metadata:{}}}]});
+  const reopened=f.reopen(),again=reopened.acceptBranch(main.id,OWNER,{baseRevision:2,branchDocumentId:branch.id,commandId:'accept-fresh-click'});
+  assert.equal(again.revision,2);assert.equal(again.layers[0].text,'later original edit');assert.equal(reopened.listRevisions(main.id,OWNER).length,3);assert.deepEqual(reopened.listBranches(main.id,OWNER),[]);assert.ok(reopened.getDocument(branch.id,OWNER).metadata.acceptedAt);
+  assert.equal(reopened.acceptBranch(main.id,OWNER,{baseRevision:0,branchDocumentId:branch.id,commandId:'accept-another-stale-click'}).revision,2);
+});
+
+test('candidate acceptance waits for its producer and preserves empty uncertain branches while complete no-op branches can close',t=>{
+  const f=fixture(t),main=f.store.createDocument(OWNER,{layers:[layer('text')]}),branch=f.store.createBranch(main.id,OWNER,{baseRevision:0}),job=f.store.createJob(main.id,OWNER,{kind:'agent',idempotencyKey:'producing-candidate',input:{fixtureRun:'uncertain'}});
+  f.store.updateJob(job.id,{}, {branchDocumentId:branch.id});
+  const accept=()=>f.store.acceptBranch(main.id,OWNER,{baseRevision:0,branchDocumentId:branch.id,commandId:'candidate-accept'});
+  assert.throws(accept,e=>e.code==='candidate_not_ready');f.store.updateJob(job.id,{state:'running'});assert.throws(accept,e=>e.code==='candidate_not_ready');
+  f.store.updateJob(job.id,{state:'uncertain'});assert.throws(accept,e=>e.code==='candidate_empty');assert.equal(f.store.listBranches(main.id,OWNER).length,1);
+  const complete=f.store.createBranch(main.id,OWNER,{baseRevision:0}),completeJob=f.store.createJob(main.id,OWNER,{kind:'agent',idempotencyKey:'completed-noop',input:{fixtureRun:'complete'}});f.store.updateJob(completeJob.id,{state:'complete'},{branchDocumentId:complete.id});
+  const accepted=f.store.acceptBranch(main.id,OWNER,{baseRevision:0,branchDocumentId:complete.id,commandId:'accept-complete-noop'});assert.equal(accepted.revision,0);assert.equal(f.store.listRevisions(main.id,OWNER).length,1);assert.deepEqual(f.store.listBranches(main.id,OWNER).map(item=>item.id),[branch.id]);
+  const partial=f.store.createBranch(main.id,OWNER,{baseRevision:0}),other=f.store.createJob(main.id,OWNER,{kind:'agent',idempotencyKey:'partial-candidate',input:{fixtureRun:'partial'}});f.store.updateJob(other.id,{state:'cancelled'},{branchDocumentId:partial.id});
+  f.store.command(partial.id,OWNER,{baseRevision:0,commandId:'known-output',commands:[{type:'layer.update',layerId:'text',patch:{text:'known partial'}}]});
+  assert.equal(f.store.acceptBranch(main.id,OWNER,{baseRevision:0,branchDocumentId:partial.id,commandId:'accept-partial'}).layers[0].text,'known partial');
+});
 test('candidate checkpoints belong to the authorized job branch and only enter main when explicitly accepted', t => {
   const f = fixture(t), d = f.store.createDocument(OWNER, {}), asset = f.store.addAsset(d.id,OWNER,{name:'source.png',mime:'image/png'},PNG);
   const main = f.store.command(d.id,OWNER,{baseRevision:0,commandId:'source-layer',commands:[{type:'layer.add',layer:{id:'base',type:'raster',assetId:asset.id,width:1,height:1}}]});
@@ -91,6 +117,7 @@ test('candidate checkpoints belong to the authorized job branch and only enter m
   assert.ok(f.store.getDocument(branch.id,OWNER).assetIds.includes(candidate.id));
   assert.equal(f.store.checkpointAsset(job.id,'candidate',{name:'candidate.png',mime:'image/png'},PNG,branch.id).id,candidate.id);
   f.store.command(branch.id,OWNER,{baseRevision:0,commandId:'candidate-layer',commands:[{type:'layer.update',layerId:'base',patch:{assetId:candidate.id}}]});
+  f.store.updateJob(job.id,{state:'complete'});
   const accepted = f.store.acceptBranch(d.id,OWNER,{baseRevision:1,branchDocumentId:branch.id,commandId:'accept'});
   assert.equal(accepted.layers[0].assetId,candidate.id);assert.ok(accepted.assetIds.includes(candidate.id));assert.deepEqual(f.reopen().getAsset(candidate.id,OWNER).bytes,PNG);
 });
@@ -147,7 +174,7 @@ test('an owned image cannot be used as a font through document commands or histo
 });
 test('real subset WOFF2 rejects missing glyph confirmation and changed text without silent fallback', t => {
   const f=fixture(t), d=f.store.createDocument(OWNER,{});
-  const bytes=readFileSync(new URL('../../../public/fonts/source-han-sans.woff2',import.meta.url));
+  const bytes=readFileSync(new URL('./fixtures/incomplete-cjk.woff2',import.meta.url));
   const font=f.store.addAsset(d.id,OWNER,{name:'subset.woff2',mime:'font/woff2',metadata:{family:'forged family'}},bytes);
   assert.equal(font.metadata.family,'Noto Sans CJK SC');
   const add={type:'layer.add',layer:{...layer('text','中'),fontAssetId:font.id,metadata:{fontConfirmed:true}}};
@@ -159,7 +186,7 @@ test('real subset WOFF2 rejects missing glyph confirmation and changed text with
 test('confirmed text needs a real font; unknown source patch may retain desired text with missing glyphs', t => {
   const f=fixture(t), d=f.store.createDocument(OWNER,{}), source=f.store.addAsset(d.id,OWNER,{name:'original.png',mime:'image/png'},PNG);
   assert.throws(()=>f.store.command(d.id,OWNER,{baseRevision:0,commandId:'no-font',commands:[{type:'layer.add',layer:{...layer('confirmed','中文'),metadata:{fontConfirmed:true}}}]}),e=>e.code==='FONT_ASSET_REQUIRED');
-  const font=f.store.addAsset(d.id,OWNER,{name:'subset.woff2',mime:'font/woff2'},readFileSync(new URL('../../../public/fonts/source-han-sans.woff2',import.meta.url)));
+  const font=f.store.addAsset(d.id,OWNER,{name:'subset.woff2',mime:'font/woff2'},readFileSync(new URL('./fixtures/incomplete-cjk.woff2',import.meta.url)));
   const unknown=f.store.command(d.id,OWNER,{baseRevision:0,commandId:'unknown',commands:[{type:'layer.add',layer:{...layer('original','中文'),assetId:source.id,fontAssetId:font.id,metadata:{fontConfirmed:false,desiredText:'中文',sourcePatchAssetId:source.id}}}]});
   assert.equal(unknown.layers[0].metadata.desiredText,'中文');
   assert.throws(()=>f.store.command(d.id,OWNER,{baseRevision:1,commandId:'bad-confirm',commands:[{type:'layer.update',layerId:'original',patch:{metadata:{fontConfirmed:true}}}]}),e=>e.code==='FONT_GLYPH_MISSING');
@@ -169,7 +196,7 @@ test('full Noto face confirms CJK and controls, and rejected imported glyphs do 
   const f=fixture(t), d=f.store.createDocument(OWNER,{});
   const font=f.store.addAsset(d.id,OWNER,{name:'Noto.otf',mime:'font/otf'},readFileSync(new URL('../fonts/NotoSansCJKsc-Regular.otf',import.meta.url)));
   f.store.command(d.id,OWNER,{baseRevision:0,commandId:'full-cjk',commands:[{type:'layer.add',layer:{...layer('full','中文\nMAI\t'),fontAssetId:font.id,metadata:{fontConfirmed:true}}}]});
-  const destination=f.store.createDocument(OWNER,{}), subset=f.store.addAsset(destination.id,OWNER,{name:'subset.woff2',mime:'font/woff2'},readFileSync(new URL('../../../public/fonts/source-han-sans.woff2',import.meta.url)));
+  const destination=f.store.createDocument(OWNER,{}), subset=f.store.addAsset(destination.id,OWNER,{name:'subset.woff2',mime:'font/woff2'},readFileSync(new URL('./fixtures/incomplete-cjk.woff2',import.meta.url)));
   const snapshot={...f.store.getDocument(destination.id,OWNER),layers:[{...layer('bad','中文'),fontAssetId:subset.id,metadata:{fontConfirmed:true}}]};
   assert.throws(()=>f.store.importRevisions(destination.id,OWNER,{revisions:[snapshot],currentDocument:snapshot}),e=>e.code==='FONT_GLYPH_MISSING');
   assert.equal(f.store.getDocument(destination.id,OWNER).layers.length,0);

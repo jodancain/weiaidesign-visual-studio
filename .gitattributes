@@ -1,2 +1,5 @@
 # Keep upstream license text byte-for-byte, including its final blank line.
 runtime/source/docs/studio-v3/licenses/* whitespace=-blank-at-eof
+
+# Preserve the official license files byte-for-byte, including source line endings/spaces.
+public/fonts/licenses/*.txt whitespace=-blank-at-eol

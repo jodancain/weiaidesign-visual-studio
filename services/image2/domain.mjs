@@ -61,6 +61,7 @@ export function validateDocument(document) {
   for (const layer of document.layers) { fail(!layers.has(layer.id), 'duplicate layer id'); layers.set(layer.id, layer); }
   for (const layer of document.layers) {
     for (const field of ['assetId','maskAssetId','sourceAssetId','fontAssetId']) if (layer[field]) fail(document.assetIds.includes(layer[field]), `layer ${field} is not registered`);
+    if (layer.metadata?.visibilitySourceAssetId) fail(validId(layer.metadata.visibilitySourceAssetId) && document.assetIds.includes(layer.metadata.visibilitySourceAssetId), 'visibility source is not registered');
     const visited = new Set([layer.id]); let current = layer;
     while (current.parentId) {
       fail(!visited.has(current.parentId), 'cyclic layer groups');
@@ -104,7 +105,7 @@ export function applyCommands(document, commands) {
       const map = new Map(result.layers.map(l => [l.id, l])); result.layers = command.layerIds.map((id, z) => ({ ...map.get(id), z }));
       fail(result.layers.every(l => !locked(l) || map.get(l.id).z === l.z), 'locked layer cannot be reordered', 409, 'layer_locked');
     } else if (command.type === 'document.update') {
-      record(command.patch, 'document patch'); fail(Object.keys(command.patch).every(k => ['name','width','height'].includes(k)), 'unsupported document patch'); Object.assign(result, clone(command.patch));
+      record(command.patch, 'document patch'); fail(Object.keys(command.patch).every(k => ['name','width','height','metadata'].includes(k)), 'unsupported document patch'); Object.assign(result, clone(command.patch));
     } else fail(false, 'unsupported command');
   }
   return validateDocument(result);
@@ -115,6 +116,17 @@ export function mergeBranch(base, current, branch) {
   for (const field of ['name','width','height']) {
     if (!equal(base[field], branch[field])) { if (!equal(base[field], current[field]) && !equal(branch[field], current[field])) conflicts.push(field); else merged[field] = clone(branch[field]); }
   }
+  const metadata = { ...current.metadata }, bookkeeping = new Set(['candidateJobId','runId','acceptedAt','acceptedRevision','acceptedIntoDocumentId']);
+  for (const key of new Set([...Object.keys(base.metadata || {}), ...Object.keys(branch.metadata || {})])) {
+    // Branch creation adds execution bookkeeping; it is not an authored change.
+    if (bookkeeping.has(key)) continue;
+    const before = base.metadata?.[key], live = current.metadata?.[key], candidate = branch.metadata?.[key];
+    if (!equal(before, candidate)) {
+      if (!equal(before, live) && !equal(live, candidate)) conflicts.push(`metadata:${key}`);
+      else if (candidate === undefined) delete metadata[key]; else Object.defineProperty(metadata, key, { value: clone(candidate), enumerable: true, writable: true, configurable: true });
+    }
+  }
+  if (current.metadata !== undefined || Object.keys(metadata).length) merged.metadata = metadata;
   const maps = [base,current,branch].map(d => new Map(d.layers.map(l => [l.id,l]))), result = new Map(maps[1]);
   for (const id of new Set([...maps[0].keys(), ...maps[2].keys()])) {
     const [before, live, candidate] = maps.map(m => m.get(id));

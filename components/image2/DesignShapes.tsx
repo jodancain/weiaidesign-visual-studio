@@ -60,7 +60,7 @@ function VectorLayer({ layer }: { layer: ImageLayer }) {
       .then(text => { if (active) { setSvg(safeSvg(text, layer.fill, layer.metadata?.pathStyles as Record<string, Record<string, unknown>> | undefined, `i2-vector-${layer.id}`)); setError(''); } }).catch(err => { if (active) setError(err.message); });
     return () => { active = false; };
   }, [layer.id, layer.assetId, layer.fill, layer.metadata?.pathStyles]);
-  return svg ? <div className="i2-svg" dangerouslySetInnerHTML={{ __html: svg }} /> : <span>{error || '读取图形…'}</span>;
+  return svg ? <div className="i2-svg" style={{ width: '100%', height: '100%' }} dangerouslySetInnerHTML={{ __html: svg }} /> : <span>{error || '读取图形…'}</span>;
 }
 function RenderLayer({ layer }: { layer: ImageLayer }) {
   if (layer.metadata?.presentationArtboard) return <div style={{ width: '100%', height: '100%', background: '#fff', border: '1px solid #dadce3', boxShadow: '0 3px 14px #0000000c' }} />;
@@ -71,7 +71,7 @@ function RenderLayer({ layer }: { layer: ImageLayer }) {
     {layer.metadata?.backgroundDetached !== true && typeof layer.metadata?.cleanBackgroundAssetId === 'string' && <image href={assetUrl(layer.metadata.cleanBackgroundAssetId)} width={layer.width} height={layer.height} preserveAspectRatio="none" />}
     <text x="0" y={layer.fontSize || 24} fill={layer.fill || '#20232b'} stroke={layer.stroke} strokeWidth={layer.strokeWidth || 0}
       fontFamily={layer.fontAssetId ? `i2-${layer.fontAssetId}` : layer.fontFamily || 'sans-serif'} fontSize={layer.fontSize || 24}
-      fontWeight={layer.fontWeight || 400} letterSpacing={layer.tracking || 0} style={{ paintOrder: 'stroke fill' }}>
+      fontWeight={layer.fontWeight || 400} letterSpacing={layer.tracking || 0} style={{ paintOrder: 'stroke fill', fontSynthesis: 'none' }}>
       {(layer.text || '').split('\n').map((line, index) => <tspan key={index} x="0" dy={index ? (layer.fontSize || 24) * (layer.lineHeight || 1.2) : 0}>{line}</tspan>)}
     </text>
   </svg>;

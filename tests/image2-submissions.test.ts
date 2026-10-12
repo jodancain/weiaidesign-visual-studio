@@ -45,4 +45,35 @@ test('concurrent clicks share one request; recovery reuses the immutable saved a
   await new ImageSubmissionManager(storage, async (path, body) => { replay.push({ ...saved, path, body }); return { run: { id: '51e0ce6c-f719-43c2-949f-e2a0424f821e' } }; }).recover('doc', () => {});
   assert.deepEqual(replay, [saved]); assert.equal((await storage.list()).length, 0);
 });
+test('HTTP timeout and rate-limit outcomes retain charged submissions across reload without a new key', async () => {
+  for (const path of ['/operations', '/conversations/conversation/messages']) for (const status of [408, 429]) {
+    const storage = new MemorySubmissions(), calls: Record<string, unknown>[] = [];
+    const original = { documentId: 'doc', baseRevision: 3, text: 'preserve original request', inputs: [{ role: 'base', assetId: 'original' }] };
+    const transport = async (_path: string, body: Record<string, unknown>) => {
+      calls.push(structuredClone(body));
+      if (calls.length === 1) throw Object.assign(new Error('response outcome unknown'), { status });
+      return { job: { id: '29d2212e-9d41-4d8d-a212-6101a8f54576' } };
+    };
+    await assert.rejects(new ImageSubmissionManager(storage, transport).submit(path, { documentId: 'doc', action: 'same' }, original), /outcome unknown/);
+    const saved = (await storage.list())[0];
+    assert.ok(saved, `HTTP ${status} must preserve the pending request`);
+    assert.deepEqual(saved.body, calls[0]);
+    await new ImageSubmissionManager(storage, transport).resume(saved);
+    assert.deepEqual(calls[1], calls[0]);
+    assert.equal(calls[1].idempotencyKey, calls[0].idempotencyKey);
+    assert.equal((await storage.list()).length, 0);
+  }
+});
 export { MemorySubmissions };
+
+test('an advanced canvas resumes the stored operation directly before inventing a new reference intent', async () => {
+  const storage = new MemorySubmissions(), body = { documentId: 'doc', baseRevision: 5, operation: 'generate', inputs: [{ role: 'base', assetId: 'original-version' }], params: { prompt: 'same request' } };
+  await assert.rejects(new ImageSubmissionManager(storage, async () => { throw new Error('receipt lost'); }).submit('/operations', { documentId: 'doc', reference: 'original-version' }, body));
+  const saved = (await storage.list())[0], calls: unknown[] = [];
+  const advancedCanvas = { baseRevision: 12, assetId: 'newer-version' };
+  const reloaded = new ImageSubmissionManager(storage, async (path, request) => { calls.push({ path, request }); return { job: { id: '29d2212e-9d41-4d8d-a212-6101a8f54576' } }; });
+  await reloaded.resume(saved);
+  assert.deepEqual(calls, [{ path: '/operations', request: saved.body }]);
+  assert.equal(saved.body.baseRevision, 5); assert.deepEqual(saved.body.inputs, [{ role: 'base', assetId: 'original-version' }]);
+  assert.deepEqual(advancedCanvas, { baseRevision: 12, assetId: 'newer-version' }); assert.equal((await reloaded.pending()).length, 0);
+});

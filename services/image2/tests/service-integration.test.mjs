@@ -61,16 +61,37 @@ test('HTTP pixel resize produces true dimensions, candidate isolation, and an ex
   assert.equal(accepted.layers[0].assetId, done.output.assetId); assert.equal(accepted.layers[0].width, 16);
 });
 
+test('HTTP export freezes selected layers and negative bounds with idempotent results and unchanged canonical coordinates', async t => {
+  const f = await harness(t), { document } = await f.baseDocument('infinite-canvas');
+  const moved = await f.json(`/documents/${document.id}/commands`, { baseRevision:document.revision,commandId:'negative-position',commands:[{type:'layer.update',layerId:'base-layer',patch:{x:-50,y:-30}}] });
+  const input = { documentId:document.id,baseRevision:moved.revision,format:'png',layerIds:['base-layer'],bounds:{x:-50,y:-30,width:8,height:6},idempotencyKey:'scoped-export' };
+  const {job} = await f.json('/exports',input), done = await f.terminal(job.id); assert.equal(done.state,'complete',done.error);
+  const output = await decodeRGBA(await f.bytes(done.output.assetId),'image/png'); assert.deepEqual([output.width,output.height],[8,6]); assert.deepEqual([...output.data.subarray(0,4)],[0,0,90,255]);
+  const live = await f.json(`/documents/${document.id}`); assert.deepEqual(live.layers,moved.layers); assert.equal(live.revision,moved.revision);
+  assert.equal((await f.json('/exports',input)).job.id,job.id);
+  assert.equal((await f.request('/exports',{method:'POST',body:{...input,idempotencyKey:'invalid-selection',layerIds:['missing']}})).status,422);
+  assert.equal((await f.request('/exports',{method:'POST',owner:OTHER,body:input})).status,404);
+});
+
 test('candidate assets and provenance export/import independently while the main document remains byte-for-byte unchanged', async t => {
   const f = await harness(t), {document,asset} = await f.baseDocument('candidate-package');
   const {job} = await f.json('/operations',{documentId:document.id,baseRevision:1,operation:'flip',targetLayerId:'base-layer',inputs:[{role:'base',assetId:asset.id}],params:{axis:'horizontal'},mode:'candidate',idempotencyKey:'candidate-flip'});
   const done = await f.terminal(job.id);assert.equal(done.state,'complete',done.error);
   const branch = await f.json(`/documents/${done.output.branchDocumentId}`), output = (await f.json(`/documents/${branch.id}/assets`)).find(a=>a.id===done.output.assetId);
-  assert.equal(output.documentId,branch.id);assert.deepEqual(output.inputs.map(i=>i.assetId),[asset.id]);assert.deepEqual(await f.json(`/documents/${document.id}`),document);
+  assert.equal(output.documentId,branch.id);assert.deepEqual(output.inputs.map(i=>i.role).sort(),['base','visibility_source']);
+  assert.equal(output.inputs.find(i=>i.role==='base').assetId,asset.id);assert.equal(output.inputs.find(i=>i.role==='visibility_source').assetId,branch.layers[0].metadata.visibilitySourceAssetId);
+  assert.deepEqual(await f.json(`/documents/${document.id}`),document);
   const exported = await f.json('/exports',{documentId:branch.id,baseRevision:branch.revision,format:'project',idempotencyKey:'candidate-package'}), archived = await f.terminal(exported.job.id);assert.equal(archived.state,'complete',archived.error);
   const imported = await f.json('/imports/project',{data:(await f.bytes(archived.output.assetId)).toString('base64')});
   assert.equal(imported.parentDocumentId,undefined);assert.deepEqual(await f.bytes(imported.layers[0].assetId),await f.bytes(output.id));
-  const remapped = (await f.json(`/documents/${imported.id}/assets`)).find(a=>a.id===imported.layers[0].assetId);assert.equal(remapped.inputs.length,1);assert.notEqual(remapped.inputs[0].assetId,asset.id);
+  const importedAssets = await f.json(`/documents/${imported.id}/assets`), remapped = importedAssets.find(a=>a.id===imported.layers[0].assetId);assert.equal(remapped.inputs.length,2);
+  const importedBaseline=remapped.inputs.find(i=>i.role==='visibility_source'); assert.equal(importedBaseline.assetId,imported.layers[0].metadata.visibilitySourceAssetId);
+  for(const input of remapped.inputs){const record=importedAssets.find(a=>a.id===input.assetId);assert.ok(record);assert.equal(record.hash,input.hash);assert.notEqual(input.assetId,asset.id);}
+  const beforeRefine=await decodeRGBA(await f.bytes(imported.layers[0].assetId),'image/png'), maskPixels=Buffer.alloc(beforeRefine.width*beforeRefine.height*4,255);maskPixels.fill(0,0,4);
+  const mask=await f.json('/assets',{documentId:imported.id,name:'post-import-mask.png',mime:'image/png',data:(await encodePNG({width:beforeRefine.width,height:beforeRefine.height,data:maskPixels})).toString('base64')});
+  const refined=await f.json('/operations',{documentId:imported.id,baseRevision:imported.revision,operation:'refine_mask',targetLayerId:imported.layers[0].id,inputs:[{role:'edit',assetId:mask.id}],params:{},idempotencyKey:'post-import-refine'}), refinedJob=await f.terminal(refined.job.id);
+  assert.equal(refinedJob.state,'complete',refinedJob.error);const refinedPixels=await decodeRGBA(await f.bytes(refinedJob.output.assetId),'image/png');
+  assert.deepEqual(refinedPixels.data.subarray(4),beforeRefine.data.subarray(4));assert.deepEqual(refinedPixels.data.subarray(0,4),Buffer.alloc(4));
   assert.deepEqual(await f.json(`/documents/${document.id}`),document);
 });
 
@@ -96,12 +117,12 @@ test('native project roundtrip retains remapped base and edit-mask provenance wi
   const { job } = await f.json('/operations', { documentId: document.id, baseRevision: 1, operation: 'erase', targetLayerId: 'base-layer', inputs: [{ role: 'base', assetId: asset.id }, { role: 'edit', assetId: mask.id }], params: {}, idempotencyKey: 'erase-provenance' });
   const done = await f.terminal(job.id); assert.equal(done.state, 'complete', done.error);
   const current = await f.json(`/documents/${document.id}`), records = await f.json(`/documents/${document.id}/assets`);
-  assert.deepEqual(records.find(a => a.id === done.output.assetId).inputs.map(i => i.role).sort(), ['base','edit']);
+  assert.deepEqual(records.find(a => a.id === done.output.assetId).inputs.map(i => i.role).sort(), ['base','edit','visibility_source']);
   const exported = await f.json('/exports', { documentId: document.id, baseRevision: current.revision, format: 'project', idempotencyKey: 'provenance-export' });
   const complete = await f.terminal(exported.job.id); assert.equal(complete.state, 'complete', complete.error);
   const imported = await f.json('/imports/project', { data: (await f.bytes(complete.output.assetId)).toString('base64') });
   const importedAssets = await f.json(`/documents/${imported.id}/assets`), derived = importedAssets.find(a => a.id === imported.layers[0].assetId);
-  assert.equal(derived.inputs.length, 2);
+  assert.equal(derived.inputs.length, 3);assert.equal(derived.inputs.find(i=>i.role==='visibility_source').assetId,imported.layers[0].metadata.visibilitySourceAssetId);
   for (const input of derived.inputs) { const source = importedAssets.find(a => a.id === input.assetId); assert.ok(source); assert.equal(input.hash, source.hash); assert.notEqual(input.assetId, input.role === 'base' ? asset.id : mask.id); }
 });
 
@@ -117,7 +138,9 @@ test('one tenant font supplies actual Chinese glyphs in PNG, editable SVG and em
   }
   const rgba = await decodeRGBA(artifacts.png, 'image/png'); assert.deepEqual([rgba.width,rgba.height], [256,96]);
   let ink = 0; for (let i=3;i<rgba.data.length;i+=4) if (rgba.data[i] > 0) ink++; assert.ok(ink > 300, 'actual glyph rasterization must be present');
-  assert.match(artifacts.svg.toString(), /<text[^>]*font-family="Noto Sans CJK SC"/);
+  const alias = artifacts.svg.toString().match(/<text[^>]*font-family="(i2-font-[a-f0-9]{24})"/)?.[1];
+  assert.ok(alias, 'each font asset retains its own SVG font identity');
+  assert.ok(artifacts.svg.toString().includes(`@font-face{font-family:'${alias}'`));
   const embeddedFont = artifacts.svg.toString().match(/data:font\/otf;base64,([A-Za-z0-9+/=]+)/);
   assert.ok(embeddedFont); assert.deepEqual(Buffer.from(embeddedFont[1], 'base64'), await f.bytes(font.id));
   assert.equal(artifacts.pdf.toString('ascii',0,5), '%PDF-'); assert.match(artifacts.pdf.toString('latin1'), /\/FontFile3/);

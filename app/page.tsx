@@ -51,29 +51,33 @@ import {
   DefaultSizeStyle,
   Tldraw,
   createShapeId,
-  exportToBlob,
-  getSnapshot,
   loadSnapshot,
-  toRichText,
   useValue,
   type Editor,
   type TLAssetId,
   type TLShapeId,
+  type TLShape,
 } from "tldraw";
 import "tldraw/tldraw.css";
+import { designShapeUtils } from '../components/image2/DesignShapes';
+import { LegacyImagePanels, CandidateResult, type LegacyImagePanel } from '../components/image2/LegacyImagePanels';
+import { useLegacyImage2 } from '../lib/image2/useLegacyImage2';
+import { assetUrl, Image2ApiError } from '../lib/image2/client';
+import type { ImageJob } from '../lib/image2/types';
+import { capability } from '../lib/image2/geometry';
 
 /* ------------------------------------------------------------------ */
 /* constants                                                           */
 /* ------------------------------------------------------------------ */
 
 const API_BASE = "/api/v1";
-const AGENT_MAX_ROUNDS = 6;
 
-/** Chinese OFL fonts (subset woff2) mapped onto all 16 tldraw font slots. */
-const FONT_DRAW_URL = "/fonts/lxgw-wenkai.woff2";
-const FONT_SANS_URL = "/fonts/source-han-sans.woff2";
-const FONT_SERIF_URL = "/fonts/source-han-serif.woff2";
-const FONT_MONO_URL = "/fonts/smiley-sans.woff2";
+
+/** Full licensed Chinese font faces, versioned to replace the former incomplete subsets. */
+const FONT_DRAW_URL = "/fonts/lxgw-wenkai.woff2?v=full-original-families-20261012";
+const FONT_SANS_URL = "/fonts/source-han-sans.woff2?v=full-original-families-20261012";
+const FONT_SERIF_URL = "/fonts/source-han-serif.woff2?v=full-original-families-20261012";
+const FONT_MONO_URL = "/fonts/smiley-sans.woff2?v=full-original-families-20261012";
 const FONT_ASSET_URLS = {
   fonts: {
     tldraw_draw: FONT_DRAW_URL,
@@ -279,6 +283,8 @@ type ChatMessage =
     }
   | { id: string; role: "action"; label: string; done: boolean; ts: number };
 
+/** Every picture the agent may refer to in this conversation gets a stable global id (#1, #2 …).
+ *  Per-turn "图一/图二" labels are resolved against this registry (Lovart numbers by attach order). */
 type OaiToolCall = { id: string; type?: string; function: { name: string; arguments: string } };
 type OaiContentPart =
   | { type: "text"; text: string }
@@ -814,9 +820,13 @@ function writeProjectsToStorage(projects: ProjectMeta[], activeId: string) {
 /* page                                                                */
 /* ------------------------------------------------------------------ */
 
+const originalShapeVisibility = (shape: TLShape) => shape.meta.image2Hidden === true ? 'hidden' as const : 'inherit' as const;
+const elementColours: Record<string, string> = {'红色':'#e03131','暗红色':'#8b1e2d','黑色':'#000000','白色':'#ffffff','蓝色':'#4263eb','绿色':'#099268','金色':'#d5a53a'};
+
 export default function Home() {
   "use no memo"; // The tldraw editor is an imperative external store; its action closures are not compiler-pure.
   const [editor, setEditor] = useState<Editor | null>(null);
+  const handleEditorMount = useCallback((instance: Editor) => setEditor(instance), []);
 
   const [token, setToken] = useState("");
   const [tokenLoaded, setTokenLoaded] = useState(false);
@@ -866,14 +876,18 @@ export default function Home() {
     box: { x: number; y: number; w: number; h: number } | null;
   }>({ ids: [], images: [], box: null });
 
-  const [quickEditDialog, setQuickEditDialog] = useState<{ open: boolean; src?: string; mode?: "edit" | "erase" }>({ open: false });
+  const [quickEditDialog, setQuickEditDialog] = useState<{ open: boolean; src?: string; layerId?: string; mode?: "edit" | "erase" }>({ open: false });
   const [quickEditText, setQuickEditText] = useState("");
-  const [elementDialog, setElementDialog] = useState<{ open: boolean; src?: string }>({ open: false });
+  const [elementDialog, setElementDialog] = useState<{ open: boolean; src?: string; layerId?: string }>({ open: false });
   const [elementTarget, setElementTarget] = useState("");
   const [elementOp, setElementOp] = useState<"recolor" | "remove" | "replace" | "free" | "layers" | "smart-split">("recolor");
   const [elementValue, setElementValue] = useState("");
-  const [maskDialog, setMaskDialog] = useState<{ open: boolean; src?: string }>({ open: false });
+  const [maskDialog, setMaskDialog] = useState<{ open: boolean; src?: string; layerId?: string }>({ open: false });
   const [maskBrush, setMaskBrush] = useState(36);
+  const [maskMode, setMaskMode] = useState<'edit' | 'protect'>('edit');
+  const [maskOperation, setMaskOperation] = useState('erase');
+  const [maskColor, setMaskColor] = useState('#d1384b');
+  const maskProtectRef = useRef<HTMLCanvasElement | null>(null);
   const [maskInstruction, setMaskInstruction] = useState("");
   const [maskHasPaint, setMaskHasPaint] = useState(false);
   const maskViewRef = useRef<HTMLCanvasElement | null>(null);
@@ -886,11 +900,20 @@ export default function Home() {
   const [textFont, setTextFont] = useState<"draw" | "sans" | "serif" | "mono">("draw");
   const [textColor, setTextColor] = useState("black");
   const [textSize, setTextSize] = useState("m");
-  const [fontDialog, setFontDialog] = useState<{ open: boolean; src?: string; preview?: string }>({ open: false });
-  const [fontLines, setFontLines] = useState<FontLineEdit[] | null>(null);
-  const [fontOcr, setFontOcr] = useState<"idle" | "loading" | "done" | "failed">("idle");
+  const [fontDialog, setFontDialog] = useState<{ open: boolean; src?: string; layerId?: string; preview?: string }>({ open: false });
+
+
   const [fontText, setFontText] = useState("");
-  const [fontNote, setFontNote] = useState("");
+
+  const [fontOriginal, setFontOriginal] = useState('');
+  const [fontRect, setFontRect] = useState({ x: 0, y: 0, width: 100, height: 40 });
+  const [fontAssetChoice, setFontAssetChoice] = useState('');
+  const [fontExactSize, setFontExactSize] = useState(36);
+  const [fontExactColor, setFontExactColor] = useState('#20232b');
+  const [imagePanel, setImagePanelState] = useState<LegacyImagePanel>(null);
+  const imagePanelEpoch = useRef(0);
+  const setImagePanel = useCallback((mode: LegacyImagePanel) => { imagePanelEpoch.current++; setImagePanelState(mode); }, []);
+  const renderedPanelEpoch = imagePanelEpoch.current;
   const [materialDialog, setMaterialDialog] = useState<{ open: boolean; a?: string; b?: string }>({ open: false });
   const [materialSwap, setMaterialSwap] = useState(false);
   const [materialNote, setMaterialNote] = useState("");
@@ -909,11 +932,12 @@ export default function Home() {
   const messagesRef = useRef<HTMLDivElement>(null);
   const placeCounter = useRef(0);
   const recognitionRef = useRef<{ stop: () => void } | null>(null);
+  // Retained solely to display archived sessions and their old numbered context chips.
   const oaiHistoryRef = useRef<OaiMessage[]>([]);
-  const currentPlanRef = useRef<DesignPlan | null>(null);
   const imageRegistryRef = useRef<TurnImage[]>([]);
   const lastOutputsRef = useRef<number[]>([]);
-  const turnCounterRef = useRef(0);
+
+
   const attachmentsRef = useRef<ComposerAttachment[]>([]);
   const selectionRef = useRef(selection);
   const skipAutosaveRef = useRef(false);
@@ -921,6 +945,26 @@ export default function Home() {
   const activeProjectIdRef = useRef(activeProjectId);
   const projectNameRef = useRef(projectName);
   const editorRef = useRef<Editor | null>(null);
+  const historyQueueRef = useRef(Promise.resolve());
+  const image2 = useLegacyImage2({ editor, projectId: activeProjectId, projectName, onError: setError });
+  const image2Running = image2.jobs.some(job => job.state === 'queued' || job.state === 'running');
+  const currentSyncStatus = image2.document
+    ? image2.error || image2.hasDraftConflict ? 'error' : image2.busy || image2.pendingCount ? 'saving' : 'synced'
+    : syncStatus;
+  useEffect(() => {
+    const key = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!image2.document || !(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'z' || target?.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target?.tagName || '')) return;
+      event.preventDefault(); event.stopImmediatePropagation();
+      const project = activeProjectId, direction = event.shiftKey ? 'redo' : 'undo';
+      historyQueueRef.current = historyQueueRef.current.catch(() => {}).then(async () => {
+        if (activeProjectIdRef.current !== project) return;
+        try { await image2[direction](); } catch (error) { setError((error as Error).message); }
+      });
+    };
+    window.addEventListener('keydown', key, true);
+    return () => window.removeEventListener('keydown', key, true);
+  }, [activeProjectId, image2]);
 
   useEffect(() => {
     selectionRef.current = selection;
@@ -961,118 +1005,27 @@ export default function Home() {
     [activeProjectId],
   );
 
-  const saveCanvasToCloud = useCallback(
-    async (opts?: { silent?: boolean }) => {
-      const ed = editorRef.current;
-      const projectId = activeProjectIdRef.current;
-      if (!ed) {
-        if (!opts?.silent) setError("画布尚未就绪");
-        return false;
-      }
-      let snapshot: ReturnType<typeof getSnapshot>;
-      try {
-        snapshot = getSnapshot(ed.store);
-      } catch (error) {
-        if (!opts?.silent) setError(error instanceof Error ? error.message : "无法读取画布快照");
-        return false;
-      }
-      setSyncStatus("saving");
-      try {
-        const res = await fetch(`${API_BASE}/canvas-snapshots/${encodeURIComponent(projectId)}`, {
-          method: "PUT",
-          headers: authHeaders(),
-          body: JSON.stringify({
-            snapshot,
-            projectName: projectNameRef.current,
-          }),
-        });
-        const json = (await res.json().catch(() => ({}))) as { detail?: string };
-        if (!res.ok) throw new Error(json.detail || `保存失败 HTTP ${res.status}`);
-        setSyncStatus("synced");
-        if (!opts?.silent) setError("");
-        return true;
-      } catch (error) {
-        setSyncStatus("error");
-        if (!opts?.silent) setError(error instanceof Error ? error.message : "云端保存失败");
-        return false;
-      }
-    },
-    [authHeaders],
-  );
-
+  const saveCanvasToCloud = useCallback(async (opts?: {silent?: boolean}) => {
+    setSyncStatus('saving');
+    try { await image2.sync(); setSyncStatus('synced'); return true; }
+    catch (error) { setSyncStatus('error'); if (!opts?.silent) { setError((error as Error).message); if (error instanceof Image2ApiError && error.code === 'legacy_import_required') setImagePanel('import'); } return false; }
+  }, [image2, setImagePanel]);
   const restoreCanvasFromCloud = useCallback(async () => {
-    const ed = editorRef.current;
-    const projectId = activeProjectIdRef.current;
-    if (!ed) {
-      setError("画布尚未就绪");
-      return false;
-    }
-    if (!window.confirm("从云端恢复将覆盖当前画布内容，继续？")) return false;
-    setSyncStatus("saving");
+    setSyncStatus('saving');
     try {
-      const res = await fetch(`${API_BASE}/canvas-snapshots/${encodeURIComponent(projectId)}`, {
-        method: "GET",
-        headers: authHeaders(),
-      });
-      const json = (await res.json().catch(() => ({}))) as {
-        detail?: string;
-        data?: { snapshot?: unknown; projectName?: string | null };
-      };
-      if (!res.ok) throw new Error(json.detail || `恢复失败 HTTP ${res.status}`);
-      const snapshot = json.data?.snapshot;
-      if (!snapshot || typeof snapshot !== "object") throw new Error("云端快照为空或格式无效");
-      skipAutosaveRef.current = true;
-      loadSnapshot(ed.store, snapshot as Parameters<typeof loadSnapshot>[1]);
-      if (json.data?.projectName) renameActiveProject(String(json.data.projectName));
-      setSyncStatus("synced");
-      setError("");
-      window.setTimeout(() => {
-        skipAutosaveRef.current = false;
-      }, 1500);
-      return true;
-    } catch (error) {
-      setSyncStatus("error");
-      setError(error instanceof Error ? error.message : "云端恢复失败");
-      return false;
-    }
-  }, [authHeaders, renameActiveProject]);
-
-  // 60s debounced autosave when document changes
-  useEffect(() => {
-    if (!editor) return;
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- A newly attached external editor starts a new autosave subscription.
-    setSyncStatus("local");
-    if (autosaveTimerRef.current) {
-      clearTimeout(autosaveTimerRef.current);
-      autosaveTimerRef.current = null;
-    }
-    const unlisten = editor.store.listen(
-      () => {
-        if (skipAutosaveRef.current) return;
-        setSyncStatus((prev) => (prev === "saving" ? prev : "local"));
-        if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
-        autosaveTimerRef.current = setTimeout(() => {
-          autosaveTimerRef.current = null;
-          void saveCanvasToCloud({ silent: true }).then((ok) => {
-            if (!ok) {
-              // silent retry once after 15s
-              window.setTimeout(() => {
-                void saveCanvasToCloud({ silent: true });
-              }, 15_000);
-            }
-          });
-        }, 60_000);
-      },
-      { scope: "document" },
-    );
-    return () => {
-      unlisten();
-      if (autosaveTimerRef.current) {
-        clearTimeout(autosaveTimerRef.current);
-        autosaveTimerRef.current = null;
+      if (!image2.document) {
+        const response = await fetch(`${API_BASE}/canvas-snapshots/${encodeURIComponent(activeProjectId)}`, {headers: authHeaders()});
+        const value = await response.json() as {detail?: string; data?: {snapshot?: unknown; projectName?: string}};
+        if (!response.ok || !value.data?.snapshot) throw new Error(value.detail || '旧云端工程没有可恢复快照');
+        if (!editor) throw new Error('画布尚未就绪');
+        loadSnapshot(editor.store, value.data.snapshot as Parameters<typeof loadSnapshot>[1]);
+        if (value.data.projectName) renameActiveProject(value.data.projectName);
+        setImagePanel('import'); setSyncStatus('local'); return true;
       }
-    };
-  }, [editor, activeProjectId, saveCanvasToCloud]);
+      await image2.refresh(); setSyncStatus('synced'); return true;
+    }
+    catch (error) { setSyncStatus('error'); setError((error as Error).message); return false; }
+  }, [activeProjectId, authHeaders, editor, image2, renameActiveProject, setImagePanel]);
 
   /**
    * Save current chat under leaving project, then restore target project's latest session (or empty).
@@ -1111,16 +1064,13 @@ export default function Home() {
         setSessionId(last.id);
         setMessages(last.messages);
         oaiHistoryRef.current = last.oai || [];
-        imageRegistryRef.current = [];
-        lastOutputsRef.current = [];
-        turnCounterRef.current = 0;
+
+
       } else {
         setSessionId(uid());
         setMessages([]);
-        oaiHistoryRef.current = [];
-        imageRegistryRef.current = [];
-        lastOutputsRef.current = [];
-        turnCounterRef.current = 0;
+
+
       }
       setContextChips([]);
     },
@@ -1251,9 +1201,8 @@ export default function Home() {
         setSessionId(last.id);
         setMessages(last.messages);
         oaiHistoryRef.current = last.oai || [];
-        imageRegistryRef.current = [];
-        lastOutputsRef.current = [];
-        turnCounterRef.current = 0;
+
+
       }
     } catch {
       setPastSessions([]);
@@ -1324,11 +1273,11 @@ export default function Home() {
       if (!src || busy) return;
       event.preventDefault();
       setQuickEditText("");
-      setQuickEditDialog({ open: true, src, mode: "edit" });
+      setQuickEditDialog({ open: true, src, layerId: image2.getLayer(src)?.id, mode: "edit" });
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [busy, elementDialog.open, fontDialog.open, materialDialog.open, quickEditDialog.open]);
+  }, [busy, elementDialog.open, fontDialog.open, image2, materialDialog.open, quickEditDialog.open]);
 
   /* 进度计时器：有进行中任务时每秒刷新 */
   useEffect(() => {
@@ -1356,7 +1305,11 @@ export default function Home() {
       const ids = shapes.map((s) => s.id);
       const images: string[] = [];
       for (const shape of shapes) {
-        if (shape.type !== "image") continue;
+        if (shape.type !== 'image') {
+          const layer = (shape.props as unknown as {layer?: {assetId?: string; type?: string}}).layer;
+          if (layer?.assetId) images.push(assetUrl(layer.assetId));
+          continue;
+        }
         const assetId = (shape.props as { assetId?: string }).assetId;
         if (!assetId) continue;
         const asset = editor.getAsset(assetId as TLAssetId);
@@ -1461,20 +1414,9 @@ export default function Home() {
 
   /* 画布/选中导出 PNG（Lovart 分享同款产物） */
   const exportCanvasPng = useCallback(async () => {
-    if (!editor) return;
-    const selected = editor.getSelectedShapeIds();
-    const ids = selected.length ? selected : [...editor.getCurrentPageShapeIds()];
-    if (!ids.length) {
-      setError("画布是空的，先生成或放一些内容");
-      return;
-    }
-    /* 按内容尺寸动态限流：最长边 ≤4096px，防止大画布导出撑爆渲染进程 */
-    const bounds = selected.length ? editor.getSelectionPageBounds() : editor.getCurrentPageBounds();
-    const maxSide = Math.max(bounds?.w || 1024, bounds?.h || 1024);
-    const scale = Math.min(2, Math.max(0.2, 4096 / maxSide));
-    const blob = await exportToBlob({ editor, ids, format: "png", opts: { scale, background: true } });
-    saveBlob(blob, `${(projectName || "canvas").replace(/\s+/g, "-")}.png`);
-  }, [editor, projectName]);
+    try { const value = await image2.export('png'); saveBlob(value.blob, value.name); }
+    catch (error) { setError((error as Error).message); }
+  }, [image2]);
 
   /* 右键菜单动作 */
   const contextActions = useMemo(
@@ -1520,6 +1462,14 @@ export default function Home() {
         },
       },
       {
+        label: '撤销',
+        run: async () => { if (image2.document) await image2.undo(); else editor?.undo(); },
+      },
+      {
+        label: '重做',
+        run: async () => { if (image2.document) await image2.redo(); else editor?.redo(); },
+      },
+      {
         label: "全选",
         run: async () => editor?.selectAll(),
       },
@@ -1536,11 +1486,11 @@ export default function Home() {
         run: async () => editor?.resetZoom(),
       },
     ],
-    [editor, exportCanvasPng, placeImageOnCanvas],
+    [editor, exportCanvasPng, image2, placeImageOnCanvas],
   );
 
   const brushColors = ["black", "grey", "red", "orange", "yellow", "green", "blue", "violet"] as const;
-  const brushColorHex: Record<string, string> = {
+  const brushColorHex = useMemo<Record<string, string>>(() => ({
     black: "#1d1d1d",
     grey: "#9fa8b2",
     red: "#e03131",
@@ -1549,7 +1499,7 @@ export default function Home() {
     green: "#099268",
     blue: "#4263eb",
     violet: "#ae3ec9",
-  };
+  }), []);
   const brushSizes = [
     { id: "s", label: "细" },
     { id: "m", label: "中" },
@@ -1581,8 +1531,10 @@ export default function Home() {
       setTextFont(font);
       editor.setStyleForNextShapes(DefaultFontStyle, font);
       editor.setStyleForSelectedShapes(DefaultFontStyle, font);
+      const urls = { draw: FONT_DRAW_URL, sans: FONT_SANS_URL, serif: FONT_SERIF_URL, mono: FONT_MONO_URL };
+      void image2.applyFont(font, urls[font]).catch(error => setError(error.message));
     },
-    [editor],
+    [editor, image2],
   );
 
   const applyTextColor = useCallback(
@@ -1591,8 +1543,9 @@ export default function Home() {
       setTextColor(color);
       editor.setStyleForNextShapes(DefaultColorStyle, color as never);
       editor.setStyleForSelectedShapes(DefaultColorStyle, color as never);
+      if (image2.selectedLayer?.type === 'text') void image2.updateLayer(image2.selectedLayer.id, { fill: brushColorHex[color] }).catch(error => setError(error.message));
     },
-    [editor],
+    [editor, image2, brushColorHex],
   );
 
   const applyTextSize = useCallback(
@@ -1601,8 +1554,9 @@ export default function Home() {
       setTextSize(size);
       editor.setStyleForNextShapes(DefaultSizeStyle, size as never);
       editor.setStyleForSelectedShapes(DefaultSizeStyle, size as never);
+      if (image2.selectedLayer?.type === 'text') void image2.updateLayer(image2.selectedLayer.id, { fontSize: ({s: 18, m: 24, l: 36, xl: 48} as Record<string,number>)[size] || 24 }).catch(error => setError(error.message));
     },
-    [editor],
+    [editor, image2],
   );
 
   const persistBrandKit = useCallback((next: BrandKit) => {
@@ -1722,46 +1676,6 @@ export default function Home() {
     editor?.selectNone();
   };
 
-  /* ------------------------------- api ------------------------------ */
-
-  const api = useCallback(
-    async <T,>(path: string, init: RequestInit = {}) => {
-      const response = await fetch(`${API_BASE}${path}`, {
-        ...init,
-        headers: {
-          "content-type": "application/json",
-          ...(token ? { authorization: `Bearer ${token}` } : {}),
-          ...(init.headers || {}),
-        },
-      });
-      const payload = (await response.json().catch(() => ({}))) as { detail?: string; data?: T } & Record<string, unknown>;
-      if (!response.ok) throw new Error(payload?.detail || `请求失败 ${response.status}`);
-      return payload;
-    },
-    [token],
-  );
-
-  /* 长耗时图片操作走异步任务：提交秒回 + 轮询（每个 HTTP 请求都短，绕开 Cloudflare 100s/524 超时） */
-  const apiAsyncImages = useCallback(
-    async <T = ImagesResult>(path: string, body: Record<string, unknown>) => {
-      const submitted = await api<{ job_id?: string }>(path, {
-        method: "POST",
-        body: JSON.stringify({ ...body, async: true }),
-      });
-      const jobId = (submitted.data as { job_id?: string } | undefined)?.job_id;
-      if (!jobId) throw new Error("任务提交失败：无 job id");
-      for (let attempt = 0; attempt < 200; attempt += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 3000));
-        const status = await api<{ state?: string; result?: T; error?: string }>(`/image-jobs/${jobId}`);
-        const data = (status.data || {}) as { state?: string; result?: T; error?: string };
-        if (data.state === "done") return { data: data.result } as { data?: T };
-        if (data.state === "failed") throw new Error(data.error || "生成失败");
-      }
-      throw new Error("生成超时（10 分钟），请稍后在历史里重试");
-    },
-    [api],
-  );
-
   const pushHistory = useCallback((entry: Omit<HistoryEntry, "id" | "ts">) => {
     setHistory((prev) => [{ id: uid(), ts: Date.now(), ...entry }, ...prev].slice(0, 60));
   }, []);
@@ -1777,345 +1691,70 @@ export default function Home() {
     return id;
   }, []);
 
-  type ImagesResult = { images?: Array<{ public_url?: string }> };
-
-  /* ------------------------- action kernels ------------------------- */
-
-  /* 生成中画布占位骨架（Lovart 同款：完成后替换为成品图） */
-  const createPlaceholder = useCallback(
-    (label: string) => {
-      if (!editor) return null;
-      const id = createShapeId();
-      const center = editor.getViewportPageBounds().center;
-      editor.createShape({
-        id,
-        type: "geo",
-        x: center.x - 210,
-        y: center.y - 210,
-        props: { geo: "rectangle", w: 420, h: 420, dash: "dashed", color: "grey", fill: "semi", richText: toRichText(`⏳ ${label}中…`) },
-      });
-      return id;
-    },
-    [editor],
-  );
-
-  const removePlaceholder = useCallback(
-    (id: TLShapeId | null) => {
-      if (editor && id) {
-        try {
-          editor.deleteShapes([id]);
-        } catch {
-          /* shape 可能已被用户删除 */
-        }
-      }
-    },
-    [editor],
-  );
-
-  const doGenerateImages = useCallback(
-    async (params: {
-      prompt: string;
-      aspect?: string;
-      count?: number;
-      quality?: string;
-      refs?: string[];
-      kind?: string;
-      transparent?: boolean;
-      imageModel?: string;
-      negativePrompt?: string;
-      outputName?: string;
-    }) => {
-      const refs = [...(params.refs || [])];
-      // Direct gen: append brand logo as extra reference when present
-      if (params.kind !== "agent" && brandKit.logoRef) refs.push(brandKit.logoRef);
-      const referenceImages = await Promise.all(refs.slice(0, 6).map((src) => srcToDataUrl(src)));
-      const placeholderId = createPlaceholder(params.outputName || "生成图片");
-      try {
-        const effectivePrompt = params.transparent
-          ? `${params.prompt}。背景为纯白色（#FFFFFF）纯净平涂，无阴影无渐变，主体边缘干净利落`
-          : params.prompt;
-        const brandLine = params.kind === "agent" ? undefined : brandText || undefined;
-        const payload = await apiAsyncImages<ImagesResult & { policy_fallback?: boolean; error_kind?: string }>("/images", {
-            prompt: effectivePrompt,
-            raw_prompt: params.kind === "agent" ? effectivePrompt : undefined,
-            style: params.kind === "agent" ? undefined : style,
-            brand: brandLine,
-            design_memory: params.kind === "agent" ? undefined : designMemoryText || undefined,
-            audience: params.kind === "agent" ? undefined : audience,
-            negative_prompt: params.negativePrompt || (params.kind === "agent" ? undefined : negativePrompt),
-            aspect_ratio: params.aspect || aspect,
-            n: Math.max(1, Math.min(4, params.count || (params.kind === "agent" ? 1 : count))),
-            ...(params.quality ? { quality: params.quality } : {}),
-            ...(params.imageModel ? { image_model: params.imageModel } : {}),
-            ...(params.transparent ? { background: "transparent" } : {}),
-            ...(referenceImages.length ? { reference_images: referenceImages } : {}),
-            /* 非 agent 的直出路径保留旧行为：参考编辑失败时退化为文生图 */
-            ...(params.kind !== "agent" ? { allow_generation_fallback: true } : {}),
-          });
-        const urls = (payload.data?.images || []).map((item) => String(item.public_url || "")).filter(Boolean);
-        removePlaceholder(placeholderId);
-        const targetAspect = params.aspect || aspect;
-        for (const url of urls) {
-          let finalSrc = targetAspect === "16:9" || targetAspect === "9:16" ? await cropToAspect(url, targetAspect) : url;
-          if (params.transparent) finalSrc = await solidBackgroundToAlpha(finalSrc);
-          await placeImageOnCanvas(finalSrc, params.outputName || "generated");
-        }
-        pushHistory({
-          kind: params.kind === "agent" ? "agent-images" : "images",
-          prompt: params.prompt,
-          outputs: urls.map((url) => ({ url })),
-        });
-        if (payload.data?.policy_fallback) {
-          pushMessage({ role: "assistant", kind: "模型切换", text: "默认图像模型的安全审核拦截了这次请求，已自动改用备用图像模型完成。" });
-        }
-        return urls;
-      } finally {
-        removePlaceholder(placeholderId);
-      }
-    },
-    [apiAsyncImages, aspect, audience, brandKit.logoRef, brandText, count, createPlaceholder, designMemoryText, negativePrompt, placeImageOnCanvas, pushHistory, pushMessage, removePlaceholder, style],
-  );
-
-  const doFontRestyle = useCallback(
-    async (params: {
-      src: string;
-      newText: string;
-      note?: string;
-      lineEdits?: FontLineEdit[];
-      /** When true and every edited line has a bbox, use mask-local inpaint (partial line edit). */
-      useLocalMask?: boolean;
-    }) => {
-      const imageB64 = await srcToDataUrl(params.src);
-      const placeholderId = createPlaceholder("同风格改字");
-      try {
-        const edits = params.lineEdits || [];
-        const boxedEdits = edits.filter(
-          (line) => line.box && line.box.length === 4 && line.to.trim() && line.to.trim() !== line.from.trim(),
-        );
-        // Partial-line + bbox → mask inpaint (non-text area stays pixel-identical after composite)
-        if (params.useLocalMask && boxedEdits.length && boxedEdits.length === edits.length) {
-          const img = await loadImage(imageB64);
-          const w = img.naturalWidth || img.width;
-          const h = img.naturalHeight || img.height;
-          const paint = paintCanvasFromBoxes(
-            w,
-            h,
-            boxedEdits.map((line) => line.box as [number, number, number, number]),
-          );
-          const base = document.createElement("canvas");
-          base.width = w;
-          base.height = h;
-          base.getContext("2d")?.drawImage(img, 0, 0, w, h);
-          const baseB64 = base.toDataURL("image/png");
-          // OpenAI mask: transparent = repaint
-          const openaiMask = document.createElement("canvas");
-          openaiMask.width = w;
-          openaiMask.height = h;
-          const mctx = openaiMask.getContext("2d");
-          if (!mctx) throw new Error("canvas unavailable");
-          mctx.fillStyle = "#000";
-          mctx.fillRect(0, 0, w, h);
-          mctx.globalCompositeOperation = "destination-out";
-          mctx.drawImage(paint, 0, 0);
-          const maskB64 = openaiMask.toDataURL("image/png");
-          const instructionParts = boxedEdits.map(
-            (line) => `把此区域内的文字「${line.from}」替换为「${line.to}」`,
-          );
-          const instruction = [
-            instructionParts.join("；") + "。",
-            "逐笔画沿用原字体设计（骨架、笔画粗细、材质、颜色、描边、投影）。",
-            "区域外保持原样，不得改变背景与未遮罩区域的任何像素。",
-            params.note ? `补充：${params.note}` : "",
-          ]
-            .filter(Boolean)
-            .join("");
-
-          let resultImg: HTMLImageElement | null = null;
-          try {
-            const payload = await apiAsyncImages<{ image_b64?: string }>("/inpaint", {
-              image_b64: baseB64,
-              mask_b64: maskB64,
-              instruction,
-              size: inpaintSizeFor(w, h),
-            });
-            const b64 = payload.data?.image_b64;
-            if (b64) resultImg = await loadImage(b64);
-          } catch {
-            /* fall through to whole-image path */
-          }
-          if (resultImg) {
-            const composed = compositeByMask(img, resultImg, paint);
-            removePlaceholder(placeholderId);
-            await placeImageOnCanvas(composed, `font-local-${boxedEdits.map((l) => l.to).join("-").slice(0, 40)}`);
-            pushHistory({
-              kind: "font-restyle-local",
-              prompt: boxedEdits.map((l) => `${l.from}→${l.to}`).join("、"),
-              outputs: [{ url: composed }],
-            });
-            return [composed];
-          }
-          // inpaint failed → fall through to full-image font-restyle
-        }
-
-        const payload = await apiAsyncImages("/font-restyle", {
-          image_b64: imageB64,
-          new_text: params.newText,
-          style_note: params.note || "",
-          ...(edits.length
-            ? { line_edits: edits.map(({ from, to }) => ({ from, to })) }
-            : {}),
-          aspect_ratio: aspect,
-          n: 1,
-        });
-        const urls = (payload.data?.images || []).map((item) => String(item.public_url || "")).filter(Boolean);
-        removePlaceholder(placeholderId);
-        for (const url of urls) await placeImageOnCanvas(url, `font-${params.newText || "line-edit"}`);
-        pushHistory({ kind: "font-restyle", prompt: params.newText || "逐行改字", outputs: urls.map((url) => ({ url })) });
-        return urls;
-      } finally {
-        removePlaceholder(placeholderId);
-      }
-    },
-    [apiAsyncImages, aspect, createPlaceholder, placeImageOnCanvas, pushHistory, removePlaceholder],
-  );
-
-  const doMaterialTransfer = useCallback(
-    async (params: { target: string; material: string; instruction?: string }) => {
-      const composite = await compositeTargetWithSwatch(await srcToDataUrl(params.target), await srcToDataUrl(params.material));
-      const payload = await apiAsyncImages("/material-transfer", {
-        image_b64: composite,
-        instruction: params.instruction || "",
-        aspect_ratio: aspect,
-        n: 1,
-      });
-      const urls = (payload.data?.images || []).map((item) => String(item.public_url || "")).filter(Boolean);
-      for (const url of urls) await placeImageOnCanvas(url, "material");
-      pushHistory({ kind: "material-transfer", prompt: params.instruction || "材质复刻", outputs: urls.map((url) => ({ url })) });
-      return urls;
-    },
-    [apiAsyncImages, aspect, placeImageOnCanvas, pushHistory],
-  );
-
-  /* 指令式图片编辑：参考图 + 指令重绘（Quick Edit / Upscale / Remove BG / Eraser / Multi-Angles 共用管线） */
-  const doImageEdit = useCallback(
-    async (params: { src: string; instruction: string; kind: string; count?: number; transparent?: boolean }) => {
-      const referenceImage = await srcToDataUrl(params.src);
-      const placeholderId = createPlaceholder("修改图片");
-      try {
-        const payload = await apiAsyncImages("/images", {
-            prompt: `严格以参考图为基础重绘：${params.instruction}。除指令要求的修改外，主体、构图、风格、配色、文字内容全部保持与参考图一致。`,
-            raw_prompt: `严格以参考图为基础重绘：${params.instruction}。除指令要求的修改外，主体、构图、风格、配色、文字内容全部保持与参考图一致。`,
-            aspect_ratio: aspect,
-            n: Math.max(1, Math.min(4, params.count || 1)),
-            ...(params.transparent ? { background: "transparent" } : {}),
-            reference_images: [referenceImage],
-          });
-        const urls = (payload.data?.images || []).map((item) => String(item.public_url || "")).filter(Boolean);
-        removePlaceholder(placeholderId);
-        const placed: string[] = [];
-        for (const url of urls) {
-          const finalSrc = params.transparent ? await solidBackgroundToAlpha(url) : url;
-          await placeImageOnCanvas(finalSrc, params.kind);
-          placed.push(finalSrc);
-        }
-        pushHistory({ kind: params.kind, prompt: params.instruction, outputs: urls.map((url) => ({ url })) });
-        return placed;
-      } finally {
-        removePlaceholder(placeholderId);
-      }
-    },
-    [apiAsyncImages, aspect, createPlaceholder, placeImageOnCanvas, pushHistory, removePlaceholder],
-  );
-
-  /* GPU 专业抠图（BiRefNet）；不可用时保留原图，不自动重绘主体。 */
-  const doGpuMatting = useCallback(
-    async (src: string) => {
-      const imageB64 = await srcToDataUrl(src);
-      const placeholderId = createPlaceholder("GPU 抠图");
-      try {
-        const payload = await apiAsyncImages<{
-          image?: { public_url?: string; has_alpha?: boolean };
-          backend?: string;
-        }>("/matting", { image_b64: imageB64 });
-        const url = String(payload.data?.image?.public_url || "").trim();
-        if (!url) throw new Error("GPU 抠图未返回图片");
-        removePlaceholder(placeholderId);
-        await placeImageOnCanvas(url, "remove-bg-gpu");
-        pushHistory({ kind: "remove-bg-gpu", prompt: "GPU BiRefNet matting", outputs: [{ url }] });
-        return { urls: [url], degraded: false as const };
-      } catch (error) {
-        removePlaceholder(placeholderId);
-        const message = error instanceof Error ? error.message : String(error);
-        // Model/network unavailability is not permission to synthesize a different subject.
-        if (/503|not configured|GPU ComfyUI|fetch failed|Failed to fetch|timed out|超时/i.test(message)) {
-          throw new Error("精细抠图暂不可用，原图已保留，请稍后重试。");
-        }
-        throw error;
-      }
-    },
-    [apiAsyncImages, createPlaceholder, placeImageOnCanvas, pushHistory, removePlaceholder],
-  );
-
-  /* GPU 语义拆层（SAM2）；失败时不破坏原有拆分图层能力 */
-  const doGpuSegment = useCallback(
-    async (src: string) => {
-      const imageB64 = await srcToDataUrl(src);
-      const placeholderId = createPlaceholder("智能拆层");
-      try {
-        const payload = await apiAsyncImages<{
-          segments?: Array<{ id?: string; cutout_url?: string | null; mask_url?: string | null }>;
-          overlay_url?: string | null;
-          backend?: string;
-        }>("/segment", { image_b64: imageB64, max_segments: 8 });
-        const data = payload.data || {};
-        const urls: string[] = [];
-        if (data.overlay_url) urls.push(String(data.overlay_url));
-        for (const segment of data.segments || []) {
-          const cutout = String(segment.cutout_url || "").trim();
-          const mask = String(segment.mask_url || "").trim();
-          if (cutout && !urls.includes(cutout)) urls.push(cutout);
-          else if (mask && !urls.includes(mask)) urls.push(mask);
-        }
-        const unique = Array.from(new Set(urls.filter(Boolean)));
-        if (!unique.length) throw new Error("GPU 拆层未返回图层");
-        removePlaceholder(placeholderId);
-        for (const url of unique.slice(0, 8)) {
-          await placeImageOnCanvas(url, "segment-gpu");
-        }
-        pushHistory({
-          kind: "segment-gpu",
-          prompt: "GPU SAM2 segment",
-          outputs: unique.map((url) => ({ url })),
-        });
-        return { urls: unique, count: unique.length, degraded: false as const };
-      } catch (error) {
-        removePlaceholder(placeholderId);
-        throw error;
-      }
-    },
-    [apiAsyncImages, createPlaceholder, placeImageOnCanvas, pushHistory, removePlaceholder],
-  );
-
-  /* ---------- 真 mask inpaint：edits 优先，降级为参考图重绘；两条路径都做像素级合成（mask 外原图无损） ---------- */
+  const resultUrls = useCallback((job: ImageJob) => {
+    const ids = Array.isArray(job.output?.assetIds) ? job.output.assetIds : job.output?.assetId ? [job.output.assetId] : [];
+    return ids.map(id => assetUrl(String(id)));
+  }, []);
+  const doGenerateImages = useCallback(async (params: { prompt: string; aspect?: string; count?: number; quality?: string; refs?: string[]; kind?: string; transparent?: boolean; imageModel?: string; negativePrompt?: string; outputName?: string }) => {
+    const document = await image2.sync();
+    const inputs: Array<{role: string; assetId: string}> = [];
+    for (const [index, src] of (params.refs || []).slice(0, 6).entries()) {
+      // A history/reference URL identifies its original pixels, even after its canvas layer changes.
+      const asset = await image2.resolveReference(src, document.id);
+      inputs.push({ role: index ? 'reference' : 'base', assetId: asset.id });
+    }
+    const targetAspect = params.aspect || aspect;
+    const dimensions = targetAspect === '16:9' || targetAspect === '3:2' ? { width: 1536, height: 1024 } : targetAspect === '9:16' || targetAspect === '2:3' ? { width: 1024, height: 1536 } : { width: 1024, height: 1024 };
+    const completed = await image2.waitJob(await image2.submitOperation('generate', { prompt: [params.prompt, params.kind === 'agent' ? '' : brandText, designMemoryText, params.negativePrompt ? '避免：' + params.negativePrompt : ''].filter(Boolean).join('\n'), n: Math.min(4, params.count || count), quality: params.quality || 'medium', model: params.imageModel, ...dimensions, ...(params.transparent ? { background: 'transparent' } : {}) }, undefined, { documentId: document.id, inputs, mode: 'candidate' }));
+    return resultUrls(completed);
+  }, [aspect, brandText, count, designMemoryText, image2, resultUrls]);
+  const doMaterialTransfer = useCallback(async (params: { target: string; material: string; instruction?: string }) => doGenerateImages({ prompt: '将参考材质用于目标图：' + (params.instruction || ''), refs: [params.target, params.material], count: 1, kind: 'material' }), [doGenerateImages]);
+  const doImageEdit = useCallback(async (params: {src: string; instruction: string; kind: string; count?: number; transparent?: boolean}) => doGenerateImages({ prompt: params.instruction, refs: [params.src], count: params.count || 1, transparent: params.transparent, kind: params.kind }), [doGenerateImages]);
+  const doGpuMatting = useCallback(async (src: string) => {
+    const job = await image2.waitJob(await image2.submitOperation('matting', {}, src));
+    return { urls: resultUrls(job), degraded: false as const };
+  }, [image2, resultUrls]);
+  const doGpuSegment = useCallback(async (src: string) => {
+    const job = await image2.waitJob(await image2.submitOperation('segment', {}, src));
+    const ids = Array.isArray(job.output?.maskAssetIds) ? job.output.maskAssetIds : [];
+    const urls = ids.map(id => assetUrl(String(id)));
+    return { urls, count: urls.length, degraded: false as const };
+  }, [image2]);
+  /* ---------- 原图像素遮罩：算法与生成共用，保护优先 ---------- */
 
   const initMaskEditor = useCallback(async (src: string) => {
     const dataUrl = await srcToDataUrl(src);
     const img = await loadImage(dataUrl);
     maskImgRef.current = img;
     const paint = document.createElement("canvas");
-    const scale = Math.min(1, 1024 / Math.max(img.naturalWidth, img.naturalHeight));
+    const scale = 1;
     paint.width = Math.round(img.naturalWidth * scale);
     paint.height = Math.round(img.naturalHeight * scale);
     maskPaintRef.current = paint;
-    setMaskHasPaint(false);
+    const protect = document.createElement('canvas'); protect.width = paint.width; protect.height = paint.height; maskProtectRef.current = protect;
+    const layer = image2.getLayer(src);
+    for (const [target, id] of [[paint, layer?.metadata?.editMaskAssetId], [protect, layer?.metadata?.protectMaskAssetId]] as const) {
+      if (typeof id !== 'string') continue;
+      const saved = await loadImage(assetUrl(id));
+      if (saved.naturalWidth !== paint.width || saved.naturalHeight !== paint.height) throw new Error('已存遮罩与原图尺寸不一致');
+      target.getContext('2d')?.drawImage(saved, 0, 0);
+    }
+    setMaskHasPaint(Boolean(layer?.metadata?.editMaskAssetId));
     const view = maskViewRef.current;
     if (!view) return;
     const viewW = Math.min(440, paint.width);
     view.width = viewW;
     view.height = Math.round((paint.height / paint.width) * viewW);
     const ctx = view.getContext("2d");
-    if (ctx) ctx.drawImage(img, 0, 0, view.width, view.height);
-  }, []);
+    if (ctx) {
+      ctx.drawImage(img, 0, 0, view.width, view.height);
+      for (const [range, color] of [[paint, '#f76d4a'], [protect, '#9875ff']] as const) {
+        const overlay = document.createElement('canvas'); overlay.width = range.width; overlay.height = range.height;
+        const ox = overlay.getContext('2d')!; ox.fillStyle = color; ox.fillRect(0, 0, overlay.width, overlay.height); ox.globalCompositeOperation = 'destination-in'; ox.drawImage(range, 0, 0);
+        ctx.globalAlpha = .45; ctx.drawImage(overlay, 0, 0, view.width, view.height); ctx.globalAlpha = 1;
+      }
+    }
+  }, [image2]);
 
   const redrawMaskView = useCallback(() => {
     const view = maskViewRef.current;
@@ -2126,685 +1765,71 @@ export default function Home() {
     if (!ctx) return;
     ctx.clearRect(0, 0, view.width, view.height);
     ctx.drawImage(img, 0, 0, view.width, view.height);
-    ctx.globalAlpha = 0.45;
-    ctx.drawImage(paint, 0, 0, view.width, view.height);
-    ctx.globalAlpha = 1;
+    for (const [range, color] of [[paint, '#f76d4a'], [maskProtectRef.current, '#9875ff']] as const) {
+      if (!range) continue;
+      const overlay = document.createElement('canvas'); overlay.width = range.width; overlay.height = range.height;
+      const ox = overlay.getContext('2d')!; ox.fillStyle = color; ox.fillRect(0, 0, overlay.width, overlay.height); ox.globalCompositeOperation = 'destination-in'; ox.drawImage(range, 0, 0);
+      ctx.globalAlpha = .45; ctx.drawImage(overlay, 0, 0, view.width, view.height); ctx.globalAlpha = 1;
+    }
   }, []);
 
   const paintMaskAt = useCallback(
     (clientX: number, clientY: number) => {
       const view = maskViewRef.current;
-      const paint = maskPaintRef.current;
+      const paint = maskMode === "protect" ? maskProtectRef.current : maskPaintRef.current;
       if (!view || !paint) return;
       const rect = view.getBoundingClientRect();
       const scaleX = paint.width / rect.width;
       const scaleY = paint.height / rect.height;
       const ctx = paint.getContext("2d");
       if (!ctx) return;
-      ctx.fillStyle = "rgba(255,0,0,1)";
+      ctx.fillStyle = maskMode === "protect" ? "#9875ff" : "#fff";
       ctx.beginPath();
       ctx.arc((clientX - rect.left) * scaleX, (clientY - rect.top) * scaleY, (maskBrush / 2) * scaleX, 0, Math.PI * 2);
       ctx.fill();
-      setMaskHasPaint(true);
+      if (maskMode === "edit") setMaskHasPaint(true);
       redrawMaskView();
     },
-    [maskBrush, redrawMaskView],
+    [maskBrush, maskMode, redrawMaskView],
   );
 
-  const doMaskInpaint = useCallback(
-    async (instruction: string) => {
-      const img = maskImgRef.current;
-      const paint = maskPaintRef.current;
-      if (!img || !paint) throw new Error("遮罩未初始化");
-      const w = paint.width;
-      const h = paint.height;
-      /* 归一化底图 PNG */
-      const base = document.createElement("canvas");
-      base.width = w;
-      base.height = h;
-      base.getContext("2d")?.drawImage(img, 0, 0, w, h);
-      const imageB64 = base.toDataURL("image/png");
-      /* OpenAI 语义 mask：涂抹区透明=重绘 */
-      const openaiMask = document.createElement("canvas");
-      openaiMask.width = w;
-      openaiMask.height = h;
-      const mctx = openaiMask.getContext("2d");
-      if (!mctx) throw new Error("canvas unavailable");
-      mctx.fillStyle = "#000";
-      mctx.fillRect(0, 0, w, h);
-      mctx.globalCompositeOperation = "destination-out";
-      mctx.drawImage(paint, 0, 0);
-      const maskB64 = openaiMask.toDataURL("image/png");
-      const finalInstruction = instruction.trim() || "移除遮罩区域内的内容，按周围内容自然补全";
-
-      let resultImg: HTMLImageElement | null = null;
-      let engine = "images/edits";
-      try {
-        const payload = await apiAsyncImages<{ image_b64?: string }>("/inpaint", {
-          image_b64: imageB64,
-          mask_b64: maskB64,
-          instruction: finalInstruction,
-          size: "1024x1024",
-        });
-        const b64 = payload.data?.image_b64;
-        if (b64) resultImg = await loadImage(b64);
-      } catch {
-        /* relay 不支持 edits → 降级参考图重绘 */
-      }
-      if (!resultImg) {
-        engine = "reference-repaint";
-        const annotated = document.createElement("canvas");
-        annotated.width = w;
-        annotated.height = h;
-        const actx = annotated.getContext("2d");
-        if (!actx) throw new Error("canvas unavailable");
-        actx.drawImage(img, 0, 0, w, h);
-        actx.globalAlpha = 0.45;
-        actx.drawImage(paint, 0, 0);
-        actx.globalAlpha = 1;
-        const payload = await apiAsyncImages("/images", {
-          prompt: `参考图中红色半透明标记的区域需要重绘：${finalInstruction}。未标记区域保持与参考图完全一致。输出图中不得出现任何红色标记。`,
-          raw_prompt: `参考图中红色半透明标记的区域需要重绘：${finalInstruction}。未标记区域保持与参考图完全一致。输出图中不得出现任何红色标记。`,
-          aspect_ratio: w >= h ? (w === h ? "1:1" : "3:2") : "2:3",
-          n: 1,
-          reference_images: [annotated.toDataURL("image/png")],
-        });
-        const url = (payload.data?.images || []).map((item) => String(item.public_url || "")).find(Boolean);
-        if (!url) throw new Error("重绘失败：无输出");
-        resultImg = await loadImage(await srcToDataUrl(url));
-      }
-      const composed = compositeByMask(img, resultImg, paint);
-      await placeImageOnCanvas(composed, "inpaint");
-      pushHistory({ kind: `inpaint(${engine})`, prompt: finalInstruction, outputs: [] });
-      return composed;
-    },
-    [apiAsyncImages, placeImageOnCanvas, pushHistory],
-  );
-
+  const doMaskInpaint = useCallback(async (instruction: string) => {
+    const src = maskDialog.src, paint = maskPaintRef.current, protect = maskProtectRef.current;
+    if (!src || !paint || !protect) throw new Error('遮罩未初始化');
+    const blob = (canvas: HTMLCanvasElement) => new Promise<Blob>((resolve, reject) => canvas.toBlob(value => value ? resolve(value) : reject(new Error('遮罩保存失败')), 'image/png'));
+    const editMask = await blob(paint), protectMask = await blob(protect);
+    const target = image2.getLayer(src, maskDialog.layerId), backgroundOnly = target?.type === 'text' && target.metadata?.fontConfirmed !== true && ['repair', 'fill', 'inpaint'].includes(maskOperation);
+    const job = await image2.waitJob(await image2.submitOperation(maskOperation, { ...(backgroundOnly ? {purpose: 'text_background'} : {}), ...(maskOperation === 'inpaint' ? { prompt: instruction || '自然补全指定区域' } : {}), ...(['recolor', 'fill'].includes(maskOperation) ? { color: maskColor } : {}) }, src, { layerId: maskDialog.layerId, editMask, protectMask, mode: maskOperation === 'inpaint' ? 'candidate' : 'apply' }));
+    return resultUrls(job)[0] || src;
+  }, [image2, maskColor, maskDialog.layerId, maskDialog.src, maskOperation, resultUrls]);
   /* ---------- 可视化拆层：矢量化按颜色分组 → 每层独立可拖拽 shape ---------- */
-  const splitSelectedToLayers = useCallback(
-    async (src: string) => {
-      const dataUrl = await srcToDataUrl(src);
-      const mod = (await import("imagetracerjs")) as unknown as {
-        default: { imageToSVG: (url: string, cb: (svg: string) => void, preset?: string) => void };
-      };
-      const svg = await new Promise<string>((resolve) => mod.default.imageToSVG(dataUrl, resolve, "posterized2"));
-      const doc = new DOMParser().parseFromString(svg, "image/svg+xml");
-      const root = doc.documentElement;
-      const width = root.getAttribute("width") || "1024";
-      const height = root.getAttribute("height") || "1024";
-      const viewBox = root.getAttribute("viewBox") || `0 0 ${width} ${height}`;
-      const groups = new Map<string, string[]>();
-      for (const path of Array.from(doc.querySelectorAll("path"))) {
-        const fill = `${path.getAttribute("fill") || "none"}/${path.getAttribute("opacity") || "1"}`;
-        const markup = path.outerHTML;
-        groups.set(fill, [...(groups.get(fill) || []), markup]);
-      }
-      /* 按内容量排序，最多 8 层（其余并入最后一层），跳过近全透明组 */
-      const sorted = [...groups.entries()]
-        .filter(([key]) => !key.endsWith("/0"))
-        .sort((a, b) => b[1].join("").length - a[1].join("").length);
-      const kept = sorted.slice(0, 8);
-      const rest = sorted.slice(8).flatMap(([, paths]) => paths);
-      if (rest.length && kept.length) kept[kept.length - 1][1].push(...rest);
-      let placed = 0;
-      for (const [, paths] of kept) {
-        const layerSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${viewBox}">${paths.join("")}</svg>`;
-        const layerUrl = `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(layerSvg)))}`;
-        await placeImageOnCanvas(layerUrl, "layer");
-        placed += 1;
-      }
-      pushHistory({ kind: "split-layers", prompt: `拆分为 ${placed} 个图层`, outputs: [] });
-      return placed;
-    },
-    [placeImageOnCanvas, pushHistory],
-  );
-
-  /* --------------------------- vector export ------------------------ */
-
-  const getExportSvg = useCallback(async () => {
-    if (!editor) return null;
-    const selected = editor.getSelectedShapeIds();
-    const ids = selected.length ? selected : [...editor.getCurrentPageShapeIds()];
-    if (!ids.length) {
-      setError("画布上还没有内容");
-      return null;
-    }
-    return await editor.getSvgString(ids, { background: false, padding: 24, scale: 1 });
-  }, [editor]);
-
-  const exportSvgFile = useCallback(async () => {
-    const result = await getExportSvg();
-    if (!result) return false;
-    saveBlob(new Blob([result.svg], { type: "image/svg+xml" }), "studio-canvas.svg");
-    return true;
-  }, [getExportSvg]);
-
-  const exportAiFile = useCallback(async () => {
-    const result = await getExportSvg();
-    if (!result) return false;
-    setBusy(true);
-    setBusyLabel("导出 PDF");
-    try {
-      const { jsPDF } = await import("jspdf");
-      await import("svg2pdf.js");
-      const element = new DOMParser().parseFromString(result.svg, "image/svg+xml").documentElement;
-      const pdf = new jsPDF({
-        unit: "pt",
-        format: [result.width, result.height],
-        orientation: result.width >= result.height ? "landscape" : "portrait",
-      });
-      await (
-        pdf as unknown as { svg: (el: Element, opts: Record<string, number>) => Promise<unknown> }
-      ).svg(element, { x: 0, y: 0, width: result.width, height: result.height });
-      saveBlob(pdf.output("blob"), "studio-canvas.pdf");
-      return true;
-    } finally {
-      setBusy(false);
-      setBusyLabel("");
-    }
-  }, [getExportSvg]);
-
-  const vectorizeSrc = useCallback(
-    async (src: string) => {
-      setBusy(true);
-      setBusyLabel("矢量化");
-      try {
-        const dataUrl = await srcToDataUrl(src);
-        const mod = (await import("imagetracerjs")) as unknown as {
-          default: { imageToSVG: (url: string, cb: (svg: string) => void, preset?: string) => void };
-        };
-        const svg = await new Promise<string>((resolve) => mod.default.imageToSVG(dataUrl, resolve, "posterized2"));
-        saveBlob(new Blob([svg], { type: "image/svg+xml" }), "studio-vectorized.svg");
-        /* 同时以矢量 asset 落画布，可无损缩放 */
-        const svgDataUrl = `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`;
-        await placeImageOnCanvas(svgDataUrl, "vectorized");
-        pushHistory({ kind: "vectorize", prompt: "位图矢量化（已下载 + 落画布）", outputs: [] });
-        return svgDataUrl;
-      } finally {
-        setBusy(false);
-        setBusyLabel("");
-      }
-    },
-    [placeImageOnCanvas, pushHistory],
-  );
-
-  const vectorizeSelected = useCallback(async () => {
-    const src = selectionRef.current.images[0];
-    if (!src) {
-      setError("先选中一张图片再矢量化");
-      return false;
-    }
-    await vectorizeSrc(src);
-    return true;
-  }, [vectorizeSrc]);
+  const splitSelectedToLayers = useCallback(async (src: string) => {
+    const job = await image2.waitJob(await image2.submitOperation('restore_layers', {}, src, { mode: 'candidate' }));
+    return Number(job.output?.layerCount || 0);
+  }, [image2]);
+  const exportSvgFile = useCallback(async () => { try { const value = await image2.export('svg'); saveBlob(value.blob, value.name); return true; } catch (error) { setError((error as Error).message); return false; } }, [image2]);
+  const exportAiFile = useCallback(async () => { try { const value = await image2.export('pdf'); saveBlob(value.blob, value.name); return true; } catch (error) { setError((error as Error).message); return false; } }, [image2]);
+  const vectorizeSrc = useCallback(async (src: string) => {
+    const job = await image2.waitJob(await image2.submitOperation('trace', { preset: 'monochrome', pathomit: 0, blurradius: 0, ltres: .1, qtres: .1 }, src));
+    return resultUrls(job)[0] || src;
+  }, [image2, resultUrls]);
+  const vectorizeSelected = useCallback(async () => { setImagePanel('vector'); return true; }, [setImagePanel]);
 
   /* --------------------------- agent loop --------------------------- */
 
-  /* ---- image registry: stable #ids for every picture the agent can point at ---- */
-
-  const registerImage = useCallback(
-    async (src: string, source: TurnImageSource, label: string, turn: number, size?: { width: number; height: number }) => {
-      const existing = imageRegistryRef.current.find((item) => item.src === src);
-      if (existing) return existing;
-      let width = size?.width || 0;
-      let height = size?.height || 0;
-      if (!width || !height) {
-        try {
-          const img = await loadImage(src);
-          width = img.naturalWidth || 0;
-          height = img.naturalHeight || 0;
-        } catch {
-          /* dimensions optional */
-        }
-      }
-      const entry: TurnImage = { id: imageRegistryRef.current.length + 1, src, label, source, width, height, turn };
-      imageRegistryRef.current = [...imageRegistryRef.current, entry];
-      return entry;
-    },
-    [],
-  );
-
-  const imageById = useCallback((value: unknown): TurnImage | null => {
-    const id = Number(value);
-    if (!Number.isFinite(id)) return null;
-    return imageRegistryRef.current.find((item) => item.id === id) || null;
-  }, []);
-
-  /** Outputs of a tool become "上一版成品" and the default subject of the next turn (Lovart chip behaviour). */
-  const registerOutputs = useCallback(
-    async (urls: string[], name: string) => {
-      const turn = turnCounterRef.current;
-      const entries: TurnImage[] = [];
-      for (const [index, url] of urls.entries()) {
-        const label = urls.length > 1 ? `成品·${name}·${index + 1}` : `成品·${name}`;
-        entries.push(await registerImage(url, "output", label, turn));
-      }
-      if (entries.length) lastOutputsRef.current = entries.map((entry) => entry.id);
-      setContextChips(urls.slice(0, 2));
-      return entries;
-    },
-    [registerImage],
-  );
-
-  /** Resolve this turn's pictures in Lovart order: composer attachments → selected canvas images → last output. */
-  const collectTurnImages = useCallback(async () => {
-    const turn = turnCounterRef.current;
-    const seen = new Set<string>();
-    const result: Array<{ entry: TurnImage; ordinal: number }> = [];
-    let ordinal = 0;
-    for (const attachment of attachmentsRef.current) {
-      if (seen.has(attachment.src)) continue;
-      seen.add(attachment.src);
-      const entry = await registerImage(attachment.src, "attached", `第${turn}轮·图${cnOrdinal(ordinal)}`, turn, attachment);
-      result.push({ entry, ordinal });
-      ordinal += 1;
-    }
-    for (const src of selectionRef.current.images) {
-      if (seen.has(src)) continue;
-      seen.add(src);
-      const known = imageRegistryRef.current.find((item) => item.src === src);
-      const entry = known || (await registerImage(src, "selected", `第${turn}轮·图${cnOrdinal(ordinal)}（画布选中）`, turn));
-      result.push({ entry, ordinal });
-      ordinal += 1;
-    }
-    if (!result.length) {
-      for (const id of lastOutputsRef.current) {
-        const entry = imageRegistryRef.current.find((item) => item.id === id);
-        if (entry && !seen.has(entry.src)) {
-          seen.add(entry.src);
-          result.push({ entry, ordinal: -1 });
-        }
-      }
-    }
-    return result;
-  }, [registerImage]);
-
-  const buildAgentCanvasState = useCallback(
-    (plan?: DesignPlan) => {
-      const sel = selectionRef.current;
-      const registry = imageRegistryRef.current.slice(-30);
-      return {
-        selectedImageCount: sel.images.length,
-        canvasShapeCount: shapeCount,
-        currentTurn: turnCounterRef.current,
-        images: registry.map((item) => ({
-          id: item.id,
-          label: item.label,
-          source: item.source,
-          turn: item.turn,
-          width: item.width,
-          height: item.height,
-          aspect: aspectFromSize(item.width, item.height),
-        })),
-        lastOutputIds: lastOutputsRef.current,
-        defaults: { style, aspect, count, brand: brandText, audience, negativePrompt },
-        brand_kit:
-          brandKit.name || brandKit.palette.length || brandKit.styleWords || brandKit.fontHint || brandKit.logoRef
-            ? {
-                name: brandKit.name,
-                palette: brandKit.palette,
-                styleWords: brandKit.styleWords,
-                fontHint: brandKit.fontHint,
-                hasLogo: Boolean(brandKit.logoRef),
-              }
-            : undefined,
-        design_memory: designMemoryText
-          ? {
-              mode: "default_skill",
-              overridePolicy: "Only an explicit instruction in the current request may override the corresponding rule; silence is not an override.",
-              profile: designMemory.profile,
-              brands: designMemory.brands,
-              visualStyle: designMemory.visualStyle,
-              logoRules: designMemory.logoRules,
-              collaborationRules: designMemory.collaborationRules,
-              workflow: designMemory.workflow,
-              avoid: designMemory.avoid,
-            }
-          : undefined,
-        design_plan: plan
-          ? {
-              title: plan.title,
-              action: plan.action,
-              summary: plan.summary,
-              decisions: plan.decisions,
-              finalPrompt: plan.finalPrompt,
-              negativePrompt: plan.negativePrompt,
-            }
-          : undefined,
-      };
-    },
-    [aspect, audience, brandKit, brandText, count, designMemory, designMemoryText, negativePrompt, shapeCount, style],
-  );
-
-  const requestDesignPlan = useCallback(
-    async (sourceText: string) => {
-      const rawResponse = await fetch("/api/agent-chat", {
-        method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-        body: JSON.stringify({
-          mode: "plan",
-          messages: oaiHistoryRef.current,
-          model: agentModelForText(sourceText),
-          canvas_state: buildAgentCanvasState(),
-        }),
-      });
-      const response = (await rawResponse.json().catch(() => ({}))) as {
-        detail?: string;
-        data?: { plan?: unknown };
-      };
-      if (!rawResponse.ok) throw new Error(response?.detail || `前置设计规划失败 ${rawResponse.status}`);
-      if (!response.data?.plan) throw new Error("前置设计规划未返回方案");
-      return normalizeDesignPlan(response.data.plan, sourceText);
-    },
-    [buildAgentCanvasState, token],
-  );
-
-  const lastUserTextOf = useCallback(() => {
-    const last = [...oaiHistoryRef.current].reverse().find((m) => m.role === "user") as { content?: unknown } | undefined;
-    const content = last?.content;
-    if (typeof content === "string") return content;
-    if (Array.isArray(content)) {
-      return (content as OaiContentPart[]).map((part) => (part.type === "text" ? part.text : "")).join("\n");
-    }
-    return "";
-  }, []);
-
-  const imageModelFromMentions = useCallback(
-    (text: string, hint?: unknown) => {
-      const explicit = String(hint || "").trim();
-      if (/@Image-2\b/i.test(text)) return "gpt-image-2";
-      if (/@Image-1\.5/i.test(text)) return "gpt-image-1.5";
-      if (/@Seedream/i.test(text)) return "seedream-4-5";
-      if (["gpt-image-2", "gpt-image-1.5", "seedream-4-5"].includes(explicit)) return explicit;
-      return currentPlanRef.current?.imageModelHint;
-    },
-    [],
-  );
-
-  const qualityFromMentions = (text: string, requested?: unknown, fallback = "medium") => {
-    if (/@高画质/.test(text)) return "high";
-    if (/@中画质/.test(text)) return "medium";
-    if (/@低画质/.test(text)) return "low";
-    const value = String(requested || "").toLowerCase();
-    return ["low", "medium", "high"].includes(value) ? value : fallback;
-  };
-
-  const toolFailure = (error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error);
-    const kind = /content_policy|content policy|policy violation|moderation|safety/i.test(message) ? "content_policy" : "upstream";
-    return `失败（error_kind=${kind}）：${message.slice(0, 600)}`;
-  };
-
-  const execAgentTool = useCallback(
-    async (name: string, args: Record<string, unknown>) => {
-      const sel = selectionRef.current;
-      const lastUserText = lastUserTextOf();
-      const resolveSrc = (value: unknown, fallbackToSelection = true) => {
-        const entry = imageById(value);
-        if (entry) return entry;
-        const lastOutput = lastOutputsRef.current
-          .map((id) => imageRegistryRef.current.find((item) => item.id === id))
-          .find(Boolean);
-        if (fallbackToSelection && sel.images[0]) {
-          const known = imageRegistryRef.current.find((item) => item.src === sel.images[0]);
-          if (known) return known;
-        }
-        return lastOutput || null;
-      };
-      switch (name) {
-        case "edit_images": {
-          const base = resolveSrc(args.base_image);
-          if (!base) return "失败：找不到主图。请让用户先附上要修改的图片（对话框 + 号或直接粘贴），或在画布上选中它。";
-          const refIds = Array.isArray(args.reference_images) ? args.reference_images : [];
-          const refs = refIds
-            .map((id) => imageById(id))
-            .filter((entry): entry is TurnImage => Boolean(entry && entry.id !== base.id));
-          const requestedAspect = String(args.aspect || "auto");
-          const targetAspect = aspectOptions.includes(requestedAspect) ? requestedAspect : aspectFromSize(base.width, base.height);
-          const requestedCount = Number(args.count);
-          const outputName = String(args.output_name || "").trim() || "编辑图片";
-          const urls = await doGenerateImages({
-            prompt: String(args.prompt || ""),
-            aspect: targetAspect,
-            count: Number.isFinite(requestedCount) && requestedCount > 0 ? Math.min(4, requestedCount) : 1,
-            quality: qualityFromMentions(lastUserText, args.quality, "medium"),
-            refs: [base.src, ...refs.map((entry) => entry.src)],
-            transparent: Boolean(args.transparent_background),
-            imageModel: imageModelFromMentions(lastUserText, args.model_hint),
-            kind: "agent",
-            outputName,
-          });
-          const entries = await registerOutputs(urls, outputName);
-          pushMessage({ role: "assistant", kind: outputName, images: urls });
-          return `已完成 ${outputName}：生成 ${urls.length} 张，成品编号 ${entries.map((entry) => `#${entry.id}`).join("、")}，画幅 ${targetAspect}，主图 #${base.id}${
-            refs.length ? `，参考图 ${refs.map((entry) => `#${entry.id}`).join("、")}` : ""
-          }。链接：\n${urls.join("\n")}`;
-        }
-        case "generate_images": {
-          const refIds = Array.isArray(args.reference_images) ? args.reference_images : [];
-          const refs = refIds.map((id) => imageById(id)).filter((entry): entry is TurnImage => Boolean(entry));
-          const agentRefs = [...refs.map((entry) => entry.src), ...(brandKit.logoRef ? [brandKit.logoRef] : [])];
-          /* Logo mark floor: prompt rules ask high/count=3; soft-enforce if model omits them. */
-          const logoMarkBrief = /(?:logo|标志|徽标|商标|字母标|品牌标|\bicon\b|\bmark\b|图标)/i.test(
-            `${lastUserText}\n${String(args.prompt || "")}`,
-          );
-          const requestedCount = args.count != null ? Number(args.count) : NaN;
-          const genCount = logoMarkBrief
-            ? Math.max(3, Math.min(4, Number.isFinite(requestedCount) && requestedCount > 0 ? requestedCount : 3))
-            : Number.isFinite(requestedCount) && requestedCount > 0
-              ? Math.min(4, requestedCount)
-              : 1;
-          const outputName = String(args.output_name || "").trim() || "生成图片";
-          const urls = await doGenerateImages({
-            imageModel: imageModelFromMentions(lastUserText, args.model_hint),
-            prompt: String(args.prompt || ""),
-            aspect: args.aspect && aspectOptions.includes(String(args.aspect)) ? String(args.aspect) : "1:1",
-            count: genCount,
-            quality: qualityFromMentions(lastUserText, args.quality, logoMarkBrief ? "high" : "medium"),
-            negativePrompt: args.negative_prompt ? String(args.negative_prompt) : undefined,
-            transparent: Boolean(args.transparent_background),
-            refs: agentRefs.length ? agentRefs : undefined,
-            kind: "agent",
-            outputName,
-          });
-          const entries = await registerOutputs(urls, outputName);
-          pushMessage({ role: "assistant", kind: outputName, images: urls });
-          return `已生成 ${urls.length} 张并放到画布，成品编号 ${entries.map((entry) => `#${entry.id}`).join("、")}。链接：\n${urls.join("\n")}`;
-        }
-        case "remove_background": {
-          const target = resolveSrc(args.image);
-          if (!target) return "失败：找不到要去底的图片，请让用户附图或选中。";
-          const { urls, degraded } = await doGpuMatting(target.src);
-          const entries = await registerOutputs(urls, "去底");
-          pushMessage({ role: "assistant", kind: degraded ? "去底（重绘降级）" : "去底", images: urls });
-          return `已去底：成品编号 ${entries.map((entry) => `#${entry.id}`).join("、")}${degraded ? "（GPU 抠图不可用，已用重绘去底）" : "（透明 PNG）"}。链接：\n${urls.join("\n")}`;
-        }
-        case "upscale_image": {
-          const target = resolveSrc(args.image);
-          if (!target) return "失败：找不到要放大的图片，请让用户附图或选中。";
-          const scale = Number(args.scale) === 4 ? 4 : 2;
-          const urls = await doGenerateImages({
-            prompt: `高清放大 ${scale} 倍：以参考图为唯一基础，提升分辨率与细节清晰度（边缘更锐利、纹理更清楚、无噪点无模糊），内容、构图、姿势、颜色、线条、文字全部与原图完全一致，不新增、不删除、不重绘任何元素。`,
-            aspect: aspectFromSize(target.width, target.height),
-            count: 1,
-            quality: "high",
-            refs: [target.src],
-            kind: "agent",
-            outputName: `高清放大${scale}x`,
-          });
-          const entries = await registerOutputs(urls, `高清放大${scale}x`);
-          pushMessage({ role: "assistant", kind: `高清放大 ${scale}x`, images: urls });
-          return `已高清放大 ${scale} 倍：成品编号 ${entries.map((entry) => `#${entry.id}`).join("、")}。链接：\n${urls.join("\n")}`;
-        }
-        case "vectorize_image":
-        case "vectorize_selected": {
-          const target = resolveSrc(args.image);
-          if (!target) return "失败：找不到要矢量化的图片，请让用户附图或选中。";
-          const svgSrc = await vectorizeSrc(target.src);
-          const entry = await registerImage(svgSrc, "output", "成品·矢量SVG", turnCounterRef.current, { width: target.width, height: target.height });
-          pushMessage({ role: "assistant", kind: "矢量化", text: `已转成矢量 SVG（成品 #${entry.id}），文件已开始下载并放到画布。` });
-          return `矢量化完成：成品编号 #${entry.id}，SVG 已下载并放到画布。矢量化只提取描边轮廓，颗粒纹理会被平滑为纯色路径。`;
-        }
-        case "restyle_lettering": {
-          const target = resolveSrc(args.image);
-          if (!target) return "失败：找不到包含字体设计的图片，请让用户附图或选中。";
-          const urls = await doFontRestyle({
-            src: target.src,
-            newText: String(args.new_text || ""),
-            note: args.style_note ? String(args.style_note) : "",
-          });
-          const entries = await registerOutputs(urls, "同风格改字");
-          pushMessage({ role: "assistant", kind: "同风格改字", images: urls });
-          return `改字完成，成品编号 ${entries.map((entry) => `#${entry.id}`).join("、")}。链接：\n${urls.join("\n")}`;
-        }
-        case "transfer_material": {
-          const targetEntry = imageById(args.target_image);
-          const materialEntry = imageById(args.material_image);
-          const target = targetEntry?.src || sel.images[0];
-          const material = materialEntry?.src || sel.images[1];
-          if (!target || !material) return "失败：需要两张图（目标图案 + 材质样本），请让用户附上两张或同时选中两张。";
-          const urls = await doMaterialTransfer({ target, material, instruction: args.instruction ? String(args.instruction) : "" });
-          const entries = await registerOutputs(urls, "材质复刻");
-          pushMessage({ role: "assistant", kind: "材质复刻", images: urls });
-          return `材质复刻完成，成品编号 ${entries.map((entry) => `#${entry.id}`).join("、")}。链接：\n${urls.join("\n")}`;
-        }
-        case "edit_selected_image": {
-          /* legacy alias kept for older sessions */
-          const target = resolveSrc(undefined);
-          if (!target) return "失败：画布上没有选中的图片，请提醒用户先附图或选中要修改的图片。";
-          const urls = await doGenerateImages({
-            prompt: `严格以参考图为基础重绘：${String(args.instruction || "")}。除指令要求的修改外，主体、构图、风格、配色、文字内容全部保持与参考图一致。`,
-            aspect: aspectFromSize(target.width, target.height),
-            count: 1,
-            quality: "medium",
-            refs: [target.src],
-            kind: "agent",
-            outputName: "修改图片",
-          });
-          const entries = await registerOutputs(urls, "修改图片");
-          pushMessage({ role: "assistant", kind: "图片修改", images: urls });
-          return `修改完成，成品编号 ${entries.map((entry) => `#${entry.id}`).join("、")}。链接：\n${urls.join("\n")}`;
-        }
-        case "image_to_video": {
-          return "视频功能已迁移到独立页面 /video（画布右上角「视频」入口，或直接打开 /video）。请明确告诉用户：去 /video 上传首帧图并描述运动即可提交图生视频任务；本对话无法直接提交视频 job。";
-        }
-        case "export_ai": {
-          const ok = await exportAiFile();
-          return ok ? "PDF 文件已开始下载，Illustrator 可直接打开。" : "失败：画布上还没有内容。";
-        }
-        default:
-          return `未知工具 ${name}`;
-      }
-    },
-    [brandKit.logoRef, doFontRestyle, doGenerateImages, doGpuMatting, doMaterialTransfer, exportAiFile, imageById, imageModelFromMentions, lastUserTextOf, pushMessage, registerImage, registerOutputs, vectorizeSrc],
-  );
-
   const sendToAgent = useCallback(async () => {
-    const text = prompt.trim();
-    const hasAttachments = attachmentsRef.current.length > 0;
-    if ((!text && !hasAttachments) || agentBusy) return;
-    const requestedModel = agentModelForText(text);
-    setPrompt("");
-    setShowMentionMenu(false);
-    setError("");
-    turnCounterRef.current += 1;
-    setAgentBusy(true);
+    const text = prompt.trim(), refs = [...attachmentsRef.current.map(item => item.src), ...selectionRef.current.images];
+    if ((!text && !refs.length) || agentBusy) return;
+    setAgentBusy(true); setError('');
     try {
-      const turnImages = await collectTurnImages();
-      const attachedOrSelected = turnImages.filter((item) => item.ordinal >= 0);
-      const defaultSubjects = turnImages.filter((item) => item.ordinal < 0);
-      const userText = text || "（仅附图，无文字）";
-      const thumbs = await Promise.all(attachedOrSelected.map((item) => downscaleForVision(item.entry.src, 160)));
-      pushMessage({ role: "user", text: userText, images: thumbs });
-      setAttachments([]);
-
-      /* Lovart 同款图序说明：正文 + 括注（图一=#7 …），再附图片本身给视觉模型 */
-      const mappingNote = attachedOrSelected.length
-        ? `（本轮附图 ${attachedOrSelected.length} 张：${attachedOrSelected
-            .map((item) => `图${cnOrdinal(item.ordinal)}=#${item.entry.id}${item.entry.source === "selected" ? "（画布选中）" : ""}`)
-            .join("，")}）`
-        : defaultSubjects.length
-          ? `（本轮未附新图；默认操作对象为上一版成品 ${defaultSubjects.map((item) => `#${item.entry.id}`).join("、")}）`
-          : "";
-      const visionParts: OaiContentPart[] = [];
-      for (const item of turnImages) {
-        visionParts.push({ type: "image_url", image_url: { url: await downscaleForVision(item.entry.src, 768) } });
-      }
-      const userContent: string | OaiContentPart[] = visionParts.length
-        ? [{ type: "text", text: `${userText}\n${mappingNote}` }, ...visionParts]
-        : userText;
-      oaiHistoryRef.current.push({ role: "user", content: userContent });
-
-      /* 带图 = 编辑/续改流程：直接执行（Lovart 不为改图出方案）。无图的从零生成才走前置设计规划。 */
-      let plan: DesignPlan | null = null;
-      if (!turnImages.length) {
-        const planActionId = pushMessage({ role: "action", label: "design_plan", done: false });
-        try {
-          plan = await requestDesignPlan(text);
-        } catch (planError) {
-          setMessages((prev) => prev.filter((message) => message.id !== planActionId));
-          throw planError;
-        }
-        currentPlanRef.current = plan;
-        setMessages((prev) => prev.map((message) => (message.id === planActionId && message.role === "action" ? { ...message, done: true } : message)));
-        const visiblePlan = designPlanToVisibleText(plan);
-        pushMessage({ role: "assistant", kind: "前置设计方案", text: visiblePlan });
-        oaiHistoryRef.current.push({ role: "assistant", content: visiblePlan });
-      } else {
-        currentPlanRef.current = null;
-      }
-
-      for (let round = 0; (!plan || plan.action !== "answer") && round < AGENT_MAX_ROUNDS; round += 1) {
-        const rawResponse = await fetch("/api/agent-chat", {
-          method: "POST",
-          headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-          body: JSON.stringify({
-            mode: "execute",
-            messages: oaiHistoryRef.current,
-            model: requestedModel,
-            canvas_state: buildAgentCanvasState(plan || undefined),
-          }),
-        });
-        const response = (await rawResponse.json().catch(() => ({}))) as {
-          detail?: string;
-          data?: { message: { content?: string | null; tool_calls?: OaiToolCall[] }; model?: string };
-        };
-        if (!rawResponse.ok) throw new Error(response?.detail || `Agent 请求失败 ${rawResponse.status}`);
-        const assistant = response.data?.message;
-        if (!assistant) throw new Error("Agent 未返回内容");
-        const toolCalls = assistant.tool_calls || [];
-        oaiHistoryRef.current.push({ role: "assistant", content: assistant.content ?? null, tool_calls: toolCalls.length ? toolCalls : undefined });
-        const content = String(assistant.content || "").trim();
-        if (content) pushMessage({ role: "assistant", kind: "Agent", text: content });
-        if (!toolCalls.length) break;
-        for (const call of toolCalls) {
-          const actionId = uid();
-          pushMessage({ id: actionId, role: "action", label: call.function.name, done: false });
-          let result = "";
-          try {
-            const args = JSON.parse(call.function.arguments || "{}") as Record<string, unknown>;
-            result = await execAgentTool(call.function.name, args);
-          } catch (err) {
-            result = toolFailure(err);
-          }
-          setMessages((prev) => prev.map((m) => (m.id === actionId && m.role === "action" ? { ...m, done: true } : m)));
-          oaiHistoryRef.current.push({ role: "tool", tool_call_id: call.id, content: result });
-        }
-      }
-      const original = "Youngtuo Visual Studio | AI 视觉生成工作台";
-      document.title = "✅ Task Complete!";
-      setTimeout(() => {
-        document.title = original;
-      }, 5000);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      setError(message);
-      pushMessage({ role: "assistant", kind: "error", error: message });
-    } finally {
-      setAgentBusy(false);
-    }
-  }, [agentBusy, buildAgentCanvasState, collectTurnImages, execAgentTool, prompt, pushMessage, requestDesignPlan, token]);
+      const requested = agentModelForText(text);
+      const models = (image2.capabilities.agent as {models?: string[]} | undefined)?.models || [];
+      const model = requested ? models.find(value => value === requested) || models.find(value => value.split('/').at(-1) === requested) : undefined;
+      if (requested && !model) throw new Error(`所选对话模型 ${requested} 未配置，请选择可用模型或移除该模型标记。`);
+      await image2.startRun([text || '请分析这些图片', designMemoryText, brandText].filter(Boolean).join('\n'), refs, model);
+      setPrompt(''); setAttachments([]); setShowMentionMenu(false);
+    } catch (error) { setError((error as Error).message); if (error instanceof Image2ApiError && error.code === 'legacy_import_required') setImagePanel('import'); } finally { setAgentBusy(false); }
+  }, [agentBusy, brandText, designMemoryText, image2, prompt, setImagePanel]);
 
   /* --------------------------- ui handlers -------------------------- */
 
@@ -2821,6 +1846,7 @@ export default function Home() {
         await fn();
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        if (err instanceof Image2ApiError && err.code === 'legacy_import_required') setImagePanel('import');
         setError(message);
         pushMessage({ role: "assistant", kind: "error", error: message });
       } finally {
@@ -2828,126 +1854,40 @@ export default function Home() {
         setBusyLabel("");
       }
     },
-    [busy, busyLabel, pushMessage],
+    [busy, busyLabel, pushMessage, setImagePanel],
   );
 
   const generateVariation = useCallback(() => {
-    const refs = selection.images.length ? selection.images : references;
-    const text = prompt.trim() || "生成同主题变体，保持风格一致";
-    const actionKind = selection.images.length ? "生成变体" : "生成图片";
-    void runAction(actionKind, async () => {
-      pushMessage({ role: "user", text });
-      oaiHistoryRef.current.push({ role: "user", content: text });
-      const planActionId = pushMessage({ role: "action", label: "design_plan", done: false });
-      let plan: DesignPlan;
-      try {
-        plan = await requestDesignPlan(text);
-      } catch (planError) {
-        setMessages((prev) => prev.filter((message) => message.id !== planActionId));
-        throw planError;
-      }
-      setMessages((prev) => prev.map((message) => (message.id === planActionId && message.role === "action" ? { ...message, done: true } : message)));
-      const visiblePlan = designPlanToVisibleText(plan);
-      pushMessage({ role: "assistant", kind: "前置设计方案", text: visiblePlan });
-      oaiHistoryRef.current.push({ role: "assistant", content: visiblePlan });
-      const urls = await doGenerateImages({
-        prompt: plan.finalPrompt || text,
-        negativePrompt: plan.negativePrompt,
-        refs,
-        kind: "variation",
-        imageModel: plan.imageModelHint,
-      });
-      pushMessage({ role: "assistant", kind: actionKind, images: urls });
-      oaiHistoryRef.current.push({ role: "assistant", content: `已按前置设计方案完成${actionKind}，生成 ${urls.length} 张图片。` });
+    const refs = selection.images.length ? selection.images : references, text = prompt.trim() || '生成同主题变体，保持风格一致';
+    void runAction('生成变体', async () => {
+      const urls = await doGenerateImages({ prompt: text, refs, count: 1, kind: 'variation' });
+      pushMessage({ role: 'assistant', kind: '变体候选', images: urls, text: '请在候选卡片接受后继续修改。' });
     });
-  }, [doGenerateImages, prompt, pushMessage, references, requestDesignPlan, runAction, selection.images]);
+  }, [doGenerateImages, prompt, pushMessage, references, runAction, selection.images]);
 
   /* 打开改字：预览转 dataURL（修裂图）+ 视觉识别行字（Lovart Edit Text 式逐行编辑） */
-  const initFontDialog = useCallback(
-    (src: string) => {
-      setFontText("");
-      setFontNote("");
-      setFontLines(null);
-      setFontOcr("loading");
-      setFontDialog({ open: true, src });
-      void (async () => {
-        let preview = src;
-        try {
-          preview = await srcToDataUrl(src);
-          setFontDialog((prev) => (prev.open && prev.src === src ? { ...prev, preview } : prev));
-        } catch {
-          /* keep original src */
-        }
-        try {
-          const payload = await api<{
-            lines?: string[];
-            line_boxes?: Array<{ text?: string; box?: number[] }>;
-          }>("/ocr-lines", {
-            method: "POST",
-            body: JSON.stringify({ image_b64: preview.startsWith("data:") ? preview : await srcToDataUrl(src) }),
-          });
-          const data = (payload.data || {}) as {
-            lines?: string[];
-            line_boxes?: Array<{ text?: string; box?: number[] }>;
-          };
-          const boxes = Array.isArray(data.line_boxes) ? data.line_boxes : [];
-          const fromBoxes: FontLineEdit[] = [];
-          for (const item of boxes) {
-            const text = String(item.text || "").trim();
-            if (!text) continue;
-            const b = item.box;
-            const entry: FontLineEdit = { from: text, to: text };
-            if (Array.isArray(b) && b.length >= 4) {
-              entry.box = [Number(b[0]), Number(b[1]), Number(b[2]), Number(b[3])];
-            }
-            fromBoxes.push(entry);
-          }
-          const lines = (data.lines || []).filter(Boolean);
-          const mapped: FontLineEdit[] =
-            fromBoxes.length > 0
-              ? fromBoxes
-              : lines.map((line) => ({ from: line, to: line }));
-          if (mapped.length) {
-            setFontLines(mapped);
-            setFontOcr("done");
-          } else {
-            setFontOcr("failed");
-          }
-        } catch {
-          setFontOcr("failed");
-        }
-      })();
-    },
-    [api],
-  );
-
+  const initFontDialog = useCallback((src: string) => {
+    setFontText(''); setFontOriginal('');
+    setFontAssetChoice(''); setFontDialog({ open: true, src, layerId: image2.getLayer(src)?.id });
+    const layer = image2.getLayer(src);
+    if (layer?.type === 'text') {
+      setFontOriginal(layer.text || ''); setFontText(String(layer.metadata?.desiredText ?? layer.text ?? '')); setFontExactSize(layer.fontSize || 36); setFontExactColor(layer.fill || '#20232b');
+      setFontAssetChoice(layer.fontAssetId || '');
+    }
+    void loadImage(src).then(img => setFontRect({ x: 0, y: 0, width: img.naturalWidth, height: img.naturalHeight })).catch(error => setError(error.message));
+  }, [image2]);
   const runFontRestyle = useCallback(() => {
-    const src = fontDialog.src;
-    const allLines = fontLines || [];
-    const edits = allLines.filter((line) => line.to.trim() && line.to.trim() !== line.from.trim());
-    const text = fontText.trim();
-    if (!src || (!text && !edits.length)) return;
-    setFontDialog({ open: false });
-    // Partial line edits (not whole-image replace) + every edit has bbox → local mask path
-    const isPartialLineEdit =
-      edits.length > 0 &&
-      !text &&
-      allLines.length > edits.length &&
-      edits.every((line) => line.box && line.box.length === 4);
-    const summary = edits.length ? edits.map((line) => `“${line.from}”→“${line.to}”`).join("、") : `“${text}”`;
-    void runAction("同风格改字", async () => {
-      pushMessage({ role: "user", text: `同风格改字 → ${summary}${isPartialLineEdit ? "（局部 mask）" : ""}` });
-      const urls = await doFontRestyle({
-        src,
-        newText: text,
-        note: fontNote,
-        lineEdits: edits,
-        useLocalMask: isPartialLineEdit,
-      });
-      pushMessage({ role: "assistant", kind: "同风格改字", images: urls });
-      setContextChips(urls.slice(0, 2));
+    const src = fontDialog.src, text = fontText.trim(); if (!src || !text) return;
+    void runAction('修改文字', async () => {
+      const layer = image2.getLayer(src, fontDialog.layerId);
+      if (layer?.type === 'text' && layer.metadata?.fontConfirmed === true) await image2.updateLayer(layer.id, { text, fontSize: fontExactSize, fill: fontExactColor });
+      else {
+        const font = image2.assets.find(asset => asset.id === fontAssetChoice) || await image2.defaultFont();
+        await image2.confirmText(src, fontRect, fontOriginal, text, font, fontExactSize, fontExactColor, fontDialog.layerId);
+      }
+      setFontDialog({ open: false }); pushMessage({ role: 'assistant', kind: '修改文字', text: '已保存为真实文字层，后续改字、颜色和字号不调用生图。' });
     });
-  }, [doFontRestyle, fontDialog.src, fontLines, fontNote, fontText, pushMessage, runAction]);
+  }, [fontAssetChoice, fontDialog.layerId, fontDialog.src, fontExactColor, fontExactSize, fontOriginal, fontRect, fontText, image2, pushMessage, runAction]);
 
   const runMaterialTransfer = useCallback(() => {
     const first = materialDialog.a;
@@ -3012,7 +1952,7 @@ export default function Home() {
   const selectedImageCount = selection.images.length;
   const composerHasText = prompt.trim().length > 0;
   const countdownTiles = useMemo(() => countdown.split(""), [countdown]);
-  const hasConversation = messages.length > 0;
+  const hasConversation = messages.length > 0 || image2.messages.length > 0 || image2.jobs.length > 0;
   /* Canvas selection rides along as extra numbered attachments (after explicit ones), minus duplicates. */
   const selectionAttachments = useMemo(() => {
     const attached = new Set(attachments.map((item) => item.src));
@@ -3035,6 +1975,7 @@ export default function Home() {
   };
 
   const restoreHistoryImage = async (url: string) => {
+    if (url.startsWith('/api/v3/image2/')) { setError('2.0 结果已保存；请通过图层面板选择，或在候选卡片接受。'); return; }
     await placeImageOnCanvas(url, "history");
     setShowHistory(false);
   };
@@ -3079,9 +2020,11 @@ export default function Home() {
             <Tldraw
               key={activeProjectId}
               hideUi
+              shapeUtils={designShapeUtils}
+              getShapeVisibility={originalShapeVisibility}
               persistenceKey={persistenceKeyFor(activeProjectId)}
               assetUrls={FONT_ASSET_URLS}
-              onMount={(instance) => setEditor(instance)}
+              onMount={handleEditorMount}
             />
           </div>
 
@@ -3129,7 +2072,7 @@ export default function Home() {
             </div>
           ) : null}
 
-          {toolId === "text" ? (
+          {toolId === "text" || image2.selectedLayer?.type === "text" ? (
             <div className="brushBar textBar">
               {(
                 [
@@ -3195,27 +2138,27 @@ export default function Home() {
                 }}
               />
               <button
-                className={`syncStatusIcon ${syncStatus}`}
+                className={`syncStatusIcon ${currentSyncStatus}`}
                 type="button"
                 title={
-                  syncStatus === "synced"
-                    ? "已同步到云端"
-                    : syncStatus === "saving"
-                      ? "正在保存到云端…"
-                      : syncStatus === "error"
-                        ? "云端同步失败，点此重试"
-                        : "仅本地（变更后约 60s 自动保存）"
+                  currentSyncStatus === "synced"
+                    ? `已保存到图片工程版本 ${image2.document?.revision ?? ''}`
+                    : currentSyncStatus === "saving"
+                      ? "正在保存图片工程，未提交的修改保存在本机草稿"
+                      : currentSyncStatus === "error"
+                        ? image2.hasDraftConflict ? "版本冲突，本地草稿已保留；请打开版本窗口处理" : "图片工程同步失败，点此重试"
+                        : "当前为本地旧工程，使用升级功能前需确认导入"
                 }
                 aria-label="cloud sync status"
                 onClick={() => {
                   void saveCanvasToCloud();
                 }}
               >
-                {syncStatus === "synced" ? (
+                {currentSyncStatus === "synced" ? (
                   <CloudCheck size={15} />
-                ) : syncStatus === "saving" ? (
+                ) : currentSyncStatus === "saving" ? (
                   <Loader2 size={15} className="spin" />
-                ) : syncStatus === "error" ? (
+                ) : currentSyncStatus === "error" ? (
                   <CloudOff size={15} />
                 ) : (
                   <Cloud size={15} />
@@ -3304,7 +2247,7 @@ export default function Home() {
                       void exportAiFile();
                     }}
                   >
-                    <Download size={14} /> 导出 PDF（Illustrator）
+                    <Download size={14} /> 导出 PDF（画布/选中）
                   </button>
                   <button
                     type="button"
@@ -3346,10 +2289,10 @@ export default function Home() {
             </div>
           ) : null}
 
-          {busy || agentBusy ? (
+          {busy || agentBusy || image2Running ? (
             <div className="floatingStatus">
               <Loader2 className="spin" size={14} />
-              {busyLabel || (agentBusy ? "Agent 思考中…" : "Generating…")}
+              {busyLabel || (agentBusy || image2Running ? "后台任务进行中…" : "Generating…")}
             </div>
           ) : null}
 
@@ -3369,7 +2312,7 @@ export default function Home() {
                 type="button"
                 onClick={() => {
                   setQuickEditText("");
-                  setQuickEditDialog({ open: true, src: selection.images[0], mode: "edit" });
+                  setQuickEditDialog({ open: true, src: selection.images[0], layerId: image2.getLayer(selection.images[0])?.id, mode: "edit" });
                 }}
               >
                 <Wand2 size={14} />
@@ -3378,18 +2321,7 @@ export default function Home() {
               </button>
               <button
                 type="button"
-                onClick={() =>
-                  void runAction("高清增强", async () => {
-                    pushMessage({ role: "user", text: "Upscale 高清增强" });
-                    const urls = await doImageEdit({
-                      src: selection.images[0],
-                      instruction: "以更高分辨率和更丰富细节重绘，增强锐度、纹理与质感，画面内容完全不变",
-                      kind: "upscale",
-                    });
-                    pushMessage({ role: "assistant", kind: "高清增强", images: urls });
-                    setContextChips(urls.slice(0, 2));
-                  })
-                }
+                onClick={() => setImagePanel("upscale")}
               >
                 <Sparkles size={14} />
                 高清
@@ -3421,9 +2353,9 @@ export default function Home() {
                 type="button"
                 onClick={() => {
                   const src = selection.images[0];
-                  setMaskInstruction("");
-                  setMaskDialog({ open: true, src });
-                  setTimeout(() => void initMaskEditor(src), 60);
+                  setMaskInstruction(""); setMaskMode("edit"); setMaskOperation("erase");
+                  setMaskDialog({ open: true, src, layerId: image2.getLayer(src)?.id });
+                  setTimeout(() => void initMaskEditor(src).catch(error => setError(error.message)), 60);
                 }}
               >
                 <X size={14} />
@@ -3435,7 +2367,7 @@ export default function Home() {
                   setElementTarget("");
                   setElementOp("recolor");
                   setElementValue("");
-                  setElementDialog({ open: true, src: selection.images[0] });
+                  setElementDialog({ open: true, src: selection.images[0], layerId: image2.getLayer(selection.images[0])?.id });
                 }}
               >
                 <Layers size={14} />
@@ -3501,13 +2433,13 @@ export default function Home() {
             <button className="ghostIcon" type="button" aria-label="shapes">
               <Circle size={15} />
             </button>
-            <button className="ghostIcon" type="button" aria-label="layers">
+            <button className="ghostIcon" type="button" aria-label="layers" onClick={() => { setImagePanel("layers"); void image2.ensureDocument().catch(() => {}); }}>
               <Layers size={15} />
             </button>
             <button className="ghostIcon" type="button" aria-label="search">
               <FileSearch size={15} />
             </button>
-            <button className="ghostIcon" type="button" aria-label="versions">
+            <button className="ghostIcon" type="button" aria-label="versions" onClick={() => { setImagePanel("versions"); void image2.ensureDocument().catch(() => {}); }}>
               <GitBranch size={15} />
             </button>
             <i className="statusDivider" />
@@ -3548,7 +2480,7 @@ export default function Home() {
             </button>
             <button
               type="button"
-              title="AI 同风格改字"
+              title="改字与真实字体编辑"
               className="dockButton notify"
               onClick={() => {
                 if (!selection.images[0]) {
@@ -3600,10 +2532,8 @@ export default function Home() {
                     });
                   }
                   setMessages([]);
-                  oaiHistoryRef.current = [];
-                  imageRegistryRef.current = [];
-                  lastOutputsRef.current = [];
-                  turnCounterRef.current = 0;
+
+
                   setSessionId(uid());
                   setContextChips([]);
                 }}
@@ -3637,6 +2567,7 @@ export default function Home() {
           ) : (
             <div className="messages" ref={messagesRef}>
               {messages.map((message) => {
+                if (message.role === 'assistant' && message.images?.some(url => image2.jobs.some(job => job.output?.branchDocumentId && resultUrls(job).includes(url)))) return null;
                 if (message.role === "user") {
                   return (
                     <div className="msgUser" key={message.id}>
@@ -3710,7 +2641,9 @@ export default function Home() {
                   </div>
                 );
               })}
-              {agentBusy ? (
+              {image2.messages.map(message => <div key={message.id} className={message.role === 'user' ? 'msgUser' : 'msgAssistant'}>{message.role !== 'user' && <div className="msgKind"><Sparkles size={12} /> Agent</div>}{renderAssistantText(String(message.text || message.content || ''))}</div>)}
+              {image2.jobs.filter(job => job.output?.branchDocumentId || job.state === 'uncertain' || job.state === 'failed').map(job => <CandidateResult key={job.id} job={job} bridge={image2} onError={setError} />)}
+              {agentBusy || image2Running ? (
                 <div className="msgAssistant msgAction">
                   <div className="msgKind">
                     <Loader2 className="spin" size={12} />
@@ -4088,9 +3021,8 @@ export default function Home() {
                       setSessionId(session.id);
                       setMessages(session.messages);
                       oaiHistoryRef.current = session.oai || [];
-                      imageRegistryRef.current = [];
-                      lastOutputsRef.current = [];
-                      turnCounterRef.current = 0;
+
+
                       setShowHistory(false);
                     }}
                   >
@@ -4322,7 +3254,7 @@ export default function Home() {
               />
             </label>
             <div className="dialogFooter">
-              <span>{quickEditDialog.mode === "erase" ? "移除元素后自然补全背景" : "只改指令部分，其余保持原样"}</span>
+              <span>通过涂抹明确修改与保护范围，生成结果先进入候选</span>
               <button
                 className="darkButton"
                 type="button"
@@ -4333,16 +3265,8 @@ export default function Home() {
                   const isErase = quickEditDialog.mode === "erase";
                   if (!src || !text) return;
                   setQuickEditDialog({ open: false });
-                  void runAction(isErase ? "消除元素" : "快改", async () => {
-                    pushMessage({ role: "user", text: `${isErase ? "消除" : "快改"}：${text}` });
-                    const urls = await doImageEdit({
-                      src,
-                      instruction: isErase ? `移除图中的「${text}」，移除处按周围内容自然补全，其余全部不变` : text,
-                      kind: isErase ? "eraser" : "quick-edit",
-                    });
-                    pushMessage({ role: "assistant", kind: isErase ? "消除" : "快改", images: urls });
-                    setContextChips(urls.slice(0, 2));
-                  });
+                  setMaskMode('edit'); setMaskOperation(isErase ? 'repair' : 'inpaint'); setMaskInstruction(text); setMaskDialog({open: true, src, layerId: quickEditDialog.layerId});
+                  setTimeout(() => void initMaskEditor(src).catch(error => setError(error.message)), 60);
                 }}
               >
                 执行
@@ -4379,6 +3303,7 @@ export default function Home() {
                 maskDrawingRef.current = false;
               }}
             />
+            <div className="inlineOptions"><button className={maskMode === 'edit' ? 'on' : ''} onClick={() => setMaskMode('edit')}>修改范围</button><button className={maskMode === 'protect' ? 'on' : ''} onClick={() => setMaskMode('protect')}>保护范围</button></div>
             <div className="maskControls">
               <label className="maskSlider">
                 笔刷 {maskBrush}px
@@ -4394,32 +3319,43 @@ export default function Home() {
                 type="button"
                 className="ghostButton"
                 onClick={() => {
-                  const paint = maskPaintRef.current;
+                  const paint = maskMode === "protect" ? maskProtectRef.current : maskPaintRef.current;
                   paint?.getContext("2d")?.clearRect(0, 0, paint.width, paint.height);
-                  setMaskHasPaint(false);
+                  if (maskMode === "edit") setMaskHasPaint(false);
                   redrawMaskView();
                 }}
               >
                 清除涂抹
               </button>
+              <button className="ghostButton" type="button" onClick={() => {
+                const src = maskDialog.src, layer = src ? image2.getLayer(src, maskDialog.layerId) : undefined;
+                if (!layer) { setError('请先导入工程'); return; }
+                void image2.updateLayer(layer.id, { metadata: {...layer.metadata, editMaskAssetId: null, protectMaskAssetId: null} }).then(() => {
+                  for (const range of [maskPaintRef.current, maskProtectRef.current]) range?.getContext('2d')?.clearRect(0, 0, range.width, range.height);
+                  setMaskHasPaint(false); redrawMaskView();
+                }).catch(error => setError(error.message));
+              }}>取消局部范围</button>
             </div>
+            <label>处理方式<select aria-label="局部处理方式" value={maskOperation} onChange={event => setMaskOperation(event.target.value)}><option value="erase">擦除为透明（算法）</option><option value="repair">传统修补（算法）</option><option value="recolor">局部换色（算法）</option><option value="fill">局部填色（算法）</option><option value="inpaint">局部补画（生成模型）</option></select></label>
+            {!capability(image2.capabilities, maskOperation).available && <p role="status">{capability(image2.capabilities, maskOperation).reason || '当前能力不可用'}</p>}
+            {['recolor', 'fill'].includes(maskOperation) && <label>处理颜色<input aria-label="局部处理颜色" type="color" value={maskColor} onChange={event => setMaskColor(event.target.value)} /></label>}
             <label>
-              指令（可选）
+              生成补画指令（仅补画时使用）
               <input
                 value={maskInstruction}
                 onChange={(event) => setMaskInstruction(event.target.value)}
-                placeholder="默认：移除并按周围内容自然补全；也可写“换成一朵花”"
+                placeholder="例如：在修改范围内补画一朵花" disabled={maskOperation !== "inpaint"}
               />
             </label>
             <div className="dialogFooter">
-              <span>涂抹区外的像素 100% 保持原图</span>
+              <span>保护范围优先；修改区外保留原像素。补画先进入候选。</span>
               <button
                 className="darkButton"
                 type="button"
-                disabled={!maskHasPaint}
+                disabled={!maskHasPaint || !capability(image2.capabilities, maskOperation).available}
                 onClick={() => {
                   const instruction = maskInstruction;
-                  setMaskDialog({ open: false });
+                  setMaskDialog(current => ({ ...current, open: false }));
                   void runAction("局部消除", async () => {
                     pushMessage({ role: "user", text: `局部消除${instruction ? `：${instruction}` : ""}` });
                     const composed = await doMaskInpaint(instruction);
@@ -4454,12 +3390,12 @@ export default function Home() {
             ) : null}
             {elementOp !== "layers" && elementOp !== "smart-split" ? (
               <label>
-                目标元素
+                目标备注（像素范围以涂抹为准）
                 <input
                   autoFocus
                   value={elementTarget}
                   onChange={(event) => setElementTarget(event.target.value)}
-                  placeholder="例如：外圈金色圆环 / 中间的茶杯图形"
+                  placeholder="例如：外圈圆环；请通过下方涂抹明确区域"
                 />
               </label>
             ) : null}
@@ -4487,18 +3423,26 @@ export default function Home() {
                   value={elementValue}
                   onChange={(event) => setElementValue(event.target.value)}
                   placeholder={
-                    elementOp === "recolor" ? "例如：暗红色" : elementOp === "replace" ? "例如：一枝樱花" : "例如：让它更立体、加投影"
+                    elementOp === "recolor" ? "例如：#8b1e2d" : elementOp === "replace" ? "例如：一枝樱花" : "例如：让它更立体、加投影"
                   }
                 />
               </label>
             ) : null}
+            {elementOp !== 'layers' && elementOp !== 'smart-split' && <button className="ghostButton" type="button" onClick={() => {
+              const src = elementDialog.src; if (!src) return;
+              setElementDialog({open: false}); setMaskMode('edit'); setMaskOperation(elementOp === 'recolor' ? 'recolor' : elementOp === 'remove' ? 'erase' : 'inpaint');
+              const colour = elementColours[elementValue.trim()] || elementValue.trim();
+              if (/^#[0-9a-f]{6}$/i.test(colour)) setMaskColor(colour);
+              setMaskInstruction(elementValue); setMaskDialog({open: true, src, layerId: elementDialog.layerId});
+              setTimeout(() => void initMaskEditor(src).catch(error => setError(error.message)), 60);
+            }}>涂抹修改 / 保护范围</button>}
             <div className="dialogFooter">
               <span>
                 {elementOp === "layers"
-                  ? "按颜色拆成独立图层，落画布后可单独拖动/删除"
+                  ? "OCR 与分割还原图层，保留未知字体和原始像素；先进入候选"
                   : elementOp === "smart-split"
                     ? "GPU 语义分割：输出 overlay/mask，失败不影响其他编辑"
-                    : "只动指定元素，其余保持原样"}
+                    : "换色与透明擦除直接执行算法；已有遮罩优先，否则处理整张图层"}
               </span>
               <button
                 className="darkButton"
@@ -4506,7 +3450,7 @@ export default function Home() {
                 disabled={
                   elementOp === "layers" || elementOp === "smart-split"
                     ? false
-                    : !elementTarget.trim() || (elementOp !== "remove" && !elementValue.trim())
+                    : elementOp !== "remove" && !elementValue.trim()
                 }
                 onClick={() => {
                   const src = elementDialog.src;
@@ -4530,7 +3474,7 @@ export default function Home() {
                           role: "assistant",
                           kind: "智能拆层",
                           text: /503|not configured|GPU/i.test(message)
-                            ? "GPU 拆层暂不可用，可改用「拆分图层」颜色方案。"
+                            ? "分割服务暂不可用，当前图片已保留。"
                             : `智能拆层失败：${message}`,
                           error: message,
                         });
@@ -4545,27 +3489,28 @@ export default function Home() {
                       pushMessage({
                         role: "assistant",
                         kind: "拆分图层",
-                        text: `已拆分为 ${layerCount} 个可独立编辑的矢量图层，直接在画布上拖动即可分离。`,
+                        text: `候选已还原 ${layerCount} 个图层。未知字体和未识别内容保留原像素，接受后可继续修改。`,
                       });
                     });
                     return;
                   }
-                  const target = elementTarget.trim();
                   const value = elementValue.trim();
-                  if (!target) return;
-                  const instruction =
-                    elementOp === "recolor"
-                      ? `把「${target}」的颜色改为${value}`
-                      : elementOp === "remove"
-                        ? `移除「${target}」，移除处按周围内容自然补全`
-                        : elementOp === "replace"
-                          ? `把「${target}」替换为${value}，风格与整体一致`
-                          : `针对「${target}」：${value}`;
-                  void runAction("元素编辑", async () => {
-                    pushMessage({ role: "user", text: `元素编辑：${instruction}` });
-                    const urls = await doImageEdit({ src, instruction, kind: "edit-elements" });
-                    pushMessage({ role: "assistant", kind: "元素编辑", images: urls });
-                    setContextChips(urls.slice(0, 2));
+                  if (elementOp === 'replace' || elementOp === 'free') {
+                    setMaskMode('edit'); setMaskOperation('inpaint'); setMaskInstruction(value); setMaskDialog({open: true, src, layerId: elementDialog.layerId});
+                    setTimeout(() => void initMaskEditor(src).catch(error => setError(error.message)), 60); return;
+                  }
+                  void runAction('元素编辑', async () => {
+                    const color = elementColours[value] || value;
+                    if (elementOp === 'recolor' && !/^#[0-9a-f]{6}$/i.test(color)) throw new Error('请输入明确的六位颜色值，如 #8b1e2d。');
+                    const layer = image2.getLayer(src, elementDialog.layerId);
+                    if (elementTarget.trim() && !/^(全部|全图|整个图层|整张图片|整张图层|whole layer)$/i.test(elementTarget.trim()) && !layer?.metadata?.editMaskAssetId) throw new Error('请先涂抹目标修改范围；文字备注不会自动选取像素。');
+                    if (layer?.type === 'vector' || layer?.type === 'text' && layer.metadata?.fontConfirmed === true) {
+                      if (elementOp === 'recolor') await image2.updateLayer(layer.id, {fill:color});
+                      else await image2.submitCommands([{type:'layer.remove',layerId:layer.id}]);
+                      pushMessage({role:'assistant',kind:'元素编辑',text:'已直接修改独立图层，可在版本中撤销。'}); return;
+                    }
+                    const job = await image2.waitJob(await image2.submitOperation(elementOp === 'recolor' ? 'recolor' : 'erase', elementOp === 'recolor' ? {color} : {}, src, {layerId:elementDialog.layerId}));
+                    pushMessage({ role: 'assistant', kind: '元素编辑', text: '已通过算法保存，可在版本中撤销。', images: resultUrls(job) });
                   });
                 }}
               >
@@ -4629,50 +3574,15 @@ export default function Home() {
                 <img src={fontDialog.preview || fontDialog.src} alt="reference lettering" />
               </div>
             ) : null}
-            {fontOcr === "loading" ? (
-              <p className="ocrHint">
-                <Loader2 className="spin" size={13} /> 正在识别图中文字…（也可直接在下方输入，不必等待）
-              </p>
-            ) : null}
-            {fontOcr === "done" && fontLines ? (
-              <div className="fontLines">
-                <div className="inlineLabel">编辑文字（改哪行填哪行，其余保持原样）</div>
-                {fontLines.map((line, index) => (
-                  <input
-                    key={index}
-                    value={line.to}
-                    className={line.to.trim() !== line.from.trim() ? "changed" : ""}
-                    onChange={(event) =>
-                      setFontLines((prev) =>
-                        prev ? prev.map((item, i) => (i === index ? { ...item, to: event.target.value } : item)) : prev,
-                      )
-                    }
-                  />
-                ))}
-              </div>
-            ) : null}
-            <label>
-              {fontOcr === "done" && fontLines ? "或整体替换为（可选，优先用上面的逐行编辑）" : "新文字内容"}
-              <input autoFocus value={fontText} onChange={(event) => setFontText(event.target.value)} placeholder="例如：云东 AI 视觉" />
-            </label>
-            <label>
-              补充说明（可选）
-              <input value={fontNote} onChange={(event) => setFontNote(event.target.value)} placeholder="例如：保持金属质感和描边" />
-            </label>
-            <div className="dialogFooter">
-              <span>保持原字体的骨架 / 笔画 / 质感 / 颜色</span>
-              <button
-                className="darkButton"
-                type="button"
-                disabled={
-                  !fontText.trim() && !(fontLines || []).some((line) => line.to.trim() && line.to.trim() !== line.from.trim())
-                }
-                title="改动上方任意一行，或在输入框填写新文字"
-                onClick={runFontRestyle}
-              >
-                生成
-              </button>
-            </div>
+            <p className="ocrHint">已确认的文字层可直接编辑。扁平图片首次改字需要明确原字区域和实际字体；复杂背景保留原像素等待修补。</p>
+            <label>原文字内容<input aria-label="原文字内容" value={fontOriginal} onChange={event => setFontOriginal(event.target.value)} placeholder="用于保存识别信息，不自动猜测原字体" /></label>
+            <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8}}>{(['x','y','width','height'] as const).map(field => <label key={field}>{({x: '区域 X', y: '区域 Y', width: '区域宽度', height: '区域高度'})[field]}<input aria-label={`文字区域 ${field}`} type="number" min={field === 'width' || field === 'height' ? 1 : 0} value={fontRect[field]} onChange={event => setFontRect(current => ({...current, [field]: Number(event.target.value)}))} /></label>)}</div>
+            <label>新文字内容<input autoFocus aria-label="新文字内容" value={fontText} onChange={event => setFontText(event.target.value)} placeholder="例如：云东 AI 视觉" /></label>
+            <label>确认实际字体<select aria-label="确认实际字体" value={fontAssetChoice} onChange={event => setFontAssetChoice(event.target.value)}><option value="">内置中文字体</option>{image2.assets.filter(asset => asset.metadata?.family).map(asset => <option key={asset.id} value={asset.id}>{asset.name}</option>)}</select></label>
+            <label>上传实际字体<input aria-label="改字上传字体" type="file" accept=".ttf,.otf,.woff,.woff2" onChange={event => {const file = event.target.files?.[0]; if (file) void image2.uploadFile(file, file.name, 'font').then(asset => setFontAssetChoice(asset.id)).catch(error => setError(error.message)); event.target.value='';}} /></label>
+            <label>精确字号<input aria-label="精确字号" type="number" min="1" value={fontExactSize} onChange={event => setFontExactSize(Number(event.target.value))} /></label>
+            <label>文字颜色<input aria-label="文字颜色" type="color" value={fontExactColor} onChange={event => setFontExactColor(event.target.value)} /></label>
+            <div className="dialogFooter"><span>简单背景清底后转换为真实文字；后续修改不调用生图</span><button className="darkButton" type="button" disabled={!fontText.trim() || !fontRect.width || !fontRect.height} onClick={runFontRestyle}>清底并应用文字</button></div>
           </div>
         </div>
       ) : null}
@@ -4718,6 +3628,7 @@ export default function Home() {
         </div>
       ) : null}
 
+      <LegacyImagePanels mode={imagePanel} onClose={() => { if (imagePanelEpoch.current === renderedPanelEpoch) setImagePanel(null); }} bridge={image2} onError={setError} />
       {/* toasts */}
       {error ? (
         <div className="errorToast" role="alert">

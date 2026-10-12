@@ -8,6 +8,7 @@ import { image2Api, assetUrl, listValue, unwrapDocument, uploadAsset, Image2ApiE
 import { ImageCommandQueue, applyDraft, type QueuedBatch } from '../../lib/image2/queue';
 import { image2Storage, submissionStorage, cachedDocument, cachedDocuments } from '../../lib/image2/storage';
 import { ImageSubmissionManager } from '../../lib/image2/submissions';
+import { LEGACY_MUTATION_PREFIX } from '../../lib/image2/legacy-mutations';
 import { capability } from '../../lib/image2/geometry';
 import { groupLayerCommands, ungroupLayerCommands } from '../../lib/image2/grouping';
 import { orderedLayers, reorderSiblingCommands } from '../../lib/image2/stacking';
@@ -26,13 +27,13 @@ export default function ImageWorkspace() {
   const [submissionCount, setSubmissionCount] = useState(0);
   const [templateKind, setTemplateKind] = useState<TemplateKind>('poster');
   const [conversation, setConversation] = useState<Conversation | null>(null), [messages, setMessages] = useState<ConversationMessage[]>([]), [chat, setChat] = useState('');
-  const [showMasks, setShowMasks] = useState(false), [maskRefs, setMaskRefs] = useState<Record<string, { edit: string; protect: string }>>({});
+  const [showMasks, setShowMasks] = useState(false);
   const [maskPurpose, setMaskPurpose] = useState<'edit' | 'visibility'>('edit');
   const [operation, setOperation] = useState('resize'), [operationParams, setOperationParams] = useState<Record<string, string>>({ width: '2048', height: '2048', color: '#ffffff', tolerance: '20', degrees: '90', scale: '2', preset: 'logo', axis: 'horizontal', x: '0', y: '0', prompt: '' });
   const canonical = useRef<ImageDocument | null>(null), mounted = useRef(true), uploadRef = useRef<HTMLInputElement>(null), fontRef = useRef<HTMLInputElement>(null), importRef = useRef<HTMLInputElement>(null);
   const queue = useRef<ImageCommandQueue | null>(null);
   const submissions = useRef<ImageSubmissionManager | null>(null);
-  if (submissions.current === null) submissions.current = new ImageSubmissionManager(submissionStorage, (path, body) => image2Api(path, body));
+  if (submissions.current === null) submissions.current = new ImageSubmissionManager({ ...submissionStorage, list: async () => (await submissionStorage.list()).filter(attempt => !attempt.intent.startsWith(LEGACY_MUTATION_PREFIX)) }, (path, body) => image2Api(path, body));
   if (queue.current === null) queue.current = new ImageCommandQueue(image2Storage, async (id, body) => unwrapDocument(await image2Api<ImageDocument | { document: ImageDocument }>(`/documents/${id}/commands`, body)));
   const recoverSubmissions = useCallback(async (id: string) => {
     try { await submissions.current!.recover(id, value => { const receipt = value as { job?: ImageJob }; if (receipt.job) setJobs(prev => [receipt.job!, ...prev.filter(job => job.id !== receipt.job!.id)]); }); }
@@ -109,7 +110,7 @@ export default function ImageWorkspace() {
   useEffect(() => {
     for (const asset of assets.filter(item => /font|woff|ttf|otf/.test(item.mime) || /\.(woff2?|ttf|otf)$/i.test(item.name))) {
       const family = `i2-${asset.id}`; if (documentFonts.has(family)) continue; documentFonts.add(family);
-      new FontFace(family, `url("${assetUrl(asset.id)}")`).load().then(face => window.document.fonts.add(face)).catch(() => { documentFonts.delete(family); setError(`字体「${asset.name}」无法读取，请选择其他字体`); });
+      new FontFace(family, `url("${assetUrl(asset.id)}")`, { weight: String(asset.metadata?.weight || 400) }).load().then(face => window.document.fonts.add(face)).catch(() => { documentFonts.delete(family); setError(`字体「${asset.name}」无法读取，请选择其他字体`); });
     }
   }, [assets]);
   const draft = useMemo(() => document ? applyDraft(document, pending) : null, [document, pending]);
@@ -146,7 +147,10 @@ export default function ImageWorkspace() {
     if (target?.type === 'text' && target.assetId && target.metadata?.fontConfirmed !== true && ['prepare_text', 'repair', 'inpaint', 'fill'].includes(name)) params.purpose = 'text_background';
     const storedEdit = name === 'refine_mask' ? target?.metadata?.visibilityMaskAssetId : target?.metadata?.editMaskAssetId;
     const storedProtect = name === 'refine_mask' ? target?.metadata?.visibilityProtectMaskAssetId : target?.metadata?.protectMaskAssetId;
-    const masks = target ? (name === 'refine_mask' ? undefined : maskRefs[target.id]) || (typeof storedEdit === 'string' && typeof storedProtect === 'string' ? { edit: storedEdit, protect: storedProtect } : undefined) : undefined;
+    // Local edit masks belong to regional pixel operations, not geometry or tracing.
+    // The acknowledged document is authoritative after a reload or a transformed asset.
+    const regional = ['recolor', 'erase', 'fill', 'repair', 'inpaint', 'refine_mask'].includes(name);
+    const masks = regional && typeof storedEdit === 'string' && typeof storedProtect === 'string' ? { edit: storedEdit, protect: storedProtect } : undefined;
     const inputs = [...(target?.assetId ? [{ role: 'base', assetId: target.assetId }] : []), ...(masks ? [{ role: 'edit_mask', assetId: masks.edit }, { role: 'protect_mask', assetId: masks.protect }] : [])];
     if (['inpaint', 'erase', 'repair', 'fill', 'refine_mask'].includes(name) && !masks) throw new Error('先选择修改和保护范围');
     const result = await frozenSubmit<{ job: ImageJob }>('/operations', { documentId: current.id, operation: name, targetLayerId: selectedId, params, masks }, { documentId: current.id, baseRevision: current.revision, targetLayerId: target?.id, operation: name, params, inputs, mode: ['restore_layers', 'generate', 'inpaint'].includes(name) ? 'candidate' : 'apply' });
@@ -171,7 +175,7 @@ export default function ImageWorkspace() {
       if (!capability(capabilities, 'prepare_text').available) throw new Error('请先选择原字范围，清理原字背景后再确认字体');
       setStatus('正在清理原字背景…');
       const storedEdit = target.metadata?.editMaskAssetId, storedProtect = target.metadata?.protectMaskAssetId;
-      const masks = maskRefs[target.id] || (typeof storedEdit === 'string' && typeof storedProtect === 'string' ? { edit: storedEdit, protect: storedProtect } : undefined);
+      const masks = typeof storedEdit === 'string' && typeof storedProtect === 'string' ? { edit: storedEdit, protect: storedProtect } : undefined;
       const result = await frozenSubmit<{ job: ImageJob }>('/operations', { documentId: current.id, operation: 'prepare_text', targetLayerId: target.id, masks }, { documentId: current.id, baseRevision: current.revision, operation: 'prepare_text', targetLayerId: target.id,
         inputs: [{ role: 'base', assetId: target.assetId }, ...(masks ? [{ role: 'edit_mask', assetId: masks.edit }, { role: 'protect_mask', assetId: masks.protect }] : [])],
         params: { purpose: 'text_background' }, mode: 'apply' });
@@ -196,7 +200,7 @@ export default function ImageWorkspace() {
         assetId: target.metadata.cleanBackgroundAssetId, sourceAssetId: target.sourceAssetId || target.assetId, metadata: { role: 'text_background', sourceTextLayerId: target.id } };
       commands.push({ type: 'layer.add', layer: background }); Object.assign(metadata, { backgroundDetached: true, backgroundLayerId: background.id });
     }
-    commands.push({ type: 'layer.update', layerId: target.id, patch: { fontAssetId: font.id, fontFamily: String(font.metadata?.family || ''),
+    commands.push({ type: 'layer.update', layerId: target.id, patch: { fontAssetId: font.id, fontFamily: String(font.metadata?.family || ''), fontWeight: Number(font.metadata?.weight) || 400,
       text: String(target.metadata?.fontConfirmed === true ? target.text || '' : target.metadata?.desiredText ?? target.text ?? ''),
       metadata: { ...metadata, desiredText: null, fontConfirmed: true, fontStatus: 'confirmed' } } });
     await submit(commands);
@@ -255,16 +259,18 @@ export default function ImageWorkspace() {
           }} />
           <label>字体<select aria-label="确认字体" disabled={busy} value={selected.fontAssetId || ''} onChange={e => { const font = fonts.find(item => item.id === e.target.value); if (font) void act(() => confirmFont(font)); }}><option value="">选择已上传字体</option>{fonts.map(font => <option key={font.id} value={font.id}>{font.name}</option>)}</select></label>
           <button disabled={busy || (capabilities.defaultFont as { available?: boolean } | undefined)?.available === false} onClick={() => void act(async () => confirmFont(await builtInFont()))}>使用内置中文字体</button>
-          {(['fontSize', 'fontWeight', 'tracking', 'lineHeight', 'strokeWidth'] as const).map(field => <label key={field}>{({ fontSize: '字号', fontWeight: '字重', tracking: '字距', lineHeight: '行距倍数', strokeWidth: '描边宽度' })[field]}<input type="number" step={field === 'fontWeight' ? 100 : .1} key={`${selected.id}-${field}-${selected[field]}`} defaultValue={selected[field] || (field === 'fontSize' ? 24 : field === 'fontWeight' ? 400 : field === 'lineHeight' ? 1.2 : 0)} onBlur={e => patch({ [field]: Number(e.target.value) })} /></label>)}
+          {(['fontSize', 'tracking', 'lineHeight', 'strokeWidth'] as const).map(field => <label key={field}>{({ fontSize: '字号', tracking: '字距', lineHeight: '行距倍数', strokeWidth: '描边宽度' })[field]}<input type="number" step=".1" key={`${selected.id}-${field}-${selected[field]}`} defaultValue={selected[field] || (field === 'fontSize' ? 24 : field === 'lineHeight' ? 1.2 : 0)} onBlur={e => patch({ [field]: Number(e.target.value) })} /></label>)}
+          <p>字重：{Number(fonts.find(font => font.id === selected.fontAssetId)?.metadata?.weight) || selected.fontWeight || 400}，由字体文件决定；粗体请上传实际粗体字体。</p>
           <label>描边颜色<input type="color" value={selected.stroke?.startsWith('#') ? selected.stroke : '#000000'} onChange={e => patch({ stroke: e.target.value, strokeWidth: selected.strokeWidth || 1 })} /></label>
         </section>}
         {selected.type === 'text' && <label>填色<input type="color" value={selected.fill?.startsWith('#') ? selected.fill : '#20232b'} onChange={e => patch({ fill: e.target.value })} /></label>}
         {selected.type === 'vector' && <VectorProperties key={selected.id} layer={selected} onPatch={patch} />}
-        {selected.assetId && selected.type !== 'group' && !(selected.type === 'text' && selected.metadata?.fontConfirmed === true) && <section className="i2-operation-panel"><h3>修改图片</h3><button disabled={busy} onClick={() => void act(async () => { setMaskPurpose('edit'); setShowMasks(true); })}>选择修改 / 保护范围{maskRefs[selected.id] || selected.metadata?.editMaskAssetId ? ' ✓' : ''}</button>
+        {selected.assetId && !['group', 'vector'].includes(selected.type) && !(selected.type === 'text' && selected.metadata?.fontConfirmed === true) && <section className="i2-operation-panel"><h3>修改图片</h3><button disabled={busy} onClick={() => void act(async () => { setMaskPurpose('edit'); setShowMasks(true); })}>选择修改 / 保护范围{selected.metadata?.editMaskAssetId ? ' ✓' : ''}</button>
           <button disabled={busy || !capability(capabilities, 'refine_mask').available} onClick={() => void act(async () => { setMaskPurpose('visibility'); setShowMasks(true); })}>修正图层轮廓</button>
           <select aria-label="图片处理" value={operation} onChange={e => setOperation(e.target.value)}>{Object.entries(operationLabels).filter(([name]) => name !== 'refine_mask').map(([name, label]) => <option key={name} value={name}>{label}</option>)}</select>
           {['resize', 'crop', 'pad'].includes(operation) && <div className="i2-property-grid">{['width', 'height', ...(operation === 'crop' ? ['x', 'y'] : [])].map(field => <label key={field}>{field === 'width' ? '像素宽' : field === 'height' ? '像素高' : field}<input type="number" value={operationParams[field]} onChange={e => setOperationParams(prev => ({ ...prev, [field]: e.target.value }))} /></label>)}</div>}
           {['resize', 'super_resolution'].includes(operation) && <p>更新图片像素，保留画布位置和尺寸。</p>}
+          {['resize', 'crop', 'pad', 'rotate', 'flip', 'trace', 'color_key'].includes(operation) && <p>处理整张图层；局部范围用于换色、填色、擦除、修补和补画。</p>}
           {['recolor', 'color_key', 'pad', 'fill'].includes(operation) && <input aria-label="处理颜色" type="color" value={operationParams.color} onChange={e => setOperationParams(prev => ({ ...prev, color: e.target.value }))} />}
           {operation === 'color_key' && <label>颜色容差<input type="number" min="0" max="255" value={operationParams.tolerance} onChange={e => setOperationParams(prev => ({ ...prev, tolerance: e.target.value }))} /></label>}
           {operation === 'rotate' && <label>角度<input type="number" value={operationParams.degrees} onChange={e => setOperationParams(prev => ({ ...prev, degrees: e.target.value }))} /></label>}
@@ -294,12 +300,19 @@ export default function ImageWorkspace() {
     <input ref={uploadRef} hidden type="file" accept="image/*,.svg" onChange={e => { const file = e.target.files?.[0]; if (file) void upload(file); e.target.value = ''; }} />
     <input ref={fontRef} hidden type="file" accept=".ttf,.otf,.woff,.woff2" onChange={e => { const file = e.target.files?.[0]; if (file) void upload(file, true); e.target.value = ''; }} />
     <input ref={importRef} hidden type="file" accept=".zip" onChange={e => { const file = e.target.files?.[0]; if (file) void act(async () => { const { blobBase64 } = await import('../../lib/studio/client'); const next = unwrapDocument(await image2Api<ImageDocument | { document: ImageDocument }>('/imports/project', { data: await blobBase64(file) })); await open(next.id); }); e.target.value = ''; }} />
-    {showMasks && selected?.assetId && <MaskEditor layer={selected} purpose={maskPurpose} onClose={() => setShowMasks(false)} onSave={async (edit, protect) => {
+    {showMasks && selected?.assetId && <MaskEditor layer={selected} purpose={maskPurpose} onClose={() => setShowMasks(false)} onClearRanges={async () => {
+      await flush(); const id = canonical.current!.id;
+      if ((await queue.current!.pending(id)).length) throw new Error('请先处理本地修改，再取消范围');
+      const current = unwrapDocument(await image2Api<ImageDocument | { document: ImageDocument }>(`/documents/${id}`)); acceptDocument(current);
+      const target = current.layers.find(layer => layer.id === selected.id); if (!target) throw new Error('这个图层已发生变化，请重新选择');
+      await submit([{ type: 'layer.update', layerId: target.id, patch: { metadata: { ...target.metadata, editMaskAssetId: null, protectMaskAssetId: null } } }]);
+      if ((await queue.current!.pending(id)).length) throw new Error('取消范围保存在本地；处理版本冲突后再继续');
+      setStatus('局部范围已取消');
+    }} onSave={async (edit, protect) => {
       await flush(); if ((await queue.current!.pending(canonical.current!.id)).length) throw new Error('请先处理本地修改，再保存范围');
       const current = unwrapDocument(await image2Api<ImageDocument | { document: ImageDocument }>(`/documents/${canonical.current!.id}`)); acceptDocument(current);
       const target = current.layers.find(layer => layer.id === selected.id); if (!target) throw new Error('这个图层已发生变化，请重新选择');
       const [editAsset, protectAsset] = await Promise.all([uploadAsset(current.id, edit, 'edit-mask.png', { role: maskPurpose === 'visibility' ? 'visibility_mask' : 'edit_mask', layerId: selected.id }), uploadAsset(current.id, protect, 'protect-mask.png', { role: 'protect_mask', layerId: selected.id })]);
-      if (maskPurpose === 'edit') setMaskRefs(prev => ({ ...prev, [selected.id]: { edit: editAsset.id, protect: protectAsset.id } }));
       await submit([{ type: 'layer.update', layerId: selected.id, patch: { metadata: { ...target.metadata, ...(maskPurpose === 'visibility' ? { visibilityMaskAssetId: editAsset.id, visibilityProtectMaskAssetId: protectAsset.id } : { editMaskAssetId: editAsset.id, protectMaskAssetId: protectAsset.id }) } } }]);
       if ((await queue.current!.pending(current.id)).length) throw new Error('范围保存在本地；处理版本冲突后再继续');
       if (maskPurpose === 'visibility') await runOperation('refine_mask');

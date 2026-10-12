@@ -37,11 +37,15 @@ export class ImageSubmissionManager {
       await this.storage.remove(attempt.intent); return result;
     } catch (error) {
       const status = (error as { status?: number }).status;
-      if (status && status >= 400 && status < 500) await this.storage.remove(attempt.intent);
+      // Timeouts and rate-limit responses can hide an accepted upstream request.
+      // Preserve its identity until the server returns a durable receipt.
+      if (status && status >= 400 && status < 500 && ![408, 429].includes(status)) await this.storage.remove(attempt.intent);
       throw error;
     }
   }
   pending(documentId?: string) { return this.storage.list().then(list => documentId ? list.filter(item => item.documentId === documentId) : list); }
+  /** Resume a stored attempt itself, even when the live document/reference set has advanced. */
+  resume<T>(attempt: SubmissionAttempt): Promise<T> { return this.run(structuredClone(attempt)) as Promise<T>; }
   async recover(documentId: string, onReceipt: (receipt: unknown) => void) {
     for (const attempt of await this.pending(documentId)) onReceipt(await this.run(attempt));
   }
