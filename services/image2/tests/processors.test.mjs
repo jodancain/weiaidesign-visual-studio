@@ -75,6 +75,80 @@ test('CPU pixel edits preserve the scaled canvas frame, position and rotation in
     assert.notEqual(next.assetId,'base',operation);
   }
 });
+async function scaledGeometryFixture(width=300,height=160){
+  const f=await fixture(await image(96,64,(x,y)=>[x,y,x+y,255]));
+  const target=f.ctx.document.layers[0];
+  Object.assign(target,{x:-317,y:205,width,height,rotation:30,parentId:'parent',z:4});
+  const parent={id:'parent',type:'group',x:73,y:-129,width:900,height:700,rotation:19,z:0};
+  f.ctx.document.layers.unshift(parent);
+  f.ctx.fetchImpl=async()=>{f.calls.push('unexpected');throw Error('Geometry operations must not call models');};
+  const apply=result=>applyCommands(createImageDocument({width:1024,height:1024,layers:f.ctx.document.layers,assetIds:[...f.assets.keys()]}),result.commands);
+  return {...f,target,parent,apply};
+}
+function closeTo(actual,expected,label){assert.ok(Math.abs(actual-expected)<1e-8,`${label}: ${actual} != ${expected}`);}
+function transformedPoint(layer,x,y){const angle=layer.rotation*Math.PI/180;return [layer.x+x*Math.cos(angle)-y*Math.sin(angle),layer.y+x*Math.sin(angle)+y*Math.cos(angle)];}
+test('scaled and rotated crop uses decoded source pixels and moves its origin in parent coordinates',async()=>{
+  const f=await scaledGeometryFixture(),before=structuredClone(f.ctx.document);
+  // Canvas scaling must use decoded pixels, even if an old asset dimension record is stale.
+  Object.assign(f.assets.get('base').asset,{width:960,height:640});
+  const result=await f.run('crop',{x:11,y:7,width:40,height:30}),next=f.apply(result),layer=next.layers.find(l=>l.id==='layer');
+  assert.deepEqual([result.output.width,result.output.height],[40,30]);
+  assert.deepEqual([layer.width,layer.height],[125,75]);
+  const origin=transformedPoint(f.target,11*300/96,7*160/64);
+  closeTo(layer.x,origin[0],'crop x');closeTo(layer.y,origin[1],'crop y');
+  assert.equal(layer.rotation,30);assert.equal(layer.parentId,'parent');assert.equal(layer.z,4);
+  assert.deepEqual(next.layers.find(l=>l.id==='parent'),createImageDocument({layers:[f.parent]}).layers[0]);
+  const cropped=await decodeRGBA(f.assets.get(result.output.assetId).bytes,'image/png');assert.deepEqual([...cropped.data.subarray(0,4)],[11,7,18,255]);
+  assert.deepEqual(f.ctx.document,before);assert.equal(f.calls.length,0);
+});
+test('scaled and rotated padding uses the same default and explicit source offsets as the pixel buffer',async()=>{
+  for(const offset of [{},{offsetX:3,offsetY:11}]){
+    const f=await scaledGeometryFixture(),before=structuredClone(f.ctx.document);
+    const result=await f.run('pad',{width:120,height:90,...offset}),layer=f.apply(result).layers.find(l=>l.id==='layer');
+    const x=offset.offsetX??12,y=offset.offsetY??13,origin=transformedPoint(f.target,-x*300/96,-y*160/64);
+    assert.deepEqual([result.output.width,result.output.height],[120,90]);assert.deepEqual([layer.width,layer.height],[375,225]);
+    closeTo(layer.x,origin[0],'pad x');closeTo(layer.y,origin[1],'pad y');
+    assert.equal(layer.rotation,30);assert.equal(layer.parentId,'parent');
+    // The original pixel origin occupies the same canvas point after padding.
+    const originalOrigin=transformedPoint(layer,x*300/96,y*160/64);
+    closeTo(originalOrigin[0],f.target.x,'source x');closeTo(originalOrigin[1],f.target.y,'source y');
+    const padded=await decodeRGBA(f.assets.get(result.output.assetId).bytes,'image/png');
+    assert.deepEqual([...padded.data.subarray((y*120+x)*4,(y*120+x)*4+4)],[0,0,0,255]);assert.equal(padded.data[3],0);
+    assert.deepEqual(f.ctx.document,before);assert.equal(f.calls.length,0);
+  }
+});
+test('quarter pixel rotations swap anisotropic canvas scales and keep the same world center and parent',async()=>{
+  for(const degrees of [90,-90,270,450,0,180,-180,360]){
+    const f=await scaledGeometryFixture(),before=structuredClone(f.ctx.document),center=transformedPoint(f.parent,...transformedPoint(f.target,150,80));
+    const result=await f.run('rotate',{degrees}),layer=f.apply(result).layers.find(l=>l.id==='layer');
+    const odd=Math.abs(degrees/90)%2===1;
+    assert.deepEqual([result.output.width,result.output.height],odd?[64,96]:[96,64]);
+    assert.deepEqual([layer.width,layer.height],odd?[160,300]:[300,160]);
+    const actualCenter=transformedPoint(f.parent,...transformedPoint(layer,layer.width/2,layer.height/2));
+    closeTo(actualCenter[0],center[0],`${degrees} center x`);closeTo(actualCenter[1],center[1],`${degrees} center y`);
+    assert.equal(layer.rotation,30);assert.equal(layer.parentId,'parent');assert.equal(layer.z,4);
+    const rotated=await decodeRGBA(f.assets.get(result.output.assetId).bytes,'image/png');
+    if(degrees===90)assert.deepEqual([...rotated.data.subarray(0,4)],[0,63,63,255]);
+    if(degrees===-90)assert.deepEqual([...rotated.data.subarray(0,4)],[95,0,95,255]);
+    assert.deepEqual(f.ctx.document,before);assert.equal(f.calls.length,0);
+  }
+});
+test('uniformly scaled arbitrary pixel rotation uses actual output dimensions and preserves its world center',async()=>{
+  const f=await scaledGeometryFixture(240,160),before=structuredClone(f.ctx.document),center=transformedPoint(f.parent,...transformedPoint(f.target,120,80));
+  const result=await f.run('rotate',{degrees:45}),layer=f.apply(result).layers.find(l=>l.id==='layer');
+  assert.ok(result.output.width>96&&result.output.height>64);assert.deepEqual([layer.width,layer.height],[result.output.width*2.5,result.output.height*2.5]);
+  const actualCenter=transformedPoint(f.parent,...transformedPoint(layer,layer.width/2,layer.height/2));
+  closeTo(actualCenter[0],center[0],'45 center x');closeTo(actualCenter[1],center[1],'45 center y');
+  assert.equal(layer.rotation,30);assert.equal(layer.parentId,'parent');assert.deepEqual(f.ctx.document,before);assert.equal(f.calls.length,0);
+});
+test('nonuniform arbitrary pixel rotation rejects before saving outputs or provenance and retains the original',async()=>{
+  for(const degrees of [45,-30,405]){
+    const f=await scaledGeometryFixture(),before=structuredClone(f.ctx.document),original=Buffer.from(f.assets.get('base').bytes),assetCount=f.assets.size;
+    await assert.rejects(f.run('rotate',{degrees}),error=>error.code==='NONUNIFORM_PIXEL_ROTATION'&&error.status===422&&error.retryable===false&&/等比|画布旋转/.test(error.message));
+    assert.equal(f.assets.size,assetCount);assert.equal(f.checkpoints.length,0);assert.equal(f.calls.length,0);
+    assert.deepEqual(f.ctx.document,before);assert.deepEqual(f.assets.get('base').bytes,original);
+  }
+});
 test('real Noto source glyphs receive bounded geometry candidates without confirming fonts or altering restored RGBA',async()=>{
   const fontPath=fileURLToPath(new URL('../fonts/NotoSansCJKsc-Regular.otf',import.meta.url)),fontBytes=await readFile(fontPath);
   const text='中文 MAI',size=48,width=520,height=120;
@@ -117,6 +191,71 @@ test('ImageTracer produces genuine SVG paths and resvg renders actual dimensions
   assert.match(a.bytes.toString(),/<path /);assert.equal(a.asset.mime,'image/svg+xml');assert.equal(a.asset.width,12);assert.equal(a.asset.height,10);assert.equal(r.commands[0].patch.type,'vector');
   assert.equal((await decodeRGBA(a.bytes,a.asset.mime)).data.length,12*10*4);
   await assert.rejects(inspectAsset(Buffer.from('<svg width="1" height="1"><script>alert(1)</script></svg>'),'image/svg+xml'),/active/);
+});
+test('monochrome halftone tracing keeps 180 opaque dark dots, fine holes and transparent regions without palette averaging',async()=>{
+  const width=720,height=480,dots=[];
+  for(let row=0;row<9;row++)for(let column=0;column<20;column++)dots.push({x:40+column*32,y:40+row*35,radius:(row+column)%2?2:3});
+  const source=await image(width,height,(x,y)=>{
+    if(x<8||y<8||x>=width-8||y>=height-8||x>=500&&x<540&&y>=350&&y<385)return [68,110,150,0];
+    if(x>=20&&x<80&&y>=400&&y<420){if(x>=40&&x<43&&y>=407&&y<410)return [232,204,240,255];return [16,24,32,255];}
+    if(dots.some(dot=>(x-dot.x)**2+(y-dot.y)**2<=dot.radius**2))return [16,24,32,255];
+    return [232,204,240,255];
+  });
+  const f=await fixture(source),before=Buffer.from(source);f.ctx.fetchImpl=async()=>{f.calls.push('unexpected');throw Error('No model is permitted for line-art tracing');};
+  // Detail mode cannot be made blurry or delete dots by legacy/request defaults.
+  const result=await f.run('trace',{preset:'monochrome',pathomit:8,blurradius:5,colors:16,ltres:.1,qtres:.1});
+  const svg=f.assets.get(result.output.assetId).bytes.toString(),rendered=await decodeRGBA(Buffer.from(svg),'image/svg+xml');
+  const pixel=(x,y)=>[...rendered.data.subarray((y*width+x)*4,(y*width+x)*4+4)];
+  for(const dot of dots)assert.deepEqual(pixel(dot.x,dot.y),[0,0,0,255],`opaque dot ${dot.x},${dot.y}`);
+  for(const dot of dots)assert.deepEqual(pixel(dot.x+6,dot.y),[255,255,255,255],`white gap ${dot.x},${dot.y}`);
+  assert.deepEqual(pixel(41,408),[255,255,255,255],'fine hole retained');
+  assert.equal(pixel(2,2)[3],0,'transparent border retained');assert.equal(pixel(520,365)[3],0,'erased transparent hole retained');
+  const originalRGBA=await decodeRGBA(source,'image/png');let transparentPixels=0;
+  for(let j=3;j<originalRGBA.data.length;j+=4)if(originalRGBA.data[j]===0){transparentPixels++;assert.equal(rendered.data[j],0,`source transparent pixel ${Math.floor(j/4)}`);}
+  assert.ok(transparentPixels>1000);assert.match(svg,/<clipPath/);assert.doesNotMatch(svg,/<image\b/,'opacity clip must remain real SVG paths');
+  assert.ok((svg.match(/fill="rgb\(0,0,0\)"/g)||[]).length>=180,'small disconnected black paths retained');
+  assert.equal(result.output.metadata.traceVersion,'monochrome-luminance-fixed-alpha-v2');
+  assert.deepEqual(result.output.metadata.lineart,{method:'luminance_threshold',threshold:128,alphaThreshold:128,alphaHandling:'below_threshold_transparent_otherwise_opaque',alphaContour:'pixel_boundary_clip'});
+  const options=result.output.metadata.options;assert.equal(options.colorquantcycles,1);assert.equal(options.pathomit,0);assert.equal(options.blurradius,0);assert.equal(options.strokewidth,0);assert.deepEqual(options.pal,[{r:0,g:0,b:0,a:255},{r:255,g:255,b:255,a:255},{r:0,g:0,b:0,a:0}]);
+  assert.deepEqual(f.assets.get('base').bytes,before);assert.equal(f.calls.length,0);
+});
+test('monochrome tracing records explicit luminance and alpha thresholds and rejects invalid thresholds without new assets',async()=>{
+  const f=await fixture(await image(40,12,x=>x<10?[160,160,160,255]:x<20?[210,210,210,255]:x<30?[0,0,0,64]:[255,255,255,0]));
+  const result=await f.run('trace',{preset:'monochrome',threshold:180,alphaThreshold:32,ltres:0,qtres:0}),rendered=await decodeRGBA(f.assets.get(result.output.assetId).bytes,'image/svg+xml');
+  const pixel=x=>[...rendered.data.subarray((6*40+x)*4,(6*40+x)*4+4)];
+  assert.deepEqual(pixel(5),[0,0,0,255]);assert.deepEqual(pixel(15),[255,255,255,255]);assert.deepEqual(pixel(25),[0,0,0,255]);assert.equal(pixel(35)[3],0);
+  assert.equal(result.output.metadata.lineart.threshold,180);assert.equal(result.output.metadata.lineart.alphaThreshold,32);
+  const count=f.assets.size;for(const params of [{threshold:-1},{threshold:256},{threshold:'bad'},{alphaThreshold:0},{alphaThreshold:256},{alphaThreshold:1.5}])await assert.rejects(f.run('trace',{preset:'monochrome',...params}),e=>e.code==='INVALID_PARAMS');
+  assert.equal(f.assets.size,count,'invalid thresholds must not save assets or provenance');
+});
+test('colour tracing still retains original red and blue rather than applying the monochrome threshold',async()=>{
+  const f=await fixture(await image(40,20,x=>x<20?[255,0,0,255]:[0,0,255,255]));
+  const result=await f.run('trace',{preset:'color',colors:2,pathomit:0,blurradius:0}),rendered=await decodeRGBA(f.assets.get(result.output.assetId).bytes,'image/svg+xml');
+  const pixel=x=>[...rendered.data.subarray((10*40+x)*4,(10*40+x)*4+4)];
+  assert.deepEqual(pixel(5),[255,0,0,255]);assert.deepEqual(pixel(35),[0,0,255,255]);assert.equal(result.output.metadata.lineart,undefined);assert.equal(result.output.metadata.traceVersion,undefined);
+});
+test('successive monochrome, colour and monochrome traces replace mode facts in both immutable assets and applied layers',async()=>{
+  const f=await fixture(await image(40,20,x=>x<20?[60,60,60,255]:[210,210,210,255]));
+  f.ctx.document.layers[0].metadata={legacyShapeId:'shape:preserved',userTag:'keep'};
+  f.ctx.document=createImageDocument({...f.ctx.document,assetIds:[...f.assets.keys()]});
+  f.ctx.fetchImpl=async()=>{f.calls.push('unexpected');throw Error('Trace mode changes must not use models');};
+  const steps=[{preset:'monochrome',threshold:180,alphaThreshold:64},{preset:'color',colors:2,pathomit:0,blurradius:0},{preset:'monochrome',threshold:110,alphaThreshold:200}];
+  const history=[];
+  for(const params of steps){
+    const result=await f.run('trace',params),asset=f.assets.get(result.output.assetId).asset,patch=result.commands[0].patch;
+    f.ctx.document=applyCommands({...f.ctx.document,assetIds:[...f.assets.keys()]},result.commands);
+    const layer=f.ctx.document.layers.find(l=>l.id==='layer');
+    for(const metadata of [result.output.metadata,asset.metadata,patch.metadata,layer.metadata]){
+      assert.equal(metadata.preset,params.preset);assert.equal(metadata.legacyShapeId,'shape:preserved');assert.equal(metadata.userTag,'keep');
+      if(params.preset==='monochrome'){
+        assert.equal(metadata.traceVersion,'monochrome-luminance-fixed-alpha-v2');assert.equal(metadata.lineart.threshold,params.threshold);assert.equal(metadata.lineart.alphaThreshold,params.alphaThreshold);assert.equal(metadata.lineart.alphaContour,'pixel_boundary_clip');
+      }else{assert.equal(metadata.traceVersion,undefined);assert.equal(metadata.lineart,undefined);}
+    }
+    history.push({assetId:asset.id,bytes:Buffer.from(f.assets.get(asset.id).bytes),metadata:structuredClone(asset.metadata)});
+  }
+  assert.equal(history[0].metadata.lineart.threshold,180);assert.equal(history[1].metadata.lineart,undefined);assert.equal(history[2].metadata.lineart.threshold,110);
+  for(const previous of history){assert.deepEqual(f.assets.get(previous.assetId).bytes,previous.bytes);assert.deepEqual(f.assets.get(previous.assetId).asset.metadata,previous.metadata);}
+  assert.equal(f.calls.length,0);
 });
 test('restore with OCR, SAM2 and connected regions gives full original pixel partition and unknown fonts',async()=>{
   const f=await fixture(await image(10,8,(x,y)=>x<4&&y<3?[0,0,0,255]:x>=7?[255,0,0,255]:[255,255,255,255]));

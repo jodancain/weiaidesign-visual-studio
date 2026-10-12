@@ -1,10 +1,11 @@
 import {expect,test,type BrowserContext,type Page} from '@playwright/test';
 import {createRequire} from 'node:module';
 import {fileURLToPath} from 'node:url';
+import {resolve} from 'node:path';
 import {mkdir,writeFile,readFile} from 'node:fs/promises';
 import type {ImageAsset,ImageDocument,ImageJob} from '../lib/image2/types';
 const require=createRequire(import.meta.url),sharp=require('../services/image2/node_modules/sharp');
-const output=fileURLToPath(new URL('../../output/image2-original-recovery-20261012/',import.meta.url));
+const output=resolve(process.env.IMAGE2_BROWSER_EVIDENCE_DIR || fileURLToPath(new URL('../../output/image2-original-recovery-20261012/',import.meta.url)));
 type Entry={title:string;currentPage:Page;documentIds:Set<string>;commands:Record<string,unknown>[];pageErrors:string[];external:string[];modelRoutes:string[];[key:string]:unknown};
 const entries=new WeakMap<BrowserContext,Entry>();
 function monitor(page:Page,entry:Entry){

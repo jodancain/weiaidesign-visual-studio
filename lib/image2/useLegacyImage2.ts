@@ -426,8 +426,10 @@ export function useLegacyImage2({ editor, projectId, projectName, onError }: Opt
     if (!(target.type === 'text' && target.metadata?.fontConfirmed !== true)) {
       const source = currentAssets.current.find(a => a.id === target!.assetId)!;
       if (!source || !Object.values(rect).every(Number.isInteger) || rect.width <= 0 || rect.height <= 0 || rect.x < 0 || rect.y < 0 || rect.x + rect.width > source.width! || rect.y + rect.height > source.height!) throw new Error('文字范围必须在原图像素边界内');
-      const sx = target.width / source.width!, sy = target.height / source.height!, r = target.rotation * Math.PI / 180;
-      const patch = { ...emptyLayer('raster', oldText || '待确认文字'), assetId: target.assetId, sourceAssetId: target.sourceAssetId || target.assetId, sourceRect: [0, 0, source.width!, source.height!], x: target.x + rect.x * sx * Math.cos(r) - rect.y * sy * Math.sin(r), y: target.y + rect.x * sx * Math.sin(r) + rect.y * sy * Math.cos(r), rotation: target.rotation, parentId: target.parentId, z: Math.max(...canonical.current!.layers.map(l => l.z)) + 1, metadata: { sourceImageLayerId: target.id } } as ImageLayer;
+      const sx = target.width / source.width!, sy = target.height / source.height!;
+      // The crop processor applies source-pixel offsets in this full canvas
+      // frame. Pre-offsetting the temporary layer would move the text twice.
+      const patch = { ...emptyLayer('raster', oldText || '待确认文字'), assetId: target.assetId, sourceAssetId: target.sourceAssetId || target.assetId, sourceRect: [0, 0, source.width!, source.height!], x: target.x, y: target.y, width: target.width, height: target.height, rotation: target.rotation, parentId: target.parentId, z: Math.max(...canonical.current!.layers.map(l => l.z)) + 1, metadata: { sourceImageLayerId: target.id } } as ImageLayer;
       await submitCommands([{ type: 'layer.add', layer: patch }]);
       await waitJob(await submitOperation('crop', rect, undefined, { layerId: patch.id })); assertScope(captured);
       target = canonical.current!.layers.find(l => l.id === patch.id)!;

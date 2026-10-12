@@ -2647,7 +2647,7 @@ export default function Home() {
                 <div className="msgAssistant msgAction">
                   <div className="msgKind">
                     <Loader2 className="spin" size={12} />
-                    Agent 正在工作…
+                    正在处理后台任务…
                   </div>
                 </div>
               ) : null}

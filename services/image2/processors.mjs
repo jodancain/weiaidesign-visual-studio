@@ -145,7 +145,9 @@ function layerCommands(request,ctx,asset,extras={}) {
   // source must not shrink a scaled/rotated object when only its pixels change.
   const pixelEdits=['recolor','erase','repair','fill','color_key','inpaint','matting','trace','flip'];
   const keepLayout=target&&(pixelEdits.includes(request.operation)||['resize','super_resolution'].includes(request.operation)&&request.params?.resizeLayout!==true);
-  const patch={assetId:asset.id,width:keepLayout?target.width:asset.width,height:keepLayout?target.height:asset.height,...extras,maskAssetId:null,metadata:{...target?.metadata,...asset.metadata,...extras.metadata}};
+  const priorMetadata={...target?.metadata};
+  if(request.operation==='trace'){delete priorMetadata.traceVersion;delete priorMetadata.lineart;}
+  const patch={assetId:asset.id,width:keepLayout?target.width:asset.width,height:keepLayout?target.height:asset.height,...extras,maskAssetId:null,metadata:{...priorMetadata,...asset.metadata,...extras.metadata}};
   if(target)return [{type:'layer.update',layerId:target.id,patch}];
   // Null clears a property in update commands; newly added layers must omit absent IDs.
   const {maskAssetId:_mask,...added}=patch;void _mask;
@@ -293,6 +295,36 @@ function repairPixels(raw,mask,p){
   return {raw:{...raw,data:current},method:'boundary_propagation_harmonic',needsReview:true};
 }
 const geometricOperations=new Set(['resize','crop','pad','rotate','flip']);
+function paddingFrame(raw,p){
+  const width=positiveInt(p.width,'width'),height=positiveInt(p.height,'height');
+  const x=p.offsetX==null?Math.floor((width-raw.width)/2):Number(p.offsetX),y=p.offsetY==null?Math.floor((height-raw.height)/2):Number(p.offsetY);
+  if(!Number.isInteger(x)||!Number.isInteger(y)||x<0||y<0||x+raw.width>width||y+raw.height>height)throw processingError('Padding must contain the whole source');
+  return {width,height,x,y};
+}
+/** Pixel geometry operates in the decoded source frame, whereas layer geometry lives in
+ * its parent's canvas coordinates. Keep that existing mapping when changing pixel bounds. */
+function processedLayerGeometry(request,base,source,output){
+  const target=base.target,op=request.operation,p=request.params||{};
+  if(!target||!['crop','pad','rotate'].includes(op))return {};
+  const sx=target.width/source.width,sy=target.height/source.height;
+  let width=output.width*sx,height=output.height*sy,dx=0,dy=0;
+  if(op==='crop'){
+    dx=Number(p.x)*sx;dy=Number(p.y)*sy;
+  }else if(op==='pad'){
+    const frame=paddingFrame(source,p);
+    dx=-frame.x*sx;dy=-frame.y*sy;
+  }else{
+    const degrees=((Number(p.degrees)%360)+360)%360,quarter=degrees/90;
+    if(Number.isInteger(quarter)){
+      if(quarter%2){width=output.width*sy;height=output.height*sx;}
+    }else if(Math.abs(sx-sy)>1e-9*Math.max(1,Math.abs(sx),Math.abs(sy))){
+      throw processingError('这张图片在画布上被非等比缩放，任意角度像素旋转会改变拉伸比例。请先恢复等比尺寸，或使用画布旋转；像素旋转目前支持 90° 的倍数。','NONUNIFORM_PIXEL_ROTATION',{status:422,retryable:false});
+    }
+    dx=(target.width-width)/2;dy=(target.height-height)/2;
+  }
+  const angle=(target.rotation||0)*Math.PI/180,cos=Math.cos(angle),sin=Math.sin(angle);
+  return {x:target.x+dx*cos-dy*sin,y:target.y+dx*sin+dy*cos,width,height};
+}
 async function geometryBytes(operation,raw,p){
   const image=()=>sharp(raw.data,{raw:{width:raw.width,height:raw.height,channels:4}});
   switch(operation){
@@ -303,9 +335,7 @@ async function geometryBytes(operation,raw,p){
       return image().extract({left:x,top:y,width,height}).png().toBuffer();
     }
     case 'pad':{
-      const width=positiveInt(p.width,'width'),height=positiveInt(p.height,'height');
-      const x=p.offsetX==null?Math.floor((width-raw.width)/2):Number(p.offsetX),y=p.offsetY==null?Math.floor((height-raw.height)/2):Number(p.offsetY);
-      if(!Number.isInteger(x)||!Number.isInteger(y)||x<0||y<0||x+raw.width>width||y+raw.height>height)throw processingError('Padding must contain the whole source');
+      const {width,height,x,y}=paddingFrame(raw,p);
       return image().extend({left:x,top:y,right:width-x-raw.width,bottom:height-y-raw.height,background:parseColor(p.fill,{r:0,g:0,b:0,alpha:0})}).png().toBuffer();
     }
     case 'rotate':{
@@ -366,6 +396,42 @@ async function traceSVG(raw,options,ctx){
     worker.on('exit',code=>{if(!settled)finish(processingError(`Tracing worker exited (${code}); source retained`,'TRACE_FAILED'));});
   });
 }
+function monochromePixels(raw,p){
+  const threshold=p.threshold==null?128:Number(p.threshold),alphaThreshold=p.alphaThreshold==null?128:Number(p.alphaThreshold);
+  if(!Number.isFinite(threshold)||threshold<0||threshold>255)throw processingError('Line-art threshold must be in 0..255');
+  if(!Number.isInteger(alphaThreshold)||alphaThreshold<1||alphaThreshold>255)throw processingError('Line-art alphaThreshold must be an integer in 1..255');
+  const data=Buffer.alloc(raw.data.length);
+  for(let i=0;i<raw.width*raw.height;i++){
+    const j=i*4;
+    if(raw.data[j+3]<alphaThreshold)continue;
+    const luminance=.2126*raw.data[j]+.7152*raw.data[j+1]+.0722*raw.data[j+2],value=luminance<threshold?0:255;
+    data[j]=data[j+1]=data[j+2]=value;data[j+3]=255;
+  }
+  return {raw:{...raw,data},metadata:{method:'luminance_threshold',threshold,alphaThreshold,alphaHandling:'below_threshold_transparent_otherwise_opaque',alphaContour:'pixel_boundary_clip'}};
+}
+function clipMonochromeSVG(svg,raw){
+  // Traced curves can antialias across the original transparent boundary. Use merged
+  // integer pixel runs as a vector clip, so that no transparent source pixel acquires paint.
+  const rectangles=[];let active=new Map();
+  for(let y=0;y<raw.height;y++){
+    const next=new Map();let x=0;
+    while(x<raw.width){
+      while(x<raw.width&&raw.data[(y*raw.width+x)*4+3]===0)x++;
+      const start=x;while(x<raw.width&&raw.data[(y*raw.width+x)*4+3]!==0)x++;
+      if(start===x)continue;
+      const key=`${start}:${x}`,prior=active.get(key),rectangle=prior||{x:start,y,width:x-start,height:0};
+      rectangle.height++;next.set(key,rectangle);
+    }
+    for(const [key,rectangle] of active)if(!next.has(key))rectangles.push(rectangle);
+    active=next;
+  }
+  rectangles.push(...active.values());
+  const d=rectangles.map(r=>`M${r.x} ${r.y}h${r.width}v${r.height}h${-r.width}z`).join('');
+  const open=/<svg\b[^>]*>/.exec(svg),close=svg.lastIndexOf('</svg>');
+  if(!open||close<open.index+open[0].length)throw processingError('Tracing returned an invalid SVG','TRACE_FAILED');
+  const start=open.index+open[0].length;
+  return `${svg.slice(0,start)}<defs><clipPath id="lineart-visible-pixels" clipPathUnits="userSpaceOnUse"><path d="${d}"/></clipPath></defs><g clip-path="url(#lineart-visible-pixels)">${svg.slice(start,close)}</g>${svg.slice(close)}`;
+}
 async function computeOperation(request,ctx) {
   const op=request.operation,p=request.params||{};
   if(!registry[op])throw processingError(`Unknown operation ${op}`);
@@ -388,6 +454,8 @@ async function computeOperation(request,ctx) {
   const masks=await masksFor(request,ctx,raw);
   let out,bytes,mime='image/png',meta={...base.target?.metadata,operation:op,processingSourceAssetId:base.id,...(base.activeMaskId?{sourceMaskAssetId:base.activeMaskId}: {})};
   if(op==='trace') {
+    // Mode-specific processing facts describe this output, not a previous trace.
+    delete meta.traceVersion;delete meta.lineart;
     const options={ltres:1,qtres:1,pathomit:8,numberofcolors:16,mincolorratio:0,scale:1,roundcoords:3,desc:false};
     const presets={monochrome:{numberofcolors:2,colorsampling:0},color:{numberofcolors:16},logo:{numberofcolors:8,pathomit:0,ltres:.5,qtres:.5},posterized2:{...ImageTracer.optionpresets.posterized2}};
     const preset=p.preset||'posterized2';if(!presets[preset])throw processingError('Unknown tracing preset');
@@ -396,7 +464,17 @@ async function computeOperation(request,ctx) {
     if(p.colors!=null)options.numberofcolors=positiveInt(p.colors,'colors',256);
     if(p.blurradius!=null)options.blurradius=Math.max(0,Math.min(5,Math.floor(finite(p.blurradius,0))));
     if(p.blurdelta!=null)options.blurdelta=Math.max(0,Math.min(255,finite(p.blurdelta,20)));
-    const svg=await traceSVG(raw,options,ctx);
+    let traceInput=raw;
+    if(preset==='monochrome'){
+      const lineart=monochromePixels(raw,p);traceInput=lineart.raw;
+      // Never cluster opacity with colours: averaging transparent pixels into a dark
+      // palette entry makes opaque halftone dots translucent. A single fixed-palette
+      // cycle maps these exact binary pixels without any averaging or blur.
+      Object.assign(options,{numberofcolors:3,colorsampling:0,colorquantcycles:1,mincolorratio:0,pathomit:0,blurradius:0,strokewidth:0,linefilter:false,pal:[{r:0,g:0,b:0,a:255},{r:255,g:255,b:255,a:255},{r:0,g:0,b:0,a:0}]});
+      meta={...meta,traceVersion:'monochrome-luminance-fixed-alpha-v2',lineart:lineart.metadata};
+    }
+    let svg=await traceSVG(traceInput,options,ctx);
+    if(preset==='monochrome')svg=clipMonochromeSVG(svg,traceInput);
     bytes=Buffer.from(svg);mime='image/svg+xml';meta={...meta,preset,options,approximation:true};
   } else if(['matting','segment','super_resolution'].includes(op)) {
     const preparedBase={...base,asset:{...base.asset,mime:'image/png',width:raw.width,height:raw.height},bytes:await encodePNG(raw)};
@@ -463,6 +541,8 @@ async function computeOperation(request,ctx) {
     bytes=await encodePNG(out);
     meta.protectedPixelsExact=true;
   }else if(masks.edit||masks.protect)throw processingError('Vector tracing with pixel masks is not supported; source preserved','MASK_GEOMETRY');
+  // Calculate (and validate) layout before saving either output or visibility provenance.
+  const geometry=processedLayerGeometry(request,base,raw,out);
   if(preparingBackground){
     const asset=await saveResult(request,ctx,bytes,mime,meta);
     const metadata=base.target.metadata||{};
@@ -483,7 +563,7 @@ async function computeOperation(request,ctx) {
     saveRequest={...request,inputs:[...(request.inputs||[]),{role:'visibility_source',assetId:visibility.asset.id}]};
   }
   const asset=await saveResult(saveRequest,ctx,bytes,mime,meta);
-  return {commands:layerCommands(request,ctx,asset,{sourceAssetId:base.target?.sourceAssetId||base.id,...(op==='trace'?{type:'vector',editability:'path'}:{type:'raster',editability:'pixels'})}),output:{assetId:asset.id,width:asset.width,height:asset.height,metadata:meta},needsReview:['matting','inpaint','trace'].includes(op)||meta.needsReview===true};
+  return {commands:layerCommands(request,ctx,asset,{...geometry,sourceAssetId:base.target?.sourceAssetId||base.id,...(op==='trace'?{type:'vector',editability:'path'}:{type:'raster',editability:'pixels'})}),output:{assetId:asset.id,width:asset.width,height:asset.height,metadata:meta},needsReview:['matting','inpaint','trace'].includes(op)||meta.needsReview===true};
 }
 
 export async function executeOperation(request,ctx){

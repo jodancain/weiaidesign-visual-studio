@@ -1,10 +1,11 @@
 import { expect, test, type Page } from '@playwright/test';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { resolve } from 'node:path';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import type { ImageDocument, ImageJob } from '../lib/image2/types';
 const require = createRequire(import.meta.url), sharp = require('../services/image2/node_modules/sharp');
-const output = fileURLToPath(new URL('../../output/image2-original-ui-20261012/', import.meta.url));
+const output = resolve(process.env.IMAGE2_BROWSER_EVIDENCE_DIR || fileURLToPath(new URL('../../output/image2-original-ui-20261012/', import.meta.url)));
 type Evidence = { title: string; requests: Array<{ path: string; method: string; status: number }>; jobs: ImageJob[]; pageErrors: string[]; modelRoutes: string[]; external: string[]; [key: string]: unknown };
 const evidence = new WeakMap<Page, Evidence>();
 const activePages = new WeakMap<Page, Page>();

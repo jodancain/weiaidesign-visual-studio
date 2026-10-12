@@ -1,6 +1,7 @@
 import { defineConfig } from '@playwright/test';
 import { fileURLToPath } from 'node:url';
-const output = fileURLToPath(new URL('../../output/image2-original-ui-20261012/', import.meta.url));
+import { resolve } from 'node:path';
+const output = resolve(process.env.IMAGE2_BROWSER_EVIDENCE_DIR || fileURLToPath(new URL('../../output/image2-original-ui-20261012/', import.meta.url)));
 export default defineConfig({
   testDir: '.', testMatch: 'image2-legacy-browser.spec.ts', timeout: 120000, workers: 1,
   outputDir: `${output}/playwright`,

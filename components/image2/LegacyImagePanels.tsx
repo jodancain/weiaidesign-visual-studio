@@ -125,7 +125,7 @@ export function LegacyImagePanels({ mode, onClose, bridge, onError, onResult }: 
         })}>执行</button></div>
       </> : <>
         <div className="inlineOptions"><button className={traceMode === 'detail' ? 'on' : ''} onClick={() => setTraceMode('detail')}>保网点 / 线稿</button><button className={traceMode === 'color' ? 'on' : ''} onClick={() => setTraceMode('color')}>彩色描摹</button></div>
-        <p>直接描摹原像素，不预先生成平涂图。保细节模式保留小路径、细孔和网点。</p>
+        <p>直接描摹原像素，不预先生成平涂图。保网点模式按亮度描摹黑白线稿，保留小路径、细孔和网点；彩色素材请选择彩色描摹。</p>
         <div className="dialogFooter"><span>结果是可编辑 SVG 图层</span><button className="darkButton" disabled={busy} onClick={() => void act(async () => { const job = await bridge.submitOperation('trace', traceMode === 'detail' ? { preset: 'monochrome', pathomit: 0, blurradius: 0, ltres: .1, qtres: .1 } : { preset: 'color', pathomit: 0, blurradius: 0 }); onResult?.(job.id); onClose(); })}>执行</button></div>
       </>}
       {busy && <p role="status"><Loader2 size={13} className="spin" /> 保存中…</p>}
