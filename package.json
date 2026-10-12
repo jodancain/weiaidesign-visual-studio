@@ -18,7 +18,8 @@
     "test:image2:ui": "playwright test --config=tests/image2.playwright.config.ts",
     "test:image2:original-ui": "playwright test --config=tests/image2-legacy-browser.config.ts",
     "test:image2:original-recovery": "playwright test --config=tests/image2-legacy-recovery.config.ts",
-    "test:image2:original-extended": "playwright test --config=tests/image2-legacy-extended.config.ts"
+    "test:image2:original-extended": "playwright test --config=tests/image2-legacy-extended.config.ts",
+    "test:image2:context-menu": "playwright test --config=tests/image2-context-menu.config.ts"
   },
   "dependencies": {
     "@react-three/drei": "10.7.9",

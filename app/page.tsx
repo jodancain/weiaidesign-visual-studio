@@ -895,6 +895,38 @@ export default function Home() {
   const maskImgRef = useRef<HTMLImageElement | null>(null);
   const maskDrawingRef = useRef(false);
   const [contextMenu, setContextMenu] = useState<{ open: boolean; x: number; y: number }>({ open: false, x: 0, y: 0 });
+  const contextMenuRef = useRef<HTMLDivElement>(null);
+  const closeContextMenu = useCallback(() => {
+    setContextMenu(current => current.open ? { open: false, x: 0, y: 0 } : current);
+  }, []);
+  useEffect(() => {
+    if (!contextMenu.open) return;
+    const isMenuTarget = (target: EventTarget | null) => target instanceof Node && contextMenuRef.current?.contains(target);
+    // tldraw stops bubbling clicks. Capture outside input without swallowing it,
+    // so the same click still selects a shape, focuses chat, or changes tools.
+    const outside = (event: Event) => { if (!isMenuTarget(event.target)) closeContextMenu(); };
+    const key = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' || !isMenuTarget(event.target)) closeContextMenu();
+    };
+    document.addEventListener('pointerdown', outside, true);
+    document.addEventListener('contextmenu', outside, true);
+    document.addEventListener('focusin', outside, true);
+    document.addEventListener('keydown', key, true);
+    document.addEventListener('wheel', closeContextMenu, { capture: true, passive: true });
+    window.addEventListener('blur', closeContextMenu);
+    window.addEventListener('resize', closeContextMenu);
+    window.addEventListener('scroll', closeContextMenu, true);
+    return () => {
+      document.removeEventListener('pointerdown', outside, true);
+      document.removeEventListener('contextmenu', outside, true);
+      document.removeEventListener('focusin', outside, true);
+      document.removeEventListener('keydown', key, true);
+      document.removeEventListener('wheel', closeContextMenu, true);
+      window.removeEventListener('blur', closeContextMenu);
+      window.removeEventListener('resize', closeContextMenu);
+      window.removeEventListener('scroll', closeContextMenu, true);
+    };
+  }, [contextMenu.open, closeContextMenu]);
   const [brushColor, setBrushColor] = useState("black");
   const [brushSize, setBrushSize] = useState("m");
   const [textFont, setTextFont] = useState<"draw" | "sans" | "serif" | "mono">("draw");
@@ -955,6 +987,7 @@ export default function Home() {
     const key = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (!image2.document || !(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'z' || target?.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target?.tagName || '')) return;
+      closeContextMenu();
       event.preventDefault(); event.stopImmediatePropagation();
       const project = activeProjectId, direction = event.shiftKey ? 'redo' : 'undo';
       historyQueueRef.current = historyQueueRef.current.catch(() => {}).then(async () => {
@@ -964,7 +997,7 @@ export default function Home() {
     };
     window.addEventListener('keydown', key, true);
     return () => window.removeEventListener('keydown', key, true);
-  }, [activeProjectId, image2]);
+  }, [activeProjectId, closeContextMenu, image2]);
 
   useEffect(() => {
     selectionRef.current = selection;
@@ -1079,6 +1112,7 @@ export default function Home() {
 
   const switchProject = useCallback(
     (id: string) => {
+      closeContextMenu();
       if (id === activeProjectId) {
         setExportMenu(false);
         return;
@@ -1102,10 +1136,11 @@ export default function Home() {
       setProjectName(target?.name || "Untitled");
       setExportMenu(false);
     },
-    [activeProjectId, bindSessionToProjectSwitch, pastSessions, projectName, projects],
+    [activeProjectId, bindSessionToProjectSwitch, closeContextMenu, pastSessions, projectName, projects],
   );
 
   const createProject = useCallback(() => {
+    closeContextMenu();
     const id = uid().replace(/[^a-z0-9-]/gi, "").toLowerCase() || `p${Date.now().toString(36)}`;
     const name = `项目 ${projects.length + 1}`;
     const entry: ProjectMeta = { id, name, ts: Date.now() };
@@ -1121,9 +1156,10 @@ export default function Home() {
     setActiveProjectId(id);
     setProjectName(name);
     setExportMenu(false);
-  }, [activeProjectId, bindSessionToProjectSwitch, pastSessions, projectName, projects]);
+  }, [activeProjectId, bindSessionToProjectSwitch, closeContextMenu, pastSessions, projectName, projects]);
 
   const deleteActiveProject = useCallback(() => {
+    closeContextMenu();
     if (activeProjectId === DEFAULT_PROJECT_ID) {
       window.alert("默认项目不可删除");
       return;
@@ -1146,7 +1182,7 @@ export default function Home() {
     setActiveProjectId(fallback.id);
     setProjectName(fallback.name);
     setExportMenu(false);
-  }, [activeProjectId, bindSessionToProjectSwitch, pastSessions, projectName, projects]);
+  }, [activeProjectId, bindSessionToProjectSwitch, closeContextMenu, pastSessions, projectName, projects]);
 
   /* ------------------------------ boot ------------------------------ */
 
@@ -1623,6 +1659,7 @@ export default function Home() {
   ];
 
   const handleDockTool = (item: CanvasTool) => {
+    closeContextMenu();
     if (!editor) return;
     if (item.tool) {
       editor.setCurrentTool(item.tool);
@@ -2012,9 +2049,6 @@ export default function Home() {
             event.stopPropagation();
             setContextMenu({ open: true, x: event.clientX, y: event.clientY });
           }}
-          onClick={() => {
-            if (contextMenu.open) setContextMenu({ open: false, x: 0, y: 0 });
-          }}
         >
           <div className="tldrawHost">
             <Tldraw
@@ -2029,14 +2063,14 @@ export default function Home() {
           </div>
 
           {contextMenu.open ? (
-            <div className="contextMenu" style={{ left: contextMenu.x, top: contextMenu.y }}>
+            <div ref={contextMenuRef} className="contextMenu" style={{ left: contextMenu.x, top: contextMenu.y }}>
               {/* eslint-disable-next-line react-hooks/refs -- Mapping renders labels and click handlers; editor refs are read only when an action runs. */}
               {contextActions.map((action) => (
                 <button
                   key={action.label}
                   type="button"
                   onClick={() => {
-                    setContextMenu({ open: false, x: 0, y: 0 });
+                    closeContextMenu();
                     void action.run();
                   }}
                 >

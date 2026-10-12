@@ -40,6 +40,7 @@ npm run test:image2
 npm run test:image2:original-ui
 npm run test:image2:original-recovery
 npm run test:image2:original-extended
+npm run test:image2:context-menu
 npm run build
 ```
 
@@ -66,3 +67,9 @@ npm run build
 新增证据分别在 `../output/image2-original-extended-20261012/` 与 `../output/image2-original-manual-20261012/`。原首页与恢复测试支持 `IMAGE2_BROWSER_EVIDENCE_DIR` 指定独立输出目录，便于重跑而保留旧报告；原首页矩阵需要将已有 `baseline-layout.json` 复制到该目录。
 
 本机没有 Playwright 捆绑 Chromium 时，运行浏览器矩阵需指定已安装 Chrome：`PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"`。启动器找不到可执行文件不代表产品用例失败；原日志保留，再使用指定浏览器执行。
+
+## 原右键菜单取消
+
+菜单打开期间使用 document 捕获事件处理外部指针、焦点和键盘输入，不依赖 tldraw 会截断的 click 冒泡。菜单内部的指针与焦点不触发提前卸载；按钮仍执行一次后关闭。点击空白、图片、聊天或顶栏可同时关闭菜单并完成该次正常操作；Esc、滚轮、平移、失焦和窗口尺寸变化也取消菜单。原项目切换和工具操作显式关闭，2.0 撤销／重做的独立 window 捕获快捷键也先关闭菜单，避免其事件拦截留下菜单。
+
+专用原首页回归使用 `tests/image2-context-menu.spec.ts`，证据在 `../output/image2-context-menu-20261012/`；不修改布局、菜单样式或已有菜单动作。
