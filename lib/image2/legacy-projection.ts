@@ -9,6 +9,7 @@ export const legacyFontSizes: Record<string, number> = { s: 18, m: 24, l: 36, xl
 export const legacyColors: Record<string, string> = { black: '#1d1d1d', grey: '#9fa8b2', white: '#ffffff', red: '#e03131', 'light-red': '#f87777', orange: '#e16919', yellow: '#f1ac4b', green: '#099268', 'light-green': '#4cb05e', blue: '#4465e9', 'light-blue': '#4ba1f1', violet: '#ae3ec9', 'light-violet': '#e085f4' };
 export function shapeFingerprint(shape: TLShape) { return JSON.stringify({ type: shape.type, x: shape.x, y: shape.y, rotation: shape.rotation, parentId: shape.parentId, props: shape.props, index: shape.index, opacity: shape.opacity, isLocked: shape.isLocked, hidden: shape.meta.image2Hidden }); }
 export function layerShapeId(layer: ImageLayer): TLShapeId {
+  if (layer.matrix && layer.localBounds) return createShapeId(`image2-${layer.id}`);
   return (typeof layer.metadata?.legacyShapeId === 'string' && layer.metadata.legacyShapeId.startsWith('shape:') ? layer.metadata.legacyShapeId : createShapeId(`image2-${layer.id}`)) as TLShapeId;
 }
 export function plainRichText(value: unknown): string {

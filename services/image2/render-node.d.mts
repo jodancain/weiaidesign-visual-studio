@@ -1,0 +1,13 @@
+import type { CanvasKit } from 'canvaskit-wasm';
+import type { Buffer } from 'node:buffer';
+import type { RenderDocument, Resource, RenderGraph, Resolver, PrepareOptions } from './core/render-graph.mjs';
+import type { SoftwareOptions, SoftwareFrame } from './core/render-software.mjs';
+export type OwnedAsset = { asset: { id: string; mime: string; hash?: string; width?: number; height?: number }; bytes: Buffer };
+export type AssetResolver = (id: string) => OwnedAsset | Promise<OwnedAsset>;
+export type NodeRenderOptions = PrepareOptions & SoftwareOptions & { modulePath?: string; engine?: CanvasKit; useWorker?: boolean; timeoutMs?: number };
+export function loadCanvasKit(options?: { modulePath?: string }): Promise<CanvasKit>;
+export function createNodeResolver(getAsset: AssetResolver, options?: { maxPixels?: number }): Resolver;
+export function renderNode(document: RenderDocument, getAsset: AssetResolver, options?: NodeRenderOptions): Promise<SoftwareFrame & { png: Uint8Array; graph: RenderGraph; cacheKey: string; sourceAssetIds: string[] }>;
+export function resolveNodeResource(document: RenderDocument, contentId: string, getAsset: AssetResolver, options?: { layerId?: string; role?:'content'|'mask'; maxPixels?: number }): Promise<Resource>;
+export function renderGraphInWorker(graph: RenderGraph, options?: NodeRenderOptions): Promise<SoftwareFrame>;
+export const implementedRenderFeatures: Readonly<{ engine: string; renderVersion: string; features: string[]; blends: string[]; effects: { colorMatrix: { matrixLength: number }; gaussianBlur: { sigmaMin: number; sigmaMax: number } }; unsupported: string[] }>;

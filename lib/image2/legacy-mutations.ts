@@ -37,7 +37,7 @@ function acknowledgement(value: unknown, attempt: SubmissionAttempt): ImageDocum
   const result = value && typeof value === 'object' && 'document' in value ? (value as { document: unknown }).document : value;
   const document = result as ImageDocument | undefined;
   const minimumRevision=Number(attempt.body.baseRevision)+(attempt.path.endsWith('/history')?1:0);
-  if (!document || document.id !== attempt.documentId || document.schemaVersion !== 2 || !Number.isSafeInteger(document.revision) || document.revision < minimumRevision || !Array.isArray(document.layers) || !Array.isArray(document.assetIds)) throw new Error('工程修改回执尚未完整，原请求已保留；请恢复确认结果');
+  if (!document || document.id !== attempt.documentId || ![2,3].includes(document.schemaVersion) || !Number.isSafeInteger(document.revision) || document.revision < minimumRevision || !Array.isArray(document.layers) || !Array.isArray(document.assetIds)) throw new Error('工程修改回执尚未完整，原请求已保留；请恢复确认结果');
   return document;
 }
 

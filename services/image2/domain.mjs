@@ -119,7 +119,7 @@ function equal(a, b) { return canonical(a) === canonical(b); }
 export function mergeBranch(base, current, branch) {
   const merged = clone(current), conflicts = [];
   fail(base.schemaVersion === current.schemaVersion && current.schemaVersion === branch.schemaVersion, 'branch schema mismatch', 409, 'branch_conflict');
-  for (const field of ['name','width','height', ...(current.schemaVersion === 3 ? ['resolution','workingColor','renderVersion','requiredFeatures','artboards','guides','savedSelections'] : [])]) {
+  for (const field of ['name','width','height', ...(current.schemaVersion === 3 ? ['resolution','workingColor','renderVersion'] : [])]) {
     if (!equal(base[field], branch[field])) { if (!equal(base[field], current[field]) && !equal(branch[field], current[field])) conflicts.push(field); else merged[field] = clone(branch[field]); }
   }
   const metadata = { ...current.metadata }, bookkeeping = new Set(['candidateJobId','runId','acceptedAt','acceptedRevision','acceptedIntoDocumentId']);
@@ -143,6 +143,18 @@ export function mergeBranch(base, current, branch) {
   }
   fail(conflicts.length === 0, `branch conflicts: ${conflicts.join(', ')}`, 409, 'branch_conflict');
   if (current.schemaVersion === 3) {
+    for (const field of ['artboards','guides','savedSelections']) {
+      const sets = [base,current,branch].map(d => new Map(d[field].map(item => [item.id,item]))), collection = new Map(sets[1]);
+      for (const id of new Set([...sets[0].keys(),...sets[2].keys()])) {
+        const [before,live,candidate] = sets.map(set => set.get(id));
+        if (!equal(before,candidate)) {
+          fail(equal(before,live) || equal(live,candidate), `branch conflict: ${field}:${id}`, 409, 'branch_conflict');
+          if (candidate) collection.set(id,clone(candidate)); else collection.delete(id);
+        }
+      }
+      merged[field] = [...collection.values()];
+    }
+    merged.requiredFeatures = [...new Set([...current.requiredFeatures,...branch.requiredFeatures])];
     const contents = new Map(current.contentAssets.map(c => [c.id,c]));
     for (const c of branch.contentAssets) { const old = contents.get(c.id); fail(!old || equal(old,c), 'content identity conflict', 409, 'branch_conflict'); contents.set(c.id,clone(c)); }
     merged.contentAssets = [...contents.values()];

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { isLiteralPaint as literalPaint } from './core/paints.mjs';
 import { fail, clone, validId, canonical, timestamp } from './domain.mjs';
 export const CONTENT_MIME = 'application/vnd.weiai.image2-content+json';
 export const IDENTITY = Object.freeze([1, 0, 0, 1, 0, 0]);
@@ -81,13 +82,21 @@ export function normalizeMask(v) {
     return out;
 }
 export function normalizeEffect(v) {
-    obj(v, 'effect'); fields(v, ['id','type','enabled','params'], 'effect');
-    const effect={enabled:true,...clone(v)};
-    fail(validId(effect.id)&&typeof effect.enabled==='boolean','invalid effect identity');
-    obj(effect.params,'effect params');
-    if(effect.type==='colorMatrix'){fields(effect.params,['matrix'],'color matrix');fail(Array.isArray(effect.params.matrix)&&effect.params.matrix.length===20&&effect.params.matrix.every(finite),'color matrix requires 20 finite values');}
-    else if(effect.type==='gaussianBlur'){fields(effect.params,['sigma'],'blur');fail(finite(effect.params.sigma)&&effect.params.sigma>=0&&effect.params.sigma<=256,'invalid gaussian blur sigma');}
-    else fail(false,'图层效果尚不可用，请保留原内容',422,'unsupported_feature');
+    obj(v, 'effect');
+    fields(v, ['id', 'type', 'enabled', 'params'], 'effect');
+    const effect = { enabled: true, ...clone(v) };
+    fail(validId(effect.id) && typeof effect.enabled === 'boolean', 'invalid effect identity');
+    obj(effect.params, 'effect params');
+    if (effect.type === 'colorMatrix') {
+        fields(effect.params, ['matrix'], 'color matrix');
+        fail(Array.isArray(effect.params.matrix) && effect.params.matrix.length === 20 && effect.params.matrix.every(n=>typeof n==='number'&&Number.isFinite(n)), 'color matrix requires 20 finite values');
+    }
+    else if (effect.type === 'gaussianBlur') {
+        fields(effect.params, ['sigma'], 'blur');
+        fail(finite(effect.params.sigma) && effect.params.sigma >= 0 && effect.params.sigma <= 256, 'invalid gaussian blur sigma');
+    }
+    else
+        fail(false, '图层效果尚不可用，请保留原内容', 422, 'unsupported_feature');
     return effect;
 }
 const LAYER_KEYS = ['id', 'type', 'name', 'parentId', 'z', 'visible', 'locked', 'opacity', 'contentId', 'localBounds', 'matrix', 'blendMode', 'compositeMode', 'clipToLayerId', 'masks', 'effects', 'metadata'];
@@ -102,19 +111,19 @@ export function normalizeV3Layer(v) {
     out.matrix = matrix(out.matrix);
     for (const k of ['parentId', 'contentId', 'clipToLayerId'])
         optionalId(out[k], k);
-    fail(['normal','multiply','screen','overlay','darken','lighten','difference','exclusion'].includes(out.blendMode), '混合模式尚不可用', 422, 'unsupported_feature');
+    fail(['normal', 'multiply', 'screen', 'overlay', 'darken', 'lighten', 'difference', 'exclusion'].includes(out.blendMode), '混合模式尚不可用', 422, 'unsupported_feature');
     fail(['isolated', 'passthrough'].includes(out.compositeMode), 'invalid group composite mode');
     fail(out.type === 'group' || out.compositeMode === 'isolated', 'passthrough is only valid for groups');
-    fail(Array.isArray(out.effects)&&out.effects.length<=100,'invalid layer effects');
-    out.effects=out.effects.map(normalizeEffect);
-    fail(new Set(out.effects.map(e=>e.id)).size===out.effects.length,'duplicate effect identity');
-    const enabledEffects=out.effects.filter(e=>e.enabled);
-    fail(new Set(enabledEffects.map(e=>e.type)).size===enabledEffects.length,'同种效果叠加尚不可用',422,'unsupported_feature');
+    fail(Array.isArray(out.effects) && out.effects.length <= 20, 'invalid layer effects');
+    out.effects = out.effects.map(normalizeEffect);
+    fail(new Set(out.effects.map(e => e.id)).size === out.effects.length, 'duplicate effect identity');
+    const enabledEffects = out.effects.filter(e => e.enabled);
     fail(out.type !== 'adjustment', '调整图层尚不可用', 422, 'unsupported_feature');
     fail(Array.isArray(out.masks) && out.masks.length <= 100, 'invalid layer masks');
     out.masks = out.masks.map(normalizeMask);
     fail(new Set(out.masks.map(m => m.id)).size === out.masks.length, 'duplicate mask identity');
-    if(out.compositeMode==='passthrough')fail(out.opacity===1&&out.blendMode==='normal'&&!enabledEffects.length&&!out.masks.some(m=>m.enabled),'穿透组上的透明度、效果或蒙版尚不可用',422,'unsupported_feature');
+    if (out.compositeMode === 'passthrough')
+        fail(out.opacity === 1 && out.blendMode === 'normal' && !enabledEffects.length && !out.masks.some(m => m.enabled), '穿透组上的透明度、效果或蒙版尚不可用', 422, 'unsupported_feature');
     if (out.type === 'group')
         fail(out.contentId === undefined, 'group cannot own drawing content');
     else
@@ -211,14 +220,22 @@ export function validateV3Document(d) {
     if (d.metadata !== undefined)
         d.metadata = metadata(d.metadata);
     const required = new Set(d.requiredFeatures);
-    for(const f of ['matrix','content-assets'])required.add(f);
-    if(d.layers.some(l=>l.masks.length))required.add('layer-masks');
-    if(d.layers.some(l=>l.blendMode!=='normal'))required.add('blend-modes');
-    if(d.layers.some(l=>l.effects.length))required.add('layer-effects');
-    if(d.layers.some(l=>l.clipToLayerId))required.add('clipping');
-    if(d.layers.some(l=>l.compositeMode==='passthrough'))required.add('passthrough-groups');
-    for(const [key,feature]of [['artboards','artboards'],['guides','guides'],['savedSelections','saved-selections']])if(d[key].length)required.add(feature);
-    d.requiredFeatures=[...required];
+    for (const f of ['matrix', 'content-assets'])
+        required.add(f);
+    if (d.layers.some(l => l.masks.length))
+        required.add('layer-masks');
+    if (d.layers.some(l => l.blendMode !== 'normal'))
+        required.add('blend-modes');
+    if (d.layers.some(l => l.effects.length))
+        required.add('layer-effects');
+    if (d.layers.some(l => l.clipToLayerId))
+        required.add('clipping');
+    if (d.layers.some(l => l.compositeMode === 'passthrough'))
+        required.add('passthrough-groups');
+    for (const [key, feature] of [['artboards', 'artboards'], ['guides', 'guides'], ['savedSelections', 'saved-selections']])
+        if (d[key].length)
+            required.add(feature);
+    d.requiredFeatures = [...required];
     return d;
 }
 export function createV3Document(body = {}) {
@@ -259,7 +276,18 @@ export function applyV3Commands(document, commands) {
     for (const c of commands) {
         obj(c, 'command');
         fail(typeof c.type === 'string', 'command type is required');
-        const geometryBefore = ['layer.update','layer.transformWorld'].includes(c.type) ? clone(out) : null;
+        const commandFields = {
+            'content.add': ['content'], 'layer.add': ['layer'], 'layer.update': ['layerId', 'patch'],
+            'layer.content': ['layerId', 'contentId', 'localBounds'], 'layer.transformWorld': ['layerIds', 'deltaWorld'],
+            'layer.remove': ['layerId'], 'layer.reorder': ['layerIds'], 'mask.upsert': ['layerId', 'mask'],
+            'mask.remove': ['layerId', 'maskId'], 'mask.reorder': ['layerId', 'maskIds'],
+            'selection.upsert': ['selection'], 'selection.remove': ['selectionId'],
+            'artboard.upsert': ['artboard'], 'artboard.remove': ['artboardId'],
+            'guide.upsert': ['guide'], 'guide.remove': ['guideId'], 'document.update': ['patch'],
+        };
+        fail(commandFields[c.type], 'unsupported command');
+        fields(c, ['type', ...commandFields[c.type]], 'command');
+        const geometryBefore = ['layer.update', 'layer.transformWorld'].includes(c.type) ? clone(out) : null;
         if (c.type === 'content.add') {
             const content = normalizeContentDescriptor(c.content);
             const old = out.contentAssets.find(v => v.id === content.id);
@@ -309,7 +337,6 @@ export function applyV3Commands(document, commands) {
                 const parent = l.parentId ? worldMatrix(snapshot, l.parentId) : [...IDENTITY];
                 l.matrix = multiplyMatrix(inverseMatrix(parent), multiplyMatrix(delta, worldMatrix(snapshot, id)));
             }
-
         }
         else if (c.type === 'layer.remove') {
             mutable(c.layerId);
@@ -374,46 +401,53 @@ export function applyV3Commands(document, commands) {
         }
         else
             fail(false, 'unsupported command');
-        if(geometryBefore) preserveMaskLinkage(geometryBefore,out);
+        if (geometryBefore)
+            preserveMaskLinkage(geometryBefore, out);
     }
     return validateV3Document(out);
 }
 function preserveMaskLinkage(before, after) {
-    const oldLayers=new Map(before.layers.map(layer=>[layer.id,layer]));
-    for(const layer of after.layers) {
-        if(!layer.masks.length||!oldLayers.has(layer.id))continue;
-        const oldWorld=worldMatrix(before,layer.id),newWorld=worldMatrix(after,layer.id);
-        if(canonical(oldWorld)===canonical(newWorld))continue;
-        const oldMasks=new Map(oldLayers.get(layer.id).masks.map(mask=>[mask.id,mask]));
-        for(const mask of layer.masks) {
-            const old=oldMasks.get(mask.id);
+    const oldLayers = new Map(before.layers.map(layer => [layer.id, layer]));
+    for (const layer of after.layers) {
+        if (!layer.masks.length || !oldLayers.has(layer.id))
+            continue;
+        const oldWorld = worldMatrix(before, layer.id), newWorld = worldMatrix(after, layer.id);
+        if (canonical(oldWorld) === canonical(newWorld))
+            continue;
+        const oldMasks = new Map(oldLayers.get(layer.id).masks.map(mask => [mask.id, mask]));
+        for (const mask of layer.masks) {
+            const old = oldMasks.get(mask.id);
             // A mask's independently authored matrix/space takes precedence.
-            if(!old||canonical(old.matrix)!==canonical(mask.matrix)||old.coordinateSpace!==mask.coordinateSpace)continue;
-            if(!mask.linked&&mask.coordinateSpace==='layerLocal')mask.matrix=multiplyMatrix(multiplyMatrix(inverseMatrix(newWorld),oldWorld),mask.matrix);
-            else if(mask.linked&&mask.coordinateSpace==='document')mask.matrix=multiplyMatrix(multiplyMatrix(newWorld,inverseMatrix(oldWorld)),mask.matrix);
+            if (!old || canonical(old.matrix) !== canonical(mask.matrix) || old.coordinateSpace !== mask.coordinateSpace)
+                continue;
+            if (!mask.linked && mask.coordinateSpace === 'layerLocal')
+                mask.matrix = multiplyMatrix(multiplyMatrix(inverseMatrix(newWorld), oldWorld), mask.matrix);
+            else if (mask.linked && mask.coordinateSpace === 'document')
+                mask.matrix = multiplyMatrix(multiplyMatrix(newWorld, inverseMatrix(oldWorld)), mask.matrix);
         }
     }
 }
 function validatePathData(data) {
     const tokens = data.match(/[MmZzLlHhVvCcSsQqTtAa]|[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/g) || [];
     fail(tokens.length > 0 && /^[Mm]$/.test(tokens[0]) && data.replace(/[MmZzLlHhVvCcSsQqTtAa]|[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/g, '').replace(/[\s,]/g, '') === '', 'invalid SVG path grammar');
-    const arity = {m:2,l:2,h:1,v:1,c:6,s:4,q:4,t:2,a:7,z:0};
-    for (let i=0;i<tokens.length;) {
-        const command=tokens[i++];
+    const arity = { m: 2, l: 2, h: 1, v: 1, c: 6, s: 4, q: 4, t: 2, a: 7, z: 0 };
+    for (let i = 0; i < tokens.length;) {
+        const command = tokens[i++];
         fail(/^[MmZzLlHhVvCcSsQqTtAa]$/.test(command), 'SVG path command is required');
-        const count=arity[command.toLowerCase()];
-        let groups=0;
-        while(i<tokens.length&&!/^[MmZzLlHhVvCcSsQqTtAa]$/.test(tokens[i])) {
-            fail(count>0&&i+count<=tokens.length, 'incomplete SVG path coordinates');
-            const args=tokens.slice(i,i+count).map(Number);
-            fail(args.every(finite),'invalid SVG path coordinates');
-            if(command.toLowerCase()==='a')fail(args[0]>=0&&args[1]>=0&&[0,1].includes(args[3])&&[0,1].includes(args[4]),'invalid SVG arc parameters');
-            i+=count;groups++;
+        const count = arity[command.toLowerCase()];
+        let groups = 0;
+        while (i < tokens.length && !/^[MmZzLlHhVvCcSsQqTtAa]$/.test(tokens[i])) {
+            fail(count > 0 && i + count <= tokens.length, 'incomplete SVG path coordinates');
+            const args = tokens.slice(i, i + count).map(Number);
+            fail(args.every(finite), 'invalid SVG path coordinates');
+            if (command.toLowerCase() === 'a')
+                fail(args[0] >= 0 && args[1] >= 0 && [0, 1].includes(args[3]) && [0, 1].includes(args[4]), 'invalid SVG arc parameters');
+            i += count;
+            groups++;
         }
-        fail(count===0||groups>0, 'SVG path coordinates are required');
+        fail(count === 0 || groups > 0, 'SVG path coordinates are required');
     }
 }
-const literalPaint = v => typeof v==='string' && /^(?:#[0-9a-f]{6}(?:[0-9a-f]{2})?|black|white|transparent|none)$/i.test(v);
 const paint = v => boundedString(v, 500) && !/(?:url|var)\s*\(|javascript|https?:|data:/i.test(v);
 export function validateContentJSON(value) {
     obj(value, 'content JSON');
@@ -489,7 +523,7 @@ export function validateContentJSON(value) {
     }
     else if (value.kind === 'text') {
         fields(value, ['formatVersion', 'kind', 'text', 'fontAssetId', 'fontFamily', 'fontWeight', 'fontSize', 'fill', 'stroke', 'strokeWidth', 'tracking', 'lineHeight', 'align', 'locale', 'mode'], 'text content');
-        fail(value.mode===undefined||value.mode==='legacy-lines','paragraph layout mode is unavailable',422,'unsupported_feature');
+        fail(value.mode === undefined || value.mode === 'legacy-lines', 'paragraph layout mode is unavailable', 422, 'unsupported_feature');
         fail(boundedString(value.text, 100000) && validId(value.fontAssetId), 'text requires actual font asset and text');
         fail(finite(value.fontSize) && value.fontSize > 0 && value.fontSize <= 32768, 'invalid text font size');
         for (const k of ['fill', 'stroke'])
@@ -525,12 +559,11 @@ export function validateContentJSON(value) {
             fields(value.originalStyle, ['fontFamily', 'fontSize', 'fontWeight', 'fill', 'stroke', 'strokeWidth', 'tracking', 'lineHeight'], 'original text style');
             for (const k of ['fill', 'stroke'])
                 if (value.originalStyle[k] !== undefined)
-                    fail(paint(value.originalStyle[k]), 'invalid original paint');
+                    fail(literalPaint(value.originalStyle[k]), 'invalid original paint');
         }
     }
     else {
         fail(false, '瓦片内容尚不可用', 422, 'unsupported_feature');
-
     }
     return value;
 }

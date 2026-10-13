@@ -16,8 +16,8 @@ export async function image2Api<T>(path: string, body?: unknown, method?: string
   return value.data as T;
 }
 export const assetUrl = (id: string) => `${IMAGE2_BASE}/assets/${encodeURIComponent(id)}/content`;
-export async function uploadAsset(documentId: string, file: Blob, name: string, metadata?: Record<string, unknown>) {
-  return image2Api<ImageAsset>('/assets', { documentId, name, mime: file.type || 'application/octet-stream', data: await blobBase64(file), metadata });
+export async function uploadAsset(documentId: string, file: Blob, name: string, metadata?: Record<string, unknown>, inputs?: Array<{role:string;assetId:string;hash?:string}>) {
+  return image2Api<ImageAsset>('/assets', { documentId, name, mime: file.type || 'application/octet-stream', data: await blobBase64(file), metadata, inputs });
 }
 export function unwrapDocument(value: ImageDocument | { document: ImageDocument }): ImageDocument {
   return 'document' in value ? value.document : value;

@@ -1,0 +1,11 @@
+import type {Matrix,Rect,RectTuple} from './render-graph.mjs';
+export const IDENTITY: readonly [1,0,0,1,0,0];
+export function matrixError(message:string,code?:string):Error & {status:422;code:string};
+export function validateMatrix(matrix:Matrix):Matrix;
+export function multiply(a:Matrix,b:Matrix):Matrix;
+export function inverse(matrix:Matrix):Matrix;
+export function point(matrix:Matrix,p:{x:number;y:number}):{x:number;y:number};
+export function bounds(matrix:Matrix,rect:RectTuple):Rect;
+export function skiaMatrix(matrix:Matrix):number[];
+export function worldDelta(local:Matrix,parentWorld:Matrix,deltaWorld:Matrix):Matrix;
+export function rectArray(rect:Rect|RectTuple):RectTuple;

@@ -1,0 +1,123 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import type { Editor } from 'tldraw';
+import type { DocumentCommand, ImageDocument, LayerMask, Matrix2D } from '../lib/image2/types';
+import type { QueuedBatch } from '../lib/image2/queue';
+import { applyProfessionalCommands, applyProfessionalDraft, asProfessional, clippingBase, copyOnWriteContent, deriveWorldDelta, duplicateProfessionalLayerCommands, groupProfessionalLayerCommands, inverseMatrix, maskWorldMatrix, multiplyMatrix, PROFESSIONAL_IDENTITY, transformBounds, transformPoint, ungroupProfessionalLayerCommands, worldBounds, worldMatrix, type RawProfessionalDocument, type RawProfessionalLayer } from '../lib/image2/professional-model';
+import { professionalLegacyView, professionalLayerShapeId, professionalProxyRecords, projectProfessionalDocument } from '../lib/image2/professional-projection';
+
+const cmd=(value:unknown)=>value as DocumentCommand;
+const layer=(id:string,patch:Partial<RawProfessionalLayer>={}):RawProfessionalLayer=>({id,type:'raster',name:id,contentId:'pixels',z:0,visible:true,locked:false,opacity:1,localBounds:{x:0,y:0,width:100,height:50},matrix:[1,0,0,1,0,0],blendMode:'normal',compositeMode:'isolated',masks:[],effects:[],...patch});
+function document():ImageDocument {
+  const d:RawProfessionalDocument={id:'doc',schemaVersion:3,revision:7,name:'设计',width:1024,height:768,createdAt:0,updatedAt:0,assetIds:['pixel-asset','font-asset','text-asset','svg-asset','svg-content-asset'],contentAssets:[{id:'pixels',kind:'raster',assetId:'pixel-asset',formatVersion:1},{id:'text',kind:'text',assetId:'text-asset',formatVersion:1},{id:'svg',kind:'svg',assetId:'svg-content-asset',formatVersion:1}],layers:[layer('photo')],artboards:[],guides:[],savedSelections:[],resolution:{dpiX:300,dpiY:300,unit:'px'},workingColor:{space:'srgb',bitDepth:8,alphaEncoding:'straight'},renderVersion:'weiai-rg-1',requiredFeatures:['matrix','content-assets']};return d as unknown as ImageDocument;
+}
+const raw=(d:ImageDocument)=>asProfessional(d);
+const close=(a:readonly number[],b:readonly number[])=>{assert.equal(a.length,b.length);a.forEach((n,i)=>assert.ok(Math.abs(n-b[i])<1e-8,`${a} != ${b}`));};
+const text=()=>({formatVersion:1,kind:'text',text:'中文',fontAssetId:'font-asset',fontFamily:'实际字体',fontSize:24,fontWeight:400,fill:'#000000',tracking:1,lineHeight:1.2});
+const batch=(d:ImageDocument,commands:DocumentCommand[],patch:Partial<QueuedBatch>={}):QueuedBatch=>({id:'request',documentId:d.id,createdAt:1,state:'queued',commands,...patch});
+
+test('v3 draft is atomic, keeps server revision, and rejects compatibility coordinates and drawing metadata',()=>{
+  const d=document(),snapshot=structuredClone(d);
+  const changed=applyProfessionalCommands(d,[cmd({type:'layer.update',layerId:'photo',patch:{matrix:[2,.5,.25,3,9,-4]}})]);
+  assert.equal(changed.revision,7);assert.ok(!('x' in raw(changed).layers[0]));assert.deepEqual(d,snapshot);
+  assert.throws(()=>applyProfessionalCommands(d,[cmd({type:'document.update',patch:{name:'临时'}}),cmd({type:'layer.update',layerId:'photo',patch:{x:8}})]),/unsupported layer/);
+  assert.throws(()=>applyProfessionalCommands(d,[cmd({type:'layer.update',layerId:'photo',patch:{metadata:{paths:[{d:'M0 0'}]}}})]),/immutable content/);assert.deepEqual(d,snapshot);
+});
+test('matrix composition and inversion retain skew, nested parents and source-local offsets',()=>{
+  const d=document(),p=layer('parent',{type:'group',contentId:undefined,matrix:[2,.5,.3,3,100,-20]}),c=layer('photo',{parentId:p.id,matrix:[1,.25,-.5,1,8,12]});raw(d).layers=[p,c];
+  close(worldMatrix(d,c.id),multiplyMatrix(p.matrix,c.matrix));const world=transformPoint(worldMatrix(d,c.id),{x:-7,y:14}),local=transformPoint(inverseMatrix(worldMatrix(d,c.id)),world);close([local.x,local.y],[-7,14]);
+});
+test('world bounds use all four transformed corners and group child unions without rounding',()=>{
+  const m:Matrix2D=[0,2,-3,.5,10,-4],b={x:-2,y:3,width:4,height:6};assert.deepEqual(transformBounds(m,b),{x:-17,y:-6.5,width:18,height:11});
+  const d=document();raw(d).layers=[layer('group',{type:'group',contentId:undefined}),layer('a',{parentId:'group',matrix:[1,0,0,1,-100,20]}),layer('b',{parentId:'group',matrix:[1,.5,.25,1,30,-40]})];assert.deepEqual(worldBounds(d,'group'),{x:-100,y:-40,width:242.5,height:110});
+});
+test('proxy resize and rotation derive one world delta while preserving the raw shear and selected-ancestor behavior',()=>{
+  const d=document(),p=layer('group',{type:'group',contentId:undefined,matrix:[2,.4,.6,3,20,-10]}),c=layer('photo',{parentId:p.id,matrix:[1,.2,-.3,1,8,9]});raw(d).layers=[p,c];
+  const before=worldBounds(d,'photo'),after={x:before.x+11,y:before.y-7,rotation:Math.PI/2,props:{w:before.width*2,h:before.height*.5}},delta=deriveWorldDelta({...before,rotation:0},after),old=worldMatrix(d,'photo');
+  const changed=applyProfessionalCommands(d,[{type:'layer.transformWorld',layerIds:['photo'],deltaWorld:delta}]);close(worldMatrix(changed,'photo'),multiplyMatrix(delta,old));close(raw(changed).layers[0].matrix,p.matrix);
+  const both=applyProfessionalCommands(d,[{type:'layer.transformWorld',layerIds:['group','photo'],deltaWorld:delta}]);close(worldMatrix(both,'photo'),multiplyMatrix(delta,old));assert.ok(Math.abs(raw(changed).layers[1].matrix[2])>0);
+  close(deriveWorldDelta({x:2,y:3,width:.2,height:.4,rotation:0},{x:22,y:13,rotation:0,props:{w:1,h:1}}),[1,0,0,1,20,10]);
+});
+test('singular parent, malformed matrices and zero-size proxies fail without changing source',()=>{
+  const d=document();raw(d).layers=[layer('g',{type:'group',contentId:undefined,matrix:[0,0,0,1,0,0]}),layer('photo',{parentId:'g'})];const snapshot=structuredClone(d);
+  assert.throws(()=>applyProfessionalCommands(d,[{type:'layer.transformWorld',layerIds:['photo'],deltaWorld:[1,0,0,1,10,20]}]),(e:unknown)=>(e as {code:string}).code==='MATRIX_NOT_INVERTIBLE');
+  assert.throws(()=>deriveWorldDelta({x:0,y:0,width:0,height:10},{x:0,y:0,width:1,height:10}),/proxy/);assert.throws(()=>inverseMatrix([1,0,0,NaN,0,0]),/matrix/);assert.deepEqual(d,snapshot);
+});
+test('four mask linkage cases match world-space expectations through an ancestor transform',()=>{
+  const d=document(),m=(id:string,coordinateSpace:LayerMask['coordinateSpace'],linked:boolean):LayerMask=>({id,kind:'raster',contentId:'pixels',channel:'alpha',coordinateSpace,linked,enabled:true,inverted:false,density:1,featherPx:0,matrix:[3,0,0,4,7,8]});
+  raw(d).layers=[layer('g',{type:'group',contentId:undefined,matrix:[2,.5,.2,3,10,20]}),layer('photo',{parentId:'g',matrix:[1,0,0,1,4,5],masks:[m('lu','layerLocal',false),m('dl','document',true),m('ll','layerLocal',true),m('du','document',false)]})];
+  const original=raw(d).layers[1].masks,delta:Matrix2D=[0,1,-1,0,40,70],changed=applyProfessionalCommands(d,[{type:'layer.transformWorld',layerIds:['g'],deltaWorld:delta}]),masks=raw(changed).layers[1].masks;
+  close(maskWorldMatrix(changed,'photo',masks[0]),maskWorldMatrix(d,'photo',original[0]));close(maskWorldMatrix(changed,'photo',masks[1]),multiplyMatrix(delta,maskWorldMatrix(d,'photo',original[1])));close(masks[2].matrix,original[2].matrix);close(masks[3].matrix,original[3].matrix);
+});
+test('an explicitly authored mask matrix takes precedence over linkage compensation',()=>{
+  const d=document(),mask:LayerMask={id:'mask',kind:'raster',contentId:'pixels',channel:'alpha',coordinateSpace:'layerLocal',linked:false,enabled:true,inverted:false,density:1,featherPx:0,matrix:[1,0,0,1,0,0]};raw(d).layers[0].masks=[mask];
+  const matrix:Matrix2D=[1,0,0,1,90,80],changed=applyProfessionalCommands(d,[cmd({type:'layer.update',layerId:'photo',patch:{matrix:[1,0,0,1,10,20],masks:[{...mask,matrix}]}})]);close(raw(changed).layers[0].masks[0].matrix,matrix);close(mask.matrix,PROFESSIONAL_IDENTITY);
+});
+test('text editing produces a fresh immutable payload and only rebinds its chosen layer',()=>{
+  const d=document();raw(d).layers=[layer('a',{type:'text',contentId:'text'}),layer('b',{type:'text',contentId:'text'})];d.assetIds.push('new-text-asset');const source=text(),snapshot=structuredClone(source),edit=copyOnWriteContent(d,'a',source,'new-text-asset','new-text',{text:'新中文',fontSize:48});
+  assert.equal(edit.mime,'application/vnd.weiai.image2-content+json');const changed=applyProfessionalCommands(d,edit.commands);assert.equal(raw(changed).layers[0].contentId,'new-text');assert.equal(raw(changed).layers[1].contentId,'text');assert.deepEqual(source,snapshot);assert.equal(raw(d).contentAssets.find(c=>c.id==='text')!.assetId,'text-asset');assert.ok(!edit.commands.some(c=>c.type==='layer.update'));
+});
+test('SVG paints stay in immutable payloads and recursive foreign font/resource references are rejected',()=>{
+  const d=document();raw(d).layers=[layer('logo',{type:'vector',contentId:'svg'})];const source={formatVersion:1,kind:'svg',sourceAssetId:'svg-asset',fontAssetIds:['font-asset'],pathStyles:{'original.numeric-id':{fill:'#ff0000'}}};
+  const edit=copyOnWriteContent(d,'logo',source,'new-svg-asset','new-svg',{pathStyles:{'original.numeric-id':{fill:'#00ff00',strokeWidth:2}}});assert.deepEqual(source.pathStyles,{'original.numeric-id':{fill:'#ff0000'}});assert.equal((edit.payload.pathStyles as Record<string,{fill:string}>)['original.numeric-id'].fill,'#00ff00');
+  assert.throws(()=>copyOnWriteContent(d,'logo',source,'new-svg-asset','new-svg',{fontAssetIds:['foreign-font']}),/not registered/);assert.throws(()=>copyOnWriteContent(d,'logo',source,'new-svg-asset','new-svg',{sourceAssetId:'foreign-source'}),/not registered/);assert.throws(()=>copyOnWriteContent(d,'logo',source,'new-svg-asset','new-svg',{pathStyles:{p:{fill:'url(https://outside.invalid/a)'}}}),/paint/);
+});
+test('content identities are immutable, exact descriptor replay is harmless, and historical references stay independent',()=>{
+  const d=document(),old=raw(d).contentAssets[0],replayed=applyProfessionalCommands(d,[{type:'content.add',content:old}]);assert.equal(raw(replayed).contentAssets.length,raw(d).contentAssets.length);
+  assert.throws(()=>applyProfessionalCommands(d,[{type:'content.add',content:{...old,assetId:'other'}}]),/immutable/);assert.throws(()=>applyProfessionalCommands(d,[{type:'content.add',content:{id:'missing',kind:'raster',assetId:'unuploaded',formatVersion:1}}]),/registered/);
+  assert.throws(()=>copyOnWriteContent(d,'photo',{formatVersion:1,kind:'raster'},'pixel-asset','new-content'),/fresh/);assert.equal(raw(d).layers[0].contentId,'pixels');
+});
+test('structured masks and saved selections validate actual content kinds and register required features',()=>{
+  const d=document(),changed=applyProfessionalCommands(d,[cmd({type:'mask.upsert',layerId:'photo',mask:{id:'mask',kind:'raster',contentId:'pixels'}}),cmd({type:'selection.upsert',selection:{id:'saved',contentId:'pixels',name:'主体'}})]);
+  assert.equal(raw(changed).layers[0].masks[0].coordinateSpace,'layerLocal');assert.ok(changed.requiredFeatures!.includes('layer-masks'));assert.ok(changed.requiredFeatures!.includes('saved-selections'));
+  assert.throws(()=>applyProfessionalCommands(d,[cmd({type:'mask.upsert',layerId:'photo',mask:{id:'bad',kind:'raster',contentId:'svg'}})]),/kind/);assert.throws(()=>applyProfessionalCommands(d,[cmd({type:'selection.upsert',selection:{id:'bad',contentId:'text'}})]),/mask-compatible/);
+});
+test('clip bases must remain lower siblings and orphaning a clip fails atomically',()=>{
+  const d=document();raw(d).layers=[layer('base',{z:0}),layer('top',{z:1,clipToLayerId:'base'})];assert.equal(clippingBase(d,'top')!.id,'base');const snapshot=structuredClone(d);
+  assert.throws(()=>applyProfessionalCommands(d,[{type:'layer.remove',layerId:'base'}]),/clipping/);assert.throws(()=>applyProfessionalCommands(d,[{type:'layer.reorder',layerIds:['top','base']}]),/clipping/);assert.throws(()=>groupProfessionalLayerCommands(d,['base','top'],'bad.id'),/identity/);assert.deepEqual(d,snapshot);
+});
+test('multi-command guides/artboards/effects commit once, inherited locks and unsupported effects fail atomically',()=>{
+  const d=document(),commands=[cmd({type:'artboard.upsert',artboard:{id:'board',bounds:{x:-10,y:20,width:200,height:100}}}),cmd({type:'guide.upsert',guide:{id:'guide',axis:'x',position:-10,artboardId:'board',locked:true}}),cmd({type:'layer.update',layerId:'photo',patch:{effects:[{id:'blur',type:'gaussianBlur',params:{sigma:2}}],blendMode:'multiply'}})],changed=applyProfessionalCommands(d,commands);
+  assert.equal(changed.revision,7);assert.equal(changed.guides!.length,1);assert.ok(changed.requiredFeatures!.includes('layer-effects'));assert.throws(()=>applyProfessionalCommands(changed,[cmd({type:'guide.remove',guideId:'guide'})]),/locked guide/);assert.throws(()=>applyProfessionalCommands(d,[commands[0],cmd({type:'layer.update',layerId:'photo',patch:{effects:[{id:'custom',type:'shader',params:{}}]}})]),/效果/);assert.equal(d.artboards!.length,0);
+  raw(d).layers=[layer('group',{type:'group',contentId:undefined,locked:true}),layer('photo',{parentId:'group'})];assert.throws(()=>applyProfessionalCommands(d,[cmd({type:'layer.update',layerId:'photo',patch:{locked:false}})]),/locked layer/);
+});
+test('group/ungroup preserve full world matrices, stable content and existing sibling order through skewed parents',()=>{
+  const d=document();raw(d).layers=[layer('parent',{type:'group',contentId:undefined,matrix:[2,.5,.2,3,100,-20]}),layer('a',{parentId:'parent',z:0,matrix:[1,.4,.3,1,10,20]}),layer('b',{parentId:'parent',z:1,matrix:[.5,.3,-.2,2,-40,30]}),layer('outside',{z:2,parentId:'parent'})];
+  const originals=['a','b'].map(key=>worldMatrix(d,key)),grouped=applyProfessionalCommands(d,groupProfessionalLayerCommands(d,['a','b'],'new-group'));['a','b'].forEach((key,i)=>close(worldMatrix(grouped,key),originals[i]));const split=applyProfessionalCommands(grouped,ungroupProfessionalLayerCommands(grouped,'new-group'));['a','b'].forEach((key,i)=>close(worldMatrix(split,key),originals[i]));assert.deepEqual(raw(split).layers.filter(l=>l.parentId==='parent').sort((a,b)=>a.z-b.z).map(l=>l.id),['a','b','outside']);assert.equal(raw(split).layers.find(l=>l.id==='a')!.contentId,'pixels');
+  raw(grouped).layers.find(l=>l.id==='new-group')!.opacity=.5;assert.throws(()=>ungroupProfessionalLayerCommands(grouped,'new-group'),/保留合成/);
+});
+test('unknown ACK and historical drafts never apply a matrix twice or overwrite a new revision; frozen requests stay unchanged',()=>{
+  const d=document(),commands:DocumentCommand[]=[{type:'layer.transformWorld',layerIds:['photo'],deltaWorld:[1,0,0,1,30,40]}],frozen=batch(d,commands,{submittedRevision:7}),snapshot=structuredClone(frozen),optimistic=applyProfessionalDraft(d,[frozen]);close(raw(optimistic).layers[0].matrix,[1,0,0,1,30,40]);assert.equal(optimistic.revision,7);
+  const ack={...optimistic,revision:8};assert.deepEqual(applyProfessionalDraft(ack,[frozen,batch(d,[cmd({type:'layer.update',layerId:'photo',patch:{name:'later'}})],{id:'later'})]),ack);assert.deepEqual(frozen,snapshot);
+  assert.deepEqual(applyProfessionalDraft({...d,revision:6},[frozen]),{...d,revision:6});const blocked=batch(d,commands,{state:'blocked'});assert.deepEqual(applyProfessionalDraft(d,[blocked]),d);assert.deepEqual(applyProfessionalDraft(d,[{...frozen,documentId:'foreign'}]),d);
+});
+test('legacy dialogs derive real font/SVG values and preserved pixels from active immutable content only',()=>{
+  const d=document();d.assetIds.push('preserved-json');raw(d).contentAssets.push({id:'preserved',kind:'preservedText',assetId:'preserved-json',formatVersion:1});raw(d).layers=[layer('text-layer',{type:'text',contentId:'text',matrix:[2,.5,.3,1,8,9]}),layer('logo',{type:'vector',contentId:'svg'}),layer('unknown',{type:'text',contentId:'preserved'})];const snapshot=structuredClone(d),payload=text(),cache={text:payload,svg:{formatVersion:1,kind:'svg',sourceAssetId:'svg-asset',fontAssetIds:['font-asset'],fill:'#00ff00',pathStyles:{p:{stroke:'#000000'}}},preserved:{formatVersion:1,kind:'preservedText',assetId:'pixel-asset',text:'原字',desiredText:'想改字',fontStatus:'unknown',status:'preserved'}};
+  const view=professionalLegacyView(d,new Map(Object.entries(cache)));assert.equal(view.layers[0].text,'中文');assert.equal(view.layers[0].fontAssetId,'font-asset');assert.equal(view.layers[0].fontSize,24);assert.equal(view.layers[1].assetId,'svg-asset');assert.equal(view.layers[2].assetId,'pixel-asset');assert.equal(view.layers[2].text,'原字');assert.equal(view.layers[2].metadata!.desiredText,'想改字');assert.equal(view.layers[2].metadata!.fontConfirmed,false);assert.deepEqual(d,snapshot);view.layers[0].text='画面未提交';assert.equal(payload.text,'中文');
+  const missing=professionalLegacyView(d,{});assert.equal(missing.layers[0].metadata!.professionalContentReady,false);assert.equal(missing.layers[0].text,undefined);
+});
+test('transparent proxy projection is root-flattened, stable per copied layer, and preserves unrelated canvas shapes/selection',()=>{
+  const d=document();raw(d).layers=[layer('group',{type:'group',contentId:undefined,matrix:[2,.5,.3,3,10,20],visible:false,locked:true,metadata:{legacyShapeId:'shape:shared'}}),layer('photo',{parentId:'group',metadata:{legacyShapeId:'shape:shared',legacyRecord:{props:{src:'large-original-snapshot'}}},matrix:[1,.2,.4,1,5,6]})];const snapshot=structuredClone(d),records=professionalProxyRecords(d,'page:root');assert.equal(records[0].id,'shape:image2-group');assert.equal(records[1].id,'shape:image2-photo');assert.equal(professionalLayerShapeId(raw(d).layers[1]),records[1].id);assert.equal(records[1].parentId,'page:root');assert.equal(records[1].rotation,0);assert.equal(records[1].isLocked,true);assert.equal(records[1].meta.image2Hidden,true);assert.equal(records[1].x,worldBounds(d,'photo').x);assert.equal(records[1].props.w,worldBounds(d,'photo').width);close(records[1].meta.professionalWorldMatrix as Matrix2D,worldMatrix(d,'photo'));assert.equal(records[1].props.layer.contentPayload,undefined);assert.equal(records[1].props.layer.metadata!.legacyRecord,undefined);
+  const other={id:'shape:other',type:'geo',x:0,y:0,rotation:0,parentId:'page:root',props:{},index:'a0',opacity:1,isLocked:false,meta:{}},stale={...records[1],id:'shape:stale'},store=new Map<string,Record<string,unknown>>([[other.id,other],[stale.id,stale as unknown as Record<string,unknown>]]),selected=['shape:image2-photo'];let runOptions:unknown;
+  const editor={getCurrentPageId:()=> 'page:root',getSelectedShapeIds:()=>selected,getCurrentPageShapeIds:()=>new Set(store.keys()),getShape:(key:string)=>store.get(key),deleteShapes:(keys:string[])=>keys.forEach(k=>store.delete(k)),updateShapes:(values:Array<{id:string}>)=>values.forEach(v=>store.set(v.id,v as Record<string,unknown>)),createShapes:(values:Array<{id:string}>)=>values.forEach(v=>store.set(v.id,v as Record<string,unknown>)),select:(...keys:string[])=>{selected.splice(0,selected.length,...keys);},run:(fn:()=>void,options:unknown)=>{runOptions=options;fn();},getCurrentPageShapes:()=>[...store.values()]} as unknown as Editor;
+  const prints=new Map<string,string>();projectProfessionalDocument(editor,d,prints);assert.ok(store.has('shape:other'));assert.ok(!store.has('shape:stale'));assert.ok(store.has('shape:image2-photo'));assert.deepEqual(selected,['shape:image2-photo']);assert.deepEqual(runOptions,{history:'ignore',ignoreShapeLock:true});assert.equal(prints.size,store.size);assert.deepEqual(d,snapshot);
+});
+test('duplicate copies an isolated subtree once, shares immutable content, and gives all layer/mask/effect identities fresh values',()=>{
+  const d=document(),m:LayerMask={id:'mask',kind:'raster',contentId:'pixels',channel:'alpha',coordinateSpace:'document',linked:true,enabled:true,inverted:false,density:1,featherPx:0,matrix:[1,0,0,1,4,8]};
+  raw(d).layers=[layer('g',{type:'group',contentId:undefined,matrix:[2,.5,.3,3,10,20],opacity:.5,effects:[{id:'blur',type:'gaussianBlur',enabled:true,params:{sigma:2}}]}),layer('a',{parentId:'g',z:0,matrix:[1,.3,.2,1,2,4],masks:[m]}),layer('b',{parentId:'g',z:1,type:'text',contentId:'text'})];const snapshot=structuredClone(d),delta:Matrix2D=[1,0,0,1,20,-10];let seq=0;const plan=duplicateProfessionalLayerCommands(d,['g','a'],delta,()=>`copy-${++seq}`),changed=applyProfessionalCommands(d,plan.commands);
+  assert.equal(plan.newLayerIds.length,1);assert.equal(plan.commands.length,3);const copies=['g','a','b'].map(key=>raw(changed).layers.find(l=>l.id===plan.mappings.layers[key])!);assert.equal(copies[0].compositeMode,'isolated');assert.equal(copies[0].opacity,.5);assert.equal(copies[1].parentId,copies[0].id);assert.equal(copies[2].contentId,'text');close(copies[1].matrix,raw(d).layers[1].matrix);close(worldMatrix(changed,copies[1].id),multiplyMatrix(delta,worldMatrix(d,'a')));close(copies[1].masks[0].matrix,multiplyMatrix(delta,m.matrix));assert.notEqual(copies[1].masks[0].id,m.id);assert.notEqual(copies[0].effects[0].id,'blur');assert.deepEqual(d,snapshot);assert.equal(raw(changed).contentAssets.length,raw(d).contentAssets.length);
+});
+test('duplicate remaps internal clip bases and respects both document-linked and layer-local unlinked masks',()=>{
+  const d=document(),m:LayerMask={id:'mask',kind:'raster',contentId:'pixels',channel:'alpha',coordinateSpace:'layerLocal',linked:false,enabled:true,inverted:false,density:1,featherPx:0,matrix:[2,0,0,2,4,8]};raw(d).layers=[layer('base',{z:0,matrix:[2,.5,.2,3,3,5]}),layer('top',{z:1,clipToLayerId:'base',masks:[m]})];const delta:Matrix2D=[1,0,0,1,40,30];let seq=0;const plan=duplicateProfessionalLayerCommands(d,['base','top'],delta,()=>`copy-${++seq}`),changed=applyProfessionalCommands(d,plan.commands),top=raw(changed).layers.find(l=>l.id===plan.mappings.layers.top)!;assert.equal(top.clipToLayerId,plan.mappings.layers.base);close(maskWorldMatrix(changed,top.id,top.masks[0]),maskWorldMatrix(d,'top',m));
+  const single=duplicateProfessionalLayerCommands(d,['top'],delta,()=>`single-${++seq}`),only=applyProfessionalCommands(d,single.commands);assert.equal(raw(only).layers.find(l=>l.id===single.newLayerIds[0])!.clipToLayerId,'base');
+});
+test('copying locked originals unlocks only the copies, preserves unknown text pixels, and never inserts into an existing locked parent',()=>{
+  const d=document();d.assetIds.push('preserved-asset');raw(d).contentAssets.push({id:'preserved',kind:'preservedText',assetId:'preserved-asset',formatVersion:1});raw(d).layers=[layer('locked',{type:'text',contentId:'preserved',locked:true,metadata:{fontStatus:'unknown',sourcePatchAssetId:'pixel-asset'}})];let seq=0;const plan=duplicateProfessionalLayerCommands(d,['locked'],[1,0,0,1,10,10],()=>`locked-copy-${++seq}`),changed=applyProfessionalCommands(d,plan.commands);assert.equal(raw(changed).layers[0].locked,true);assert.equal(raw(changed).layers[1].locked,false);assert.equal(raw(changed).layers[1].contentId,'preserved');assert.equal(raw(changed).layers[1].metadata!.sourcePatchAssetId,'pixel-asset');
+  raw(d).layers=[layer('g',{type:'group',contentId:undefined,locked:true}),layer('child',{parentId:'g'})];assert.throws(()=>duplicateProfessionalLayerCommands(d,['child'],[1,0,0,1,10,10]),/锁定父组/);assert.throws(()=>duplicateProfessionalLayerCommands(d,['g'],[1,0,0,1,10,10],()=> 'g'),/fresh unique/);const groupCopy=duplicateProfessionalLayerCommands(d,['g'],[1,0,0,1,10,10],()=>`group-copy-${++seq}`);assert.equal(groupCopy.commands.length,2);assert.ok(groupCopy.commands.every(c=>c.type==='layer.add'&&c.layer.locked===false));
+});
+test('pure client batches match the actual server v3 structural contract including masks, transforms and collection feature order',async()=>{
+  // The browser helper never imports this Node module. The test uses the server contract as an independent oracle.
+  const {applyV3Commands}=await import(new URL('../services/image2/domain-v3.mjs',import.meta.url).href);
+  const d=document(),commands=[cmd({type:'layer.add',layer:{id:'g',type:'group',matrix:[2,.5,.2,3,10,20]}}),cmd({type:'layer.update',layerId:'photo',patch:{parentId:'g',matrix:[1,.3,.4,1,4,6]}}),cmd({type:'mask.upsert',layerId:'photo',mask:{id:'mask',kind:'raster',contentId:'pixels',linked:false}}),cmd({type:'layer.transformWorld',layerIds:['g','photo'],deltaWorld:[0,1,-1,0,40,70]}),cmd({type:'layer.update',layerId:'photo',patch:{blendMode:'multiply',effects:[{id:'blur',type:'gaussianBlur',params:{sigma:2}}]}}),cmd({type:'artboard.upsert',artboard:{id:'board',bounds:{x:0,y:0,width:100,height:100}}}),cmd({type:'guide.upsert',guide:{id:'guide',axis:'x',position:8,artboardId:'board'}}),cmd({type:'selection.upsert',selection:{id:'selection',contentId:'pixels'}})];
+  assert.deepEqual(applyProfessionalCommands(d,commands),applyV3Commands(d,commands));
+});

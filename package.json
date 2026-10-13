@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "image2:runtime": "node scripts/image2-runtime-assets.mjs",
+    "predev": "npm run image2:runtime",
+    "prebuild": "npm run image2:runtime",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
@@ -13,13 +16,14 @@
     "test:studio:ui": "playwright test --config=playwright.studio.config.ts",
     "test:studio:loop": "playwright test --config=playwright.studio-loop.config.ts",
     "test:image2": "npm test --prefix services/image2",
-    "test:image2:client": "tsx --test tests/image2-client.test.ts tests/image2-templates.test.ts tests/image2-submissions.test.ts tests/image2-submissions-http.test.ts tests/image2-masks.test.ts tests/image2-legacy-drafts.test.ts tests/image2-legacy-mutations.test.ts tests/image2-bff-retry.test.ts",
+    "test:image2:client": "tsx --test tests/image2-client.test.ts tests/image2-templates.test.ts tests/image2-submissions.test.ts tests/image2-submissions-http.test.ts tests/image2-masks.test.ts tests/image2-legacy-drafts.test.ts tests/image2-legacy-mutations.test.ts tests/image2-bff-retry.test.ts tests/image2-professional-client.test.ts tests/image2-professional-migration.test.ts tests/image2-professional-properties.test.ts",
     "test:image2:browser": "playwright test --config=tests/image2-integration.config.ts",
     "test:image2:ui": "playwright test --config=tests/image2.playwright.config.ts",
     "test:image2:original-ui": "playwright test --config=tests/image2-legacy-browser.config.ts",
     "test:image2:original-recovery": "playwright test --config=tests/image2-legacy-recovery.config.ts",
     "test:image2:original-extended": "playwright test --config=tests/image2-legacy-extended.config.ts",
-    "test:image2:context-menu": "playwright test --config=tests/image2-context-menu.config.ts"
+    "test:image2:context-menu": "playwright test --config=tests/image2-context-menu.config.ts",
+    "test:image2:worker": "node --test tests/image2-render-worker.test.mjs"
   },
   "dependencies": {
     "@react-three/drei": "10.7.9",
@@ -29,6 +33,7 @@
     "@remotion/three": "4.0.532",
     "@xyflow/react": "12.12.0",
     "@xzdarcy/react-timeline-editor": "1.0.0",
+    "canvaskit-wasm": "0.42.0",
     "css-tree": "3.1.0",
     "fast-xml-parser": "5.11.2",
     "imagetracerjs": "^1.2.6",
@@ -36,6 +41,7 @@
     "lucide-react": "^0.555.0",
     "next": "16.3.8",
     "openai": "^6.46.0",
+    "pathkit-wasm": "1.0.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "react-virtualized": "9.22.6",

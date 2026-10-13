@@ -5,7 +5,7 @@ import { assetUrl } from '../../lib/image2/client';
 import type { ImageLayer } from '../../lib/image2/types';
 import { normalizeSvg } from '../../services/image2/svg-normalize.mjs';
 
-type DesignShape = TLBaseShape<'design-text' | 'design-vector' | 'source-mask' | 'design-group', { w: number; h: number; layer: ImageLayer }>;
+type DesignShape = TLBaseShape<'design-text' | 'design-vector' | 'source-mask' | 'design-group' | 'design-proxy', { w: number; h: number; layer: ImageLayer }>;
 const props = { w: T.number, h: T.number, layer: T.jsonValue };
 export function safeSvg(markup: string, fill?: string, pathStyles?: Record<string, Record<string, unknown>>, scope = 'i2-vector', sourceSize?: { width?: number; height?: number }) {
   return normalizeSvg(markup, { scope, fill, styles: pathStyles, responsive: true, preserveAspectRatio: 'none', fallbackWidth: sourceSize?.width, fallbackHeight: sourceSize?.height }).svg;
@@ -75,4 +75,9 @@ export class DesignVectorShapeUtil extends DesignShapeBase { static type = 'desi
 export class SourceMaskShapeUtil extends DesignShapeBase { static type = 'source-mask' as const; }
 /** Native tldraw groups normalize child bounds; document groups must retain canonical pixel coordinates. */
 export class DesignGroupShapeUtil extends DesignShapeBase { static type = 'design-group' as const; }
-export const designShapeUtils = [DesignTextShapeUtil, DesignVectorShapeUtil, SourceMaskShapeUtil, DesignGroupShapeUtil];
+/** The shared software renderer paints v3. These boxes only carry interaction geometry. */
+export class DesignProxyShapeUtil extends DesignShapeBase {
+  static type = 'design-proxy' as const;
+  component(shape: DesignShape) { return <HTMLContainer style={{ width: shape.props.w, height: shape.props.h, pointerEvents: 'none' }} />; }
+}
+export const designShapeUtils = [DesignTextShapeUtil, DesignVectorShapeUtil, SourceMaskShapeUtil, DesignGroupShapeUtil, DesignProxyShapeUtil];

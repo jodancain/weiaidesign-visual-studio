@@ -60,6 +60,7 @@ import {
 } from "tldraw";
 import "tldraw/tldraw.css";
 import { designShapeUtils } from '../components/image2/DesignShapes';
+import { professionalCanvasComponents, ProfessionalCanvasContext } from '../components/image2/ProfessionalCanvas';
 import { LegacyImagePanels, CandidateResult, type LegacyImagePanel } from '../components/image2/LegacyImagePanels';
 import { useLegacyImage2 } from '../lib/image2/useLegacyImage2';
 import { assetUrl, Image2ApiError } from '../lib/image2/client';
@@ -986,6 +987,9 @@ export default function Home() {
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
+      if(image2.rawDocument?.schemaVersion===3 && (event.metaKey || event.ctrlKey) && event.key.toLowerCase()==='g' && !target?.isContentEditable && !['INPUT','TEXTAREA','SELECT'].includes(target?.tagName || '')){
+        closeContextMenu();event.preventDefault();event.stopImmediatePropagation();void image2.groupSelection(event.shiftKey).catch(error=>setError(error.message));return;
+      }
       if (!image2.document || !(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'z' || target?.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target?.tagName || '')) return;
       closeContextMenu();
       event.preventDefault(); event.stopImmediatePropagation();
@@ -1486,7 +1490,7 @@ export default function Home() {
         run: async () => {
           if (!editor) return;
           const ids = editor.getSelectedShapeIds();
-          if (ids.length) editor.duplicateShapes(ids, { x: 32, y: 32 });
+          if (ids.length) { if(image2.rawDocument?.schemaVersion===3)await image2.duplicateLayers();else editor.duplicateShapes(ids, { x: 32, y: 32 }); }
         },
       },
       {
@@ -2051,6 +2055,7 @@ export default function Home() {
           }}
         >
           <div className="tldrawHost">
+            <ProfessionalCanvasContext.Provider value={{ document: image2.professionalDocument, onError: setError }}>
             <Tldraw
               key={activeProjectId}
               hideUi
@@ -2059,7 +2064,9 @@ export default function Home() {
               persistenceKey={persistenceKeyFor(activeProjectId)}
               assetUrls={FONT_ASSET_URLS}
               onMount={handleEditorMount}
+              components={professionalCanvasComponents}
             />
+            </ProfessionalCanvasContext.Provider>
           </div>
 
           {contextMenu.open ? (
@@ -3369,6 +3376,12 @@ export default function Home() {
                   setMaskHasPaint(false); redrawMaskView();
                 }).catch(error => setError(error.message));
               }}>取消局部范围</button>
+              {image2.rawDocument?.schemaVersion===3 && <button className="ghostButton" type="button" disabled={!maskHasPaint} onClick={()=>void (async()=>{
+                const src=maskDialog.src,paint=maskPaintRef.current,protect=maskProtectRef.current,layer=src?image2.getLayer(src,maskDialog.layerId):undefined;
+                if(!src||!paint||!protect||!layer)throw new Error('请选择原图并涂画范围');
+                const toBlob=(canvas:HTMLCanvasElement)=>new Promise<Blob>((resolve,reject)=>canvas.toBlob(value=>value?resolve(value):reject(new Error('范围保存失败')),'image/png'));
+                await image2.setMasks(src,await toBlob(paint),await toBlob(protect),layer.id);await image2.saveEditSelection(layer.id);setError('');
+              })().catch(error=>setError(error.message))}>保存为选区</button>}
             </div>
             <label>处理方式<select aria-label="局部处理方式" value={maskOperation} onChange={event => setMaskOperation(event.target.value)}><option value="erase">擦除为透明（算法）</option><option value="repair">传统修补（算法）</option><option value="recolor">局部换色（算法）</option><option value="fill">局部填色（算法）</option><option value="inpaint">局部补画（生成模型）</option></select></label>
             {!capability(image2.capabilities, maskOperation).available && <p role="status">{capability(image2.capabilities, maskOperation).reason || '当前能力不可用'}</p>}

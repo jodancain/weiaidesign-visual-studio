@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "files": [
+    {
+      "path": "public/vendor/image2/canvaskit-0.42.0/canvaskit.js",
+      "sha256": "443777592179808354031cf411d8d43cac9f6b98d1227123c5c22d401b0fbf7f",
+      "bytes": 120877
+    },
+    {
+      "path": "public/vendor/image2/canvaskit-0.42.0/canvaskit.wasm",
+      "sha256": "25ebed8e60158c5854f8dc807b936daca21354f8bfb6a2231266b0a93812f301",
+      "bytes": 7317345
+    },
+    {
+      "path": "public/vendor/image2/canvaskit-0.42.0/LICENSE",
+      "sha256": "d27678cba0d529e77201e2d2a053628143e986aad8f1e77f7039ad4366c8f978",
+      "bytes": 1635
+    },
+    {
+      "path": "public/vendor/image2/pathkit-1.0.0/pathkit.js",
+      "sha256": "d25569ca7f7611bdaa39f371bcb6459ad78c8de18e79c7608e4911c2dd787df4",
+      "bytes": 33333
+    },
+    {
+      "path": "public/vendor/image2/pathkit-1.0.0/pathkit.wasm",
+      "sha256": "1356ccfa6551147c57624184445923393933beec4a85eff4440bb7381a78cd34",
+      "bytes": 324290
+    },
+    {
+      "path": "public/vendor/image2/pathkit-1.0.0/LICENSE",
+      "sha256": "d27678cba0d529e77201e2d2a053628143e986aad8f1e77f7039ad4366c8f978",
+      "bytes": 1635
+    },
+    {
+      "path": "public/vendor/image2/core-1/color-names.LICENSE",
+      "sha256": "c064f7a3e353bc1bc977f3c897941c75ef763f44f41677e0a15370ca0853d6e2",
+      "bytes": 1085
+    },
+    {
+      "path": "public/vendor/image2/core-1/color-names.mjs",
+      "sha256": "23c9571cd26e9677c34c353171ae378269c14d6ea78013e434fdff89922dd28d",
+      "bytes": 5908
+    },
+    {
+      "path": "public/vendor/image2/core-1/matrix.mjs",
+      "sha256": "f200a3fd88fee6668572555ce66aa1705ba4d79e190a15046142c436ce5cb5aa",
+      "bytes": 1677
+    },
+    {
+      "path": "public/vendor/image2/core-1/paints.mjs",
+      "sha256": "a5373d352d844c90152805d46d77f51945d16a9f3fa2610ec272026f20f05815",
+      "bytes": 1483
+    },
+    {
+      "path": "public/vendor/image2/core-1/render-graph.mjs",
+      "sha256": "5c5e6002e821825eddb07714a5e04d35fafaf318393bf75f58d18c2b6ed98ebc",
+      "bytes": 9176
+    },
+    {
+      "path": "public/vendor/image2/core-1/render-software.mjs",
+      "sha256": "7b499f84ad9e1fd5226a88dbda2fb78ff113884a405dcdbd25240727eb45eed2",
+      "bytes": 9336
+    }
+  ]
+}

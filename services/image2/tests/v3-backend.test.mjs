@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ImageStore } from '../store.mjs';
-import { createImageDocument, applyCommands, canonical } from '../domain.mjs';
+import { createImageDocument, applyCommands, canonical, digest } from '../domain.mjs';
 import { CONTENT_MIME, multiplyMatrix, worldMatrix } from '../domain-v3.mjs';
 const OWNER='11111111-1111-4111-8111-111111111111',OTHER='22222222-2222-4222-8222-222222222222';
 const PNG=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l2EAAAAASUVORK5CYII=','base64');
@@ -61,7 +61,7 @@ test('copy migration preserves source/history/tasks, maps actual pixels and uses
   f.store.history(d.id,OWNER,{baseRevision:2,commandId:'undo',direction:'undo'});
   const pending=f.store.createJob(d.id,OWNER,{kind:'operation',idempotencyKey:'unknown-paid',input:{operation:'generate'}});f.store.updateJob(pending.id,{state:'uncertain'});
   const original=f.store.getDocument(d.id,OWNER),revisions=f.store.listRevisions(d.id,OWNER),result=f.store.migrateV3(d.id,OWNER,{sourceRevision:3,idempotencyKey:'migration'});
-  assert.equal(result.document.schemaVersion,3);assert.equal(result.document.resolution.dpiX,72);assert.notEqual(result.document.id,d.id);assert.notEqual(result.mappings.assets[asset.id],asset.id);
+  assert.equal(result.document.schemaVersion,3);assert.deepEqual(result.document.metadata.professionalSource,{documentId:d.id,revision:3,hash:digest(result.originalSnapshot)});assert.ok(f.store.listRevisions(result.document.id,OWNER).every(revision=>canonical(revision.metadata.professionalSource)===canonical(result.document.metadata.professionalSource)));assert.equal(result.document.resolution.dpiX,72);assert.notEqual(result.document.id,d.id);assert.notEqual(result.mappings.assets[asset.id],asset.id);
   const photo=result.document.layers.find(l=>l.id===result.mappings.layers.photo),group=result.document.layers.find(l=>l.id===result.mappings.layers.group);
   assert.deepEqual(photo.localBounds,{x:0,y:0,width:1,height:1});assert.ok(Math.abs(group.matrix[0]-Math.cos(15*Math.PI/180))<1e-9);assert.ok(Math.abs(photo.matrix[0]-300*Math.cos(30*Math.PI/180))<1e-9);
   assert.deepEqual(f.store.getDocument(d.id,OWNER),original);assert.deepEqual(f.store.listRevisions(d.id,OWNER),revisions);assert.equal(f.store.getJob(pending.id,OWNER).state,'uncertain');assert.deepEqual(f.store.listJobs(result.document.id,OWNER),[]);
@@ -94,7 +94,8 @@ test('mask linkage holds world space through direct layer and ancestor world tra
 test('blend and implemented effects use strict params and feature declarations; unsupported stacks fail atomically',t=>{
   const f=source(t),cm=[1,0,0,0,0,0,1,0,0,0,0,0,1,0,0,0,0,0,1,0];
   const d=command(f,'effects',[{type:'content.add',content:f.content},{type:'layer.add',layer:layer('paint',f.content.id,{blendMode:'multiply',effects:[{id:'color',type:'colorMatrix',params:{matrix:cm}},{id:'blur',type:'gaussianBlur',params:{sigma:2}}]})}]);assert.ok(d.requiredFeatures.includes('blend-modes'));assert.ok(d.requiredFeatures.includes('layer-effects'));
-  const invalid=effects=>command(f,'bad-effects',[{type:'layer.update',layerId:'paint',patch:{effects}}]);assert.throws(()=>invalid([{id:'shader',type:'shader',params:{script:'noop'}}]),e=>e.code==='unsupported_feature');assert.throws(()=>invalid([{id:'blur1',type:'gaussianBlur',params:{sigma:1}},{id:'blur2',type:'gaussianBlur',params:{sigma:1}}]),e=>e.code==='unsupported_feature');assert.throws(()=>invalid([{id:'blur',type:'gaussianBlur',params:{sigma:257}}]),/invalid gaussian/);assert.equal(f.store.getDocument(f.document.id,OWNER).revision,d.revision);
+  const invalid=effects=>command(f,'bad-effects',[{type:'layer.update',layerId:'paint',patch:{effects}}]);assert.throws(()=>invalid([{id:'shader',type:'shader',params:{script:'noop'}}]),e=>e.code==='unsupported_feature');assert.throws(()=>invalid(Array.from({length:21},(_,i)=>({id:`blur${i}`,type:'gaussianBlur',params:{sigma:1}}))),/invalid layer effects/);assert.throws(()=>invalid([{id:'blur',type:'gaussianBlur',params:{sigma:257}}]),/invalid gaussian/);assert.equal(f.store.getDocument(f.document.id,OWNER).revision,d.revision);
+  const stack=command(f,'stack-effects',[{type:'layer.update',layerId:'paint',patch:{effects:[{id:'blur1',type:'gaussianBlur',params:{sigma:1}},{id:'blur2',type:'gaussianBlur',params:{sigma:2}}]}}]);assert.deepEqual(stack.layers[0].effects.map(e=>e.id),['blur1','blur2']);
 });
 test('v3 branch accepts independent layers and immutable content together, conflicting artboards remain on branch',t=>{
   const f=source(t);command(f,'initial',[{type:'content.add',content:f.content},{type:'layer.add',layer:layer('a')},{type:'layer.add',layer:layer('b')}]);
@@ -107,4 +108,31 @@ test('dedicated path JSON validates grammar and preserved text retains pixels or
   for(const d of ['M','M0 0L1','M0 0A1 1 0 2 0 1 1','M0 0Z1 1'])assert.throws(()=>upload({formatVersion:1,kind:'vector',paths:[{id:'p',d}]}),/SVG/);
   const original=upload({formatVersion:1,kind:'preservedText',assetId:f.asset.id,text:'旧字',desiredText:'新字',fontStatus:'unknown'});const d=command(f,'preserve',[{type:'content.add',content:{id:'preserved',kind:'preservedText',assetId:original.id,formatVersion:1}},{type:'layer.add',layer:{id:'preserved',type:'text',contentId:'preserved'}}]);assert.equal(d.layers[0].type,'text');assert.deepEqual(f.store.getAsset(f.asset.id,OWNER).bytes,PNG);
   assert.throws(()=>upload({formatVersion:1,kind:'svg',sourceAssetId:f.asset.id,fontAssetIds:[]}),e=>e.code==='CONTENT_KIND_MISMATCH');
+});
+test('real text bounds expand after immutable content replacement and undo keeps glyph metrics without scaling matrix',t=>{
+  const f=source(t),font=f.store.addAsset(f.document.id,OWNER,{name:'Noto.otf',mime:'font/otf'},readFileSync(new URL('../fonts/NotoSansCJKsc-Regular.otf',import.meta.url)));
+  const upload=(text,size)=>f.store.addAsset(f.document.id,OWNER,{name:'text.json',mime:CONTENT_MIME},Buffer.from(JSON.stringify({formatVersion:1,kind:'text',text,fontAssetId:font.id,fontSize:size,fill:'#000000',lineHeight:1.2})));
+  const first=upload('中',24),long=upload('长中文标题\n第二行',48);
+  const original=command(f,'text-base',[{type:'content.add',content:{id:'first',kind:'text',assetId:first.id,formatVersion:1}},{type:'layer.add',layer:{id:'text',type:'text',contentId:'first',localBounds:{x:0,y:0,width:1,height:1},matrix:[2,.5,.25,3,10,20]}}]);assert.ok(original.layers[0].localBounds.width>=24);
+  const changed=command(f,'text-edit',[{type:'content.add',content:{id:'long',kind:'text',assetId:long.id,formatVersion:1}},{type:'layer.content',layerId:'text',contentId:'long'}]);assert.ok(changed.layers[0].localBounds.width>=240);assert.ok(changed.layers[0].localBounds.height>=116);assert.deepEqual(changed.layers[0].matrix,original.layers[0].matrix);
+  const undo=f.store.history(f.document.id,OWNER,{baseRevision:2,commandId:'undo-text',direction:'undo'});assert.deepEqual(undo.layers[0].localBounds,original.layers[0].localBounds);
+  const redo=f.store.history(f.document.id,OWNER,{baseRevision:3,commandId:'redo-text',direction:'redo'});assert.deepEqual(redo.layers[0].localBounds,changed.layers[0].localBounds);
+});
+test('branch collection edits merge by identity instead of conflicting on unrelated saved guides',t=>{
+  const f=source(t);command(f,'base',[{type:'content.add',content:f.content},{type:'layer.add',layer:layer('a')}]);const branch=f.store.createBranch(f.document.id,OWNER,{baseRevision:1});
+  f.store.command(branch.id,OWNER,{baseRevision:0,commandId:'branch-guide',commands:[{type:'guide.upsert',guide:{id:'branch-guide',axis:'x',position:10}},{type:'mask.upsert',layerId:'a',mask:{id:'mask',kind:'raster',contentId:f.content.id}}]});
+  command(f,'main-guide',[{type:'guide.upsert',guide:{id:'main-guide',axis:'y',position:20}}]);
+  const merged=f.store.acceptBranch(f.document.id,OWNER,{baseRevision:2,commandId:'accept-guides',branchDocumentId:branch.id});assert.equal(merged.guides.length,2);assert.equal(merged.layers[0].masks.length,1);assert.ok(merged.requiredFeatures.includes('layer-masks'));
+});
+test('all provenance resource references remain tenant-scoped and are remapped during copy migration',t=>{
+  const f=source(t),other=f.store.createDocument(OTHER,{schemaVersion:3}),foreign=f.store.addAsset(other.id,OTHER,{name:'other.png',mime:'image/png'},PNG);
+  assert.throws(()=>command(f,'bad-provenance',[{type:'document.update',patch:{metadata:{nested:{sourceAssetId:foreign.id}}}}]),e=>e.code==='CONTENT_RESOURCE_UNREGISTERED');
+  const old=f.store.createDocument(OWNER,{}),asset=f.store.addAsset(old.id,OWNER,{name:'owned.png',mime:'image/png'},PNG);
+  f.store.command(old.id,OWNER,{baseRevision:0,commandId:'provenance',commands:[{type:'layer.add',layer:{id:'source',type:'raster',assetId:asset.id,metadata:{sourceMaskAssetId:asset.id,nested:{sourceAssetId:asset.id}}}},{type:'document.update',patch:{metadata:{originAssetId:asset.id}}}]});
+  const migrated=f.store.migrateV3(old.id,OWNER,{sourceRevision:1,idempotencyKey:'metadata-copy'}),mapped=migrated.mappings.assets[asset.id];assert.equal(migrated.document.layers[0].metadata.sourceMaskAssetId,mapped);assert.equal(migrated.document.layers[0].metadata.nested.sourceAssetId,mapped);assert.equal(migrated.document.metadata.originAssetId,mapped);
+});
+test('standalone old text with an actual font remains real text even when source-patch confirmation is absent',t=>{
+  const f=fixture(t),d=f.store.createDocument(OWNER,{}),font=f.store.addAsset(d.id,OWNER,{name:'Noto.otf',mime:'font/otf'},readFileSync(new URL('../fonts/NotoSansCJKsc-Regular.otf',import.meta.url)));
+  f.store.command(d.id,OWNER,{baseRevision:0,commandId:'standalone',commands:[{type:'layer.add',layer:{id:'text',type:'text',text:'独立中文',fontAssetId:font.id,fontSize:24,width:120,height:40,metadata:{fontConfirmed:false}}}]});
+  const result=f.store.migrateV3(d.id,OWNER,{sourceRevision:1,idempotencyKey:'standalone-copy'}),content=result.document.contentAssets.find(c=>c.id===result.document.layers[0].contentId);assert.equal(content.kind,'text');assert.equal(JSON.parse(f.store.getAsset(content.assetId,OWNER).bytes).fontAssetId,result.mappings.assets[font.id]);assert.deepEqual(result.document.layers[0].matrix,[1,0,0,1,0,0]);
 });

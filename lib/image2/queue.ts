@@ -1,4 +1,5 @@
 import type { DocumentCommand, ImageDocument } from './types';
+import { applyProfessionalDraft } from './professional-model';
 export interface QueuedBatch {
   id: string; documentId: string; commands: DocumentCommand[]; createdAt: number;
   submittedRevision?: number; state: 'queued' | 'blocked'; error?: string;
@@ -47,6 +48,7 @@ export class ImageCommandQueue {
 }
 /** Projection only. Never pretend an optimistic draft is an accepted server revision. */
 export function applyDraft(document: ImageDocument, batches: QueuedBatch[]): ImageDocument {
+  if (document.schemaVersion===3) return applyProfessionalDraft(document,batches);
   const result = structuredClone(document);
   for (const batch of batches) for (const command of batch.commands) {
     if (command.type === 'document.update') Object.assign(result, command.patch);

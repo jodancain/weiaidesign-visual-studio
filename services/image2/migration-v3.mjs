@@ -35,6 +35,7 @@ export function planV3Migration(revisions, assetRecords) {
     if (!jsonAssets.has(identity)) jsonAssets.set(identity,{assignedId:randomUUID(),name:`migrated-${value.kind}.json`,mime:CONTENT_MIME,value});
     return descriptor(value.kind,jsonAssets.get(identity).assignedId,identity);
   };
+  const remapMetadata=value=>{if(typeof value==='string')return assetIds.get(value)||layerIds.get(value)||value;if(Array.isArray(value))return value.map(remapMetadata);if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).map(([key,child])=>[key,remapMetadata(child)]));return value;};
   const common = layer => ({
     id:layerIds.get(layer.id),type:layer.type,name:layer.name,
     ...(layer.parentId ? {parentId:layerIds.get(layer.parentId)} : {}),
@@ -43,16 +44,15 @@ export function planV3Migration(revisions, assetRecords) {
   });
   function transformLayer(layer) {
     let content, localBounds = {x:0,y:0,width:layer.width,height:layer.height}, matrix = geometry(layer);
-    const notes = safeMetadata(layer.metadata);
-    for (const key of ['visibilitySourceAssetId','sourcePatchAssetId','cleanBackgroundAssetId']) if (notes[key]) notes[key] = mapAsset(notes[key]);
-    if (notes.backgroundLayerId) notes.backgroundLayerId = layerIds.get(notes.backgroundLayerId);
+    const notes = remapMetadata(safeMetadata(layer.metadata));
+
     // v2 sourceRect is extraction provenance; current assetId is already the
     // visible slice. It never changes the content viewport during migration.
     if (layer.sourceAssetId) notes.sourceAssetId = mapAsset(layer.sourceAssetId);
     if (layer.sourceRect) notes.sourceRect = clone(layer.sourceRect);
     const base = layer.assetId ? assets.get(layer.assetId) : null;
     if (layer.type === 'text') {
-      if (layer.fontAssetId && layer.metadata?.fontConfirmed === true) {
+      if (layer.fontAssetId && (!layer.assetId || layer.metadata?.fontConfirmed === true)) {
         content = jsonContent({
           formatVersion:1,kind:'text',text:layer.text || '',fontAssetId:mapAsset(layer.fontAssetId),
           fontSize:layer.fontSize,fontFamily:layer.fontFamily,
@@ -98,7 +98,7 @@ export function planV3Migration(revisions, assetRecords) {
       masks.push({id:auxiliary(`mask:${layer.id}:${layer.maskAssetId}`),kind:'raster',contentId:maskContent.id,channel:'luminance',coordinateSpace:'layerLocal',matrix:[localBounds.width/mask.asset.width,0,0,localBounds.height/mask.asset.height,localBounds.x,localBounds.y],linked:true,enabled:true,inverted:false,density:1,featherPx:0});
     }
     if (layer.type === 'group' && layer.metadata?.frameClip === true) {
-      const frameContent = jsonContent({formatVersion:1,kind:'vector',viewBox:[0,0,layer.width,layer.height],paths:[{id:'frame',d:`M0 0H${layer.width}V${layer.height}H0Z`,fill:'#ffffff'}]});
+      const frameContent = jsonContent({formatVersion:1,kind:'vector',viewBox:[0,0,Math.max(1,layer.width),Math.max(1,layer.height)],paths:[{id:'frame',d:`M0 0H${layer.width}V${layer.height}H0Z`,fill:'#ffffff'}]});
       masks.push({id:auxiliary(`frame:${layer.id}`),kind:'vector',contentId:frameContent.id,channel:'alpha',coordinateSpace:'layerLocal',matrix:[...IDENTITY],linked:true,enabled:true,inverted:false,density:1,featherPx:0});
     }
     const output = {...common(layer),type:layer.type==='group'?'group':layer.type==='text'?'text':content.kind==='svg'?'vector':layer.type==='mask'?'mask':'raster',...(content ? {contentId:content.id} : {}),localBounds,matrix,masks,metadata:notes};
@@ -115,7 +115,7 @@ export function planV3Migration(revisions, assetRecords) {
   }
   const versions = revisions.map(document => {
     const layers = document.layers.flatMap(transformLayer);
-    return {...clone(document),schemaVersion:3,layers,assetIds:[],contentAssets:[],artboards:[],guides:[],savedSelections:[],resolution:{dpiX:72,dpiY:72,unit:'px'},workingColor:{space:'srgb',bitDepth:8,alphaEncoding:'straight'},renderVersion:'weiai-rg-1',requiredFeatures:['matrix','content-assets',...(layers.some(layer=>layer.masks.length)?['layer-masks']:[])],metadata:safeMetadata(document.metadata)};
+    return {...clone(document),schemaVersion:3,layers,assetIds:[],contentAssets:[],artboards:[],guides:[],savedSelections:[],resolution:{dpiX:72,dpiY:72,unit:'px'},workingColor:{space:'srgb',bitDepth:8,alphaEncoding:'straight'},renderVersion:'weiai-rg-1',requiredFeatures:['matrix','content-assets',...(layers.some(layer=>layer.masks.length)?['layer-masks']:[])],metadata:remapMetadata(safeMetadata(document.metadata))};
   });
   // Preallocated identities are shared by every historical revision, so undo
   // does not change mask identity or silently acquire a different content ID.

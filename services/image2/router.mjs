@@ -81,10 +81,26 @@ export function createImageRouter({ store, runner, config = {}, assetInspector }
       else if (parts[0] === 'documents' && parts[1]) {
         const id = parts[1]; store.getDocument(id, owner);
         if (parts.length === 2 && method === 'GET') value = store.getDocument(id, owner);
+        else if (parts[2] === 'commands' && parts[3] && parts.length === 4 && method === 'GET') value = store.getCommandReceipt(id, owner, parts[3]);
         else if (parts[2] === 'commands' && parts.length === 3 && method === 'POST') value = store.command(id, owner, await body(req, 2 * 1024 * 1024));
         else if (parts[2] === 'migrate-v3' && parts.length === 3 && method === 'POST') value = await store.migrateV3(id, owner, await body(req, 2 * 1024 * 1024));
         else if (parts[2] === 'history' && parts.length === 3 && method === 'POST') value = store.history(id, owner, await body(req, 2 * 1024 * 1024));
+        else if (parts[2] === 'revisions' && parts[3] && parts.length === 4 && method === 'GET') value = store.getRevision(id, owner, Number(parts[3]));
         else if (parts[2] === 'revisions' && parts.length === 3 && method === 'GET') value = store.listRevisions(id, owner);
+        else if (parts[2] === 'render-resource' && parts[3] && parts.length === 4 && method === 'GET') {
+          fail(validId(parts[3]), 'invalid content identity');
+          const options = {};
+          if (url.searchParams.has('revision')) {
+            options.revision = Number(url.searchParams.get('revision'));
+            store.getRevision(id, owner, options.revision);
+          }
+          if (url.searchParams.has('layerId')) { options.layerId = url.searchParams.get('layerId'); fail(validId(options.layerId), 'invalid layer identity'); }
+          if (url.searchParams.has('role')) { options.role = url.searchParams.get('role'); fail(['content','mask'].includes(options.role), 'invalid render resource role'); }
+          const document = options.revision === undefined ? store.getDocument(id, owner) : store.getRevision(id, owner, options.revision);
+          fail(document.schemaVersion === 3, 'render resources require a v3 document', 422, 'unsupported_schema');
+          fail(document.contentAssets.some(c => c.id === parts[3]), 'content not found in this revision', 404, 'not_found');
+          value = await execute('renderResource', owner, id, parts[3], options);
+        }
         else if (parts[2] === 'assets' && parts.length === 3 && method === 'GET') value = store.listAssets(id, owner);
         else if (parts[2] === 'jobs' && parts.length === 3 && method === 'GET') value = store.listJobs(id, owner);
         else if (parts[2] === 'runs' && parts.length === 3 && method === 'GET') value = store.listRuns(id, owner);

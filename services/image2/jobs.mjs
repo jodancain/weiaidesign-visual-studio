@@ -4,6 +4,9 @@ import { fileURLToPath } from 'node:url';
 import * as fontkit from 'fontkit';
 import { fail, ImageError, digest, clone } from './domain.mjs';
 import { registry, executeOperation, inspectAsset, capabilities as processorCapabilities } from './processors.mjs';
+import { executeV3Operation, validateV3Operation, V3_CPU_OPERATIONS } from './processors-v3.mjs';
+import { exportV3Document, importV3Project, validateV3Export, readProjectArchive } from './exports-v3.mjs';
+import { resolveNodeResource, createNodeResolver } from './render-node.mjs';
 import { configFromEnv } from './providers.mjs';
 import { ImageAgent, agentConfig } from './agent.mjs';
 import { exportDocument, importProjectBundle, scopedExportDocument, exportCanvasBounds } from './exports.mjs';
@@ -19,6 +22,7 @@ export class ImageRunner {
     if (this.capabilityCache && Date.now() - this.capabilityCache.at < 15000) return this.capabilityCache.value;
     const c = await processorCapabilities(this.config, this.fetchImpl);
     const value = { ...c, operations: c.operations.map(op => ({ ...op, name: op.operation, available: op.available })), agent: { available: Boolean(this.config.agent.baseUrl && this.config.agent.apiKey), model: this.config.agent.models[0],models:[...new Set((this.config.agent.upstreams||[{models:this.config.agent.models}]).flatMap(upstream=>upstream.models||[]))], maxRounds: 6, maxGenerations: this.config.agent.maxGenerations }, ocr: c.providers.ocr, defaultFont: { available: existsSync(this.defaultFontPath()), family: 'Noto Sans CJK SC' }, limits: { bodyBytes: 96 * 1024 * 1024, inputPixels: 40000000, restorePixels: 16000000, imageCount: 4 } };
+    value.professional = {schemaVersion:3,operations:V3_CPU_OPERATIONS.map(operation=>({operation,executionClass:'cpu',available:true})),agent:{available:false},models:{available:false},maskedPixelOperations:{available:false,requiresExplicitBake:true},exports:['png','pdf','svg','project'],svgExportMode:'appearance-proxy'};
     this.capabilityCache = { at: Date.now(), value }; return value;
   }
   defaultFontPath() { return this.config.defaultFontPath || fileURLToPath(new URL('./fonts/NotoSansCJKsc-Regular.otf', import.meta.url)); }
@@ -66,6 +70,14 @@ export class ImageRunner {
     setImmediate(() => void this.tick()); return this.store.getJob(job.id, owner);
   }
   validateOperation(doc, owner, request) {
+    if(doc.schemaVersion===3){
+      fail(['apply','candidate'].includes(request.mode||'apply'),'invalid operation mode');
+      fail(Array.isArray(request.inputs||[])&&(request.inputs||[]).length<=100,'invalid operation inputs');
+      for(const input of request.inputs||[]){const {asset}=this.store.getAsset(input.assetId,owner);fail(doc.assetIds.includes(asset.id),'输入素材不在当前工程',422);fail(!input.hash||input.hash===asset.hash,'输入素材hash不匹配',409,'source_changed');}
+      const {target}=validateV3Operation(doc,request);let cursor=target;
+      while(cursor){fail(!cursor.locked,'目标图层或所属组已锁定',409,'layer_locked');cursor=doc.layers.find(layer=>layer.id===cursor.parentId);}
+      return;
+    }
     for (const input of request.inputs || []) { const { asset } = this.store.getAsset(input.assetId, owner); fail(doc.assetIds.includes(asset.id), '输入素材不在当前工程', 422); }
     if (!request.targetLayerId) return;
     const layer = doc.layers.find(l => l.id === request.targetLayerId);
@@ -76,6 +88,7 @@ export class ImageRunner {
   }
   async submitRun(owner, conversationId, body) {
     const conversation = this.store.getConversation(conversationId, owner);
+    fail(this.store.getDocument(conversation.documentId,owner).schemaVersion!==3,'专业工程的后台Agent尚未接通；未提交聊天模型任务',422,'V3_OPERATION_UNAVAILABLE');
     const result = this.store.transaction(() => {
     const run = this.store.createRun(conversationId, owner, { text: body.text, references: body.references || [], idempotencyKey: body.idempotencyKey, ...(body.model===undefined?{}:{model:body.model}) });
     if (run.jobId) return { run, job: this.store.getJob(run.jobId, owner) };
@@ -97,14 +110,29 @@ export class ImageRunner {
     const job = this.store.createJob(doc.id, owner, { kind: 'export', idempotencyKey: body.idempotencyKey, input: body });
     if (!this.store.jobRecord(job.id).private.snapshot) {
       fail(body.baseRevision === doc.revision, '工程已修改，请刷新后导出', 409, 'revision_conflict');
-      if (body.format !== 'project') scopedExportDocument(doc, body);
+      if (body.format !== 'project') { if(doc.schemaVersion===3)validateV3Export(doc,body);else scopedExportDocument(doc, body); }
       this.store.updateJob(job.id, {}, { snapshot: clone(doc), exportRevisions: this.store.listRevisions(doc.id, owner).filter(revision => revision.revision <= doc.revision) });
     }
     return this.store.getJob(job.id, owner);
     });
     setImmediate(() => void this.tick()); return job;
   }
-  async importProject(owner, body) { return importProjectBundle(this.store, owner, body, inspectAsset); }
+  async importProject(owner, body) { const bundle=readProjectArchive(body);return bundle.manifest.version===3?importV3Project(this.store,owner,body,bundle):importProjectBundle(this.store,owner,body,inspectAsset); }
+  async process(request,ctx) { return ctx.document.schemaVersion===3?executeV3Operation(request,ctx,this.processor):this.processor(request,ctx); }
+  async exportArtifact(format,document,ctx) { return document.schemaVersion===3?exportV3Document(format,document,ctx):exportDocument(format,document,ctx); }
+  async renderResource(owner,documentId,contentId,options={}) {
+    const document=options.revision===undefined?this.store.getDocument(documentId,owner):this.store.getRevision(documentId,owner,options.revision);
+    fail(document.schemaVersion===3,'render resources require a v3 document',422,'unsupported_schema');
+    const content=document.contentAssets.find(item=>item.id===contentId);fail(content,'content not found in this revision',404,'not_found');
+    fail(options.role===undefined||['content','mask'].includes(options.role),'invalid render resource role');
+    if(options.layerId){const layer=document.layers.find(item=>item.id===options.layerId);fail(layer&&((options.role!=='mask'&&layer.contentId===contentId)||(options.role!=='content'&&layer.masks.some(mask=>mask.contentId===contentId))),'content is not referenced by the requested layer and role',404,'not_found');}
+    const getAsset=id=>{fail(document.assetIds.includes(id),'resource not registered in this revision',422,'CONTENT_RESOURCE_UNREGISTERED');return this.store.getAsset(id,owner);};
+    const authored=document.layers.some(layer=>(options.role!=='mask'&&layer.contentId===contentId)||(options.role!=='content'&&layer.masks.some(mask=>mask.contentId===contentId)));
+    let resource;
+    if(authored)resource=await resolveNodeResource(document,contentId,getAsset,options);
+    else {fail(options.role!=='content'&&document.savedSelections.some(selection=>selection.contentId===contentId),'content has no visible layer, mask or saved selection reference',404,'not_found');resource=await createNodeResolver(getAsset)(content,{document,layer:{id:`selection_${contentId}`},role:'mask'});}
+    return resource.kind==='raster'?{...resource,pixels:Buffer.from(resource.pixels).toString('base64'),pixelEncoding:'base64-rgba8'}:resource;
+  }
   cancel(owner, id) {
     const job = this.store.getJob(id, owner);
     if (['complete','failed','uncertain','cancelled'].includes(job.state)) return job;
@@ -177,7 +205,7 @@ export class ImageRunner {
     ctx.inputReferences = [...request.inputs || []];
     const sourceLayer = doc.layers.find(l => l.id === request.targetLayerId);
     if (sourceLayer?.assetId && !ctx.inputReferences.some(r => r.role === 'base')) ctx.inputReferences.push({ role: 'base', assetId: sourceLayer.assetId });
-    const result = await this.processor(request, ctx);
+    const result = await this.process(request, ctx);
     if (this.cancelled(id)) throw new ImageError('任务已取消', 409, 'CANCELLED');
     const latest = this.store.getDocument(branchId, owner);
     const applied = result.commands?.length ? this.store.command(branchId, owner, { baseRevision: doc.revision, commandId: `${id}:${namespace}`, commands: result.commands }) : latest;
@@ -187,10 +215,10 @@ export class ImageRunner {
     const checkpoint = this.store.jobRecord(id).private.checkpoints?.[`${namespace}:export`];
     if (checkpoint) { const { asset } = this.store.getAsset(checkpoint, owner); return { assetId: asset.id, url: asset.url, mime: asset.mime, filename: asset.name }; }
     const prior=this.store.jobRecord(id).private.toolStates?.[namespace],current=this.store.getDocument(documentId,owner),doc=prior?.exportSourceRevision===undefined?current:this.store.getRevision(documentId,owner,prior.exportSourceRevision);
-    const scope=prior?.exportScope||{layerIds:options.layerIds,bounds:options.bounds||exportCanvasBounds(doc,options.layerIds)};
+    const scope=prior?.exportScope||{layerIds:options.layerIds,bounds:options.bounds||(doc.schemaVersion===3?undefined:exportCanvasBounds(doc,options.layerIds))};
     if(prior?.exportSourceRevision===undefined){const live=this.store.jobRecord(id).private;this.store.updateJob(id,{}, {toolStates:{...live.toolStates,[namespace]:{...prior,exportSourceRevision:doc.revision,exportScope:scope}}});}
     const ctx = this.context(id, doc, owner, namespace);
-    const exported = await exportDocument(format, doc, { ...scope,getAsset: ctx.getAsset, revisions: this.store.listRevisions(documentId, owner).filter(revision=>revision.revision<=doc.revision) });
+    const exported = await this.exportArtifact(format, doc, { ...scope,getAsset: ctx.getAsset, revisions: this.store.listRevisions(documentId, owner).filter(revision=>revision.revision<=doc.revision) });
     const asset = await ctx.saveAsset('export', { name: exported.name, mime: exported.mime, metadata: { role: 'export', format, sourceDocumentId: doc.id, sourceRevision: doc.revision,...(format==='project'?{}:scope) } }, exported.bytes);
     return { assetId: asset.id, url: asset.url, mime: asset.mime, filename: asset.name };
   }
@@ -200,6 +228,7 @@ export class ImageRunner {
     try {
       if (this.cancelled(id)) throw new ImageError('任务已取消', 409, 'CANCELLED');
       if (record.job.kind === 'agent') {
+        fail(record.private.snapshot?.schemaVersion!==3,'专业工程的后台Agent尚未接通；未提交聊天模型任务',422,'V3_OPERATION_UNAVAILABLE');
         const result = await this.agent.execute(id, record);
         this.store.updateJob(id, { state: result.state, progress: 1, stage: 'agent_complete', output: result.output }); return;
       }
@@ -208,7 +237,7 @@ export class ImageRunner {
         let asset;
         if (cached) asset = this.store.getAsset(cached, record.owner).asset;
         else {
-          const ctx = this.context(id, record.private.snapshot, record.owner), scope = { layerIds: record.private.input.layerIds, bounds: record.private.input.bounds }, exported = await exportDocument(record.private.input.format, record.private.snapshot, { ...scope, getAsset: ctx.getAsset, revisions: record.private.exportRevisions || this.store.listRevisions(record.job.documentId, record.owner).filter(revision => revision.revision <= record.private.snapshot.revision) });
+          const ctx = this.context(id, record.private.snapshot, record.owner), scope = { layerIds: record.private.input.layerIds, bounds: record.private.input.bounds }, exported = await this.exportArtifact(record.private.input.format, record.private.snapshot, { ...scope, getAsset: ctx.getAsset, revisions: record.private.exportRevisions || this.store.listRevisions(record.job.documentId, record.owner).filter(revision => revision.revision <= record.private.snapshot.revision) });
           asset = await ctx.saveAsset('export', { name: exported.name, mime: exported.mime, metadata: { role: 'export', format: record.private.input.format, sourceDocumentId: record.private.snapshot.id, sourceRevision: record.private.snapshot.revision, ...(record.private.input.format !== 'project' ? scope : {}) } }, exported.bytes);
         }
         if (this.cancelled(id)) throw new ImageError('任务已取消，已生成文件仍保留', 409, 'CANCELLED');
@@ -220,7 +249,7 @@ export class ImageRunner {
       ctx.inputReferences = [...record.private.input.inputs || []];
       const sourceLayer = source.layers.find(l => l.id === record.private.input.targetLayerId);
       if (sourceLayer?.assetId && !ctx.inputReferences.some(r => r.role === 'base')) ctx.inputReferences.push({ role: 'base', assetId: sourceLayer.assetId });
-      const result = await this.processor(record.private.input, ctx);
+      const result = await this.process(record.private.input, ctx);
       if (this.cancelled(id)) throw new ImageError('任务已取消', 409, 'CANCELLED');
       record = this.store.jobRecord(id);
       let applied;

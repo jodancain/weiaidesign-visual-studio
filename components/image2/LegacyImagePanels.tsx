@@ -9,10 +9,12 @@ import type { ImageLayer } from '../../lib/image2/types';
 import { VectorProperties } from './VectorProperties';
 import { capability } from '../../lib/image2/geometry';
 import { buildTemplate, templateNames, type TemplateKind } from '../../lib/image2/templates';
+import { groupProfessionalLayerCommands, ungroupProfessionalLayerCommands } from '../../lib/image2/professional-model';
+import { ProfessionalProperties } from './ProfessionalProperties';
 
 export type LegacyImagePanel = 'layers' | 'versions' | 'import' | 'upscale' | 'vector' | null;
 type Bridge = ReturnType<typeof useLegacyImage2>;
-const layerLabels = { raster: '图片', text: '文字', vector: 'SVG', group: '组', mask: '遮罩' };
+const layerLabels = { raster: '图片', text: '文字', vector: 'SVG', group: '组', mask: '遮罩', adjustment:'调整层' };
 const fieldLabels = { x: '横向位置', y: '纵向位置', width: '宽度', height: '高度', rotation: '角度', opacity: '不透明度', fontSize: '字号', tracking: '字距', lineHeight: '行距', strokeWidth: '描边宽度' };
 
 /** These dialogs reuse the original workbench styles and do not occupy canvas space when closed. */
@@ -58,7 +60,7 @@ export function LegacyImagePanels({ mode, onClose, bridge, onError, onResult }: 
           <button className="ghostButton" aria-label={`${layer.name}${layer.visible ? '隐藏' : '显示'}`} disabled={busy} onClick={() => void act(() => bridge.updateLayer(layer.id, { visible: !layer.visible }))}>{layer.visible ? '◉' : '○'}</button>
           <button className="ghostButton" aria-label={`${layer.name}${layer.locked ? '解锁' : '锁定'}`} disabled={busy} onClick={() => void act(() => bridge.updateLayer(layer.id, { locked: !layer.locked }))}>{layer.locked ? '🔒' : '◇'}</button>
         </div>)}</div> : <p>画布上还没有图层。</p>}
-        <div className="inlineOptions"><button disabled={!doc || busy || picked.length < 2} onClick={() => void act(async () => { await bridge.submitCommands(groupLayerCommands(bridge.document!, picked, crypto.randomUUID())); setPicked([]); })}>编组所选</button><button disabled={!doc || busy || selected?.type !== 'group'} onClick={() => void act(() => bridge.submitCommands(ungroupLayerCommands(bridge.document!, selected!.id)))}>拆开组合</button></div>
+        <div className="inlineOptions"><button disabled={!doc || busy || picked.length < 2} onClick={() => void act(async () => { await bridge.submitCommands(bridge.rawDocument?.schemaVersion===3 ? groupProfessionalLayerCommands(bridge.rawDocument,picked,crypto.randomUUID()) : groupLayerCommands(bridge.document!, picked, crypto.randomUUID())); setPicked([]); })}>编组所选</button><button disabled={!doc || busy || selected?.type !== 'group'} onClick={() => void act(() => bridge.submitCommands(bridge.rawDocument?.schemaVersion===3 ? ungroupProfessionalLayerCommands(bridge.rawDocument,selected!.id) : ungroupLayerCommands(bridge.document!, selected!.id)))}>拆开组合</button></div>
         <label>模板版式<select aria-label="模板版式" value={templateKind} onChange={event => setTemplateKind(event.target.value as TemplateKind)}>{Object.entries(templateNames).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label>
         <button className="ghostButton" disabled={busy} onClick={() => void act(async () => {
           await bridge.ensureDocument(); const font = await bridge.defaultFont();
@@ -75,7 +77,7 @@ export function LegacyImagePanels({ mode, onClose, bridge, onError, onResult }: 
         {selected && <div style={{ borderTop: '1px solid #e8e8ec', marginTop: 14, paddingTop: 12 }}>
           {selected.metadata?.nativeTextFormat === 'preserved' && <p>原文字包含混合样式，当前保留原画布对象和格式，并通过原始裁片保留外观。独立调整字体、颜色或字号前，需要明确转换为真实文字层并重新确认字体与排版。</p>}
           <label>图层名称<input key={`${selected.id}-name-${selected.name}`} aria-label="图层名称" defaultValue={selected.name} onBlur={event => { if (event.target.value !== selected.name) patch({ name: event.target.value }); }} /></label>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>{(['x', 'y', 'width', 'height', 'rotation', 'opacity'] as const).map(field => <label key={field}>{fieldLabels[field]}<input key={`${selected.id}-${field}-${selected[field]}`} aria-label={fieldLabels[field]} type="number" step={field === 'opacity' ? .1 : 1} defaultValue={selected[field]} disabled={busy || (field === 'opacity' && selected.type === 'group')} onBlur={event => { const value = Number(event.target.value); if (Number.isFinite(value) && value !== selected[field]) patch({ [field]: value }); }} /></label>)}</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>{(['x', 'y', 'width', 'height', 'rotation', 'opacity'] as const).map(field => <label key={field}>{fieldLabels[field]}<input key={`${selected.id}-${field}-${selected[field]}`} aria-label={fieldLabels[field]} type="number" step={field === 'opacity' ? .1 : 1} defaultValue={selected[field]} disabled={busy || (field === 'opacity' && selected.type === 'group' && doc?.schemaVersion!==3)} onBlur={event => { const value = Number(event.target.value); if (Number.isFinite(value) && value !== selected[field]) patch({ [field]: value }); }} /></label>)}</div>
           <div className="inlineOptions"><button disabled={busy} onClick={() => void act(() => bridge.submitCommands(reorderSiblingCommands(doc!.layers, selected.id, 1)))}>上移一层</button><button disabled={busy} onClick={() => void act(() => bridge.submitCommands(reorderSiblingCommands(doc!.layers, selected.id, -1)))}>下移一层</button><button disabled={busy} onClick={() => void act(() => bridge.submitCommands([{ type: 'layer.remove', layerId: selected.id }]))}>删除图层</button></div>
           {selected.type === 'text' && <>
             {selected.metadata?.fontConfirmed !== true && <p>当前显示原字形裁片。识别文字是待校正信息，确认字体与清底后才会改动画面。</p>}
@@ -98,10 +100,13 @@ export function LegacyImagePanels({ mode, onClose, bridge, onError, onResult }: 
             <button className="ghostButton" disabled={busy} onClick={() => void act(async () => { const params = ['resize','crop','pad'].includes(pixelOperation) ? {width:pixelParams.width,height:pixelParams.height,...(pixelOperation==='crop'?{x:pixelParams.x,y:pixelParams.y}:{}),...(pixelOperation==='pad'?{fill:pixelParams.color}:{})} : pixelOperation==='rotate'?{degrees:pixelParams.degrees}:pixelOperation==='flip'?{axis:pixelParams.axis}:pixelOperation==='color_key'?{color:pixelParams.color,tolerance:pixelParams.tolerance}:{purpose:'text_background'}; await bridge.waitJob(await bridge.submitOperation(pixelOperation,params,undefined,{layerId:selected.id})); })}>执行像素处理</button>
           </>}
         </div>}
+        {doc && <ProfessionalProperties document={bridge.rawDocument || doc} selected={selected} busy={busy} bridge={bridge} onError={onError} />}
         <div className="dialogFooter"><span>服务端版本 {doc?.revision ?? '—'}{bridge.pendingCount ? ` · ${bridge.pendingCount} 项本地草稿` : ''}</span><button className="darkButton" disabled={busy} onClick={() => void act(() => bridge.sync())}>保存画布</button></div>
       </> : mode === 'versions' ? <>
         <div className="inlineOptions"><button disabled={busy || !doc} onClick={() => void act(() => bridge.undo())}>撤销</button><button disabled={busy || !doc} onClick={() => void act(() => bridge.redo())}>重做</button><button disabled={busy} onClick={() => void act(() => bridge.refresh())}>刷新状态</button></div>
         <p>当前版本 {doc?.revision ?? '—'}。候选接受前不会覆盖主工程。</p>
+        {doc?.schemaVersion===2 && <><p>精确编辑工程支持完整矩阵、独立蒙版、画板和选区。升级会创建副本，保留原快照和历史；生成与聊天继续在原工程使用。</p><button className="ghostButton" disabled={busy} onClick={()=>void act(()=>bridge.migrateProfessional())}>复制为精确编辑工程</button>{!doc.layers.length && <button className="ghostButton" disabled={busy} onClick={()=>void act(()=>bridge.newProfessionalDocument())}>新建空白精确编辑工程</button>}</>}
+        {doc?.schemaVersion===3 && <><p>SVG / PDF 导出保留当前画面外观，允许含位图。原路径、字体和素材保留在原生工程中。</p>{bridge.rawDocument?.metadata?.professionalSource && <button className="ghostButton" disabled={busy} onClick={()=>void act(()=>bridge.openOriginalDocument())}>打开保留的原工程</button>}</>}
         {bridge.hasDraftConflict && <div role="alert"><p>主工程已有新版本。本地画布草稿已保留，请选择保留方式。</p><div className="inlineOptions"><button disabled={busy} onClick={() => void act(() => bridge.saveDraftAsProject())}>另存本地草稿</button><button disabled={busy} onClick={() => void act(() => bridge.useServerVersion())}>采用服务器版本</button></div></div>}
         {bridge.branches.map(branch => {
           const job = bridge.jobs.find(job => job.output?.branchDocumentId === branch.id), running = job && ['queued','running'].includes(job.state), partial = job && ['uncertain','failed','cancelled','awaiting_user'].includes(job.state);

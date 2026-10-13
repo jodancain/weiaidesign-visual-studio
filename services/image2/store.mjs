@@ -76,22 +76,34 @@ export class ImageStore {
     key(commandId); const old = this.db.prepare('SELECT * FROM command_receipts WHERE document_id=? AND command_id=?').get(documentId, commandId);
     if (old) fail(old.request_hash === digest(request), 'command identity reused with different content', 409, 'idempotency_conflict'); return old;
   }
-  persistDocument(document, kind) {
+  getCommandReceipt(documentId, owner, commandId) {
+    this.documentRow(documentId, owner); key(commandId);
+    const row = this.db.prepare('SELECT * FROM command_receipts WHERE document_id=? AND command_id=?').get(documentId, commandId);
+    fail(row, 'command receipt not found', 404, 'not_found');
+    return { commandId, requestHash: row.request_hash, document: parse(row, 'response_json') };
+  }
+  persistDocument(document, kind, validated = false) {
     validateDocument(document);
-    this.validateDocumentAssets(document, this.db.prepare('SELECT owner FROM documents WHERE id=?').get(document.id)?.owner);
-    this.validateFontAssets(document, this.db.prepare('SELECT owner FROM documents WHERE id=?').get(document.id)?.owner);
+    if (!validated) {
+      const owner = this.db.prepare('SELECT owner FROM documents WHERE id=?').get(document.id)?.owner;
+      this.validateDocumentAssets(document, owner);
+      this.validateFontAssets(document, owner);
+    }
     this.db.prepare('UPDATE documents SET json=? WHERE id=?').run(json(document), document.id);
     this.db.prepare('INSERT INTO revisions VALUES(?,?,?,?)').run(document.id, document.revision, json(document), kind); return clone(document);
   }
   commit(documentId, before, after, commandId, request, kind) {
     const row = this.db.prepare('SELECT history_head FROM documents WHERE id=?').get(documentId), head = row.history_head;
     after.id = before.id; after.createdAt = before.createdAt; after.revision = before.revision + 1; after.updatedAt = timestamp();
+    validateDocument(after);
     this.validateSourceTextTransitions(before, after);
-    this.validateFontAssets(after, this.db.prepare('SELECT owner FROM documents WHERE id=?').get(documentId)?.owner);
+    const owner = this.db.prepare('SELECT owner FROM documents WHERE id=?').get(documentId)?.owner;
+    this.validateDocumentAssets(after, owner);
+    this.validateFontAssets(after, owner);
     this.db.prepare('DELETE FROM history WHERE document_id=? AND seq>?').run(documentId, head);
     this.db.prepare('INSERT INTO history VALUES(?,?,?,?)').run(documentId, head + 1, json(before), json(after));
     this.db.prepare('UPDATE documents SET history_head=? WHERE id=?').run(head + 1, documentId);
-    const result = this.persistDocument(after, kind);
+    const result = this.persistDocument(after, kind, true);
     this.db.prepare('INSERT INTO command_receipts VALUES(?,?,?,?)').run(documentId, commandId, digest(request), json(result)); return result;
   }
   command(id, owner, body) {
@@ -125,6 +137,7 @@ export class ImageStore {
       fail(document.assetIds.includes(ref.assetId), 'recursive resource is not registered in this document', 422, 'CONTENT_RESOURCE_UNREGISTERED');
       const record = this.getAsset(ref.assetId, owner);
       if (value.kind === 'svg' && ref.assetId === value.sourceAssetId) fail(record.asset.mime === 'image/svg+xml', 'SVG source reference requires actual SVG bytes', 422, 'CONTENT_KIND_MISMATCH');
+      if (value.kind === 'svg' && ref.assetId === value.appearanceAssetId) fail(['image/png','image/jpeg','image/webp'].includes(record.asset.mime), 'appearance proxy requires actual image bytes', 422, 'CONTENT_KIND_MISMATCH');
       if (value.kind === 'preservedText' && ref.assetId === value.assetId) fail(['image/png','image/jpeg','image/webp'].includes(record.asset.mime), 'preserved text requires actual original pixels', 422, 'CONTENT_KIND_MISMATCH');
       if (ref.role === 'font') {
         fail(record.asset.mime.startsWith('font/'), 'font reference requires a real font asset', 422, 'FONT_ASSET_REQUIRED');
@@ -147,6 +160,18 @@ export class ImageStore {
     if (document.schemaVersion !== 3) return;
     const records = new Map();
     for (const id of document.assetIds) records.set(id, this.getAsset(id, owner));
+    const inspectReferences = value => {
+      if (!value || typeof value !== 'object') return;
+      for (const [field,child] of Object.entries(value)) {
+        if (/^(?:assetId|[a-zA-Z]+AssetId)$/.test(field) && child !== undefined && child !== null) {
+          fail(validId(child) && document.assetIds.includes(child), 'metadata asset reference is not registered in this document', 422, 'CONTENT_RESOURCE_UNREGISTERED');
+        } else if (/^(?:assetIds|[a-zA-Z]+AssetIds)$/.test(field) && Array.isArray(child)) {
+          fail(child.every(id => validId(id) && document.assetIds.includes(id)), 'metadata asset references are not registered in this document', 422, 'CONTENT_RESOURCE_UNREGISTERED');
+        } else inspectReferences(child);
+      }
+    };
+    inspectReferences(document.metadata);
+    for (const layer of document.layers) inspectReferences(layer.metadata);
     for (const content of document.contentAssets) {
       const record = records.get(content.assetId);
       fail(record, 'content asset is not registered', 422, 'CONTENT_RESOURCE_UNREGISTERED');
@@ -158,6 +183,10 @@ export class ImageStore {
         const value = JSON.parse(record.bytes.toString('utf8'));
         fail(value.kind === content.kind && value.formatVersion === content.formatVersion, 'content descriptor does not match immutable bytes', 422, 'CONTENT_KIND_MISMATCH');
         this.validateContentAsset(value, document, owner, new Set([content.assetId]));
+        if (value.kind === 'text') {
+          const font = records.get(value.fontAssetId) || this.getAsset(value.fontAssetId, owner), face = this.fontFace(font.asset.hash, font.bytes);
+          for (const layer of document.layers.filter(l => l.contentId === content.id)) this.expandV3TextBounds(layer, value, face);
+        }
       }
     }
   }
@@ -199,13 +228,36 @@ export class ImageStore {
         const bytes = content.bytes || Buffer.from(JSON.stringify(content.value));
         this.addAsset(fresh.id, owner, {...content, value:undefined, bytes:undefined}, bytes);
       }
-      const versions = plan.versions.map(d => ({...d,id:fresh.id}));
+      const professionalSource = { documentId, revision: body.sourceRevision, hash: digest(originalSnapshot) };
+      const versions = plan.versions.map(d => ({...d,id:fresh.id,metadata:{...d.metadata,professionalSource}}));
       const document = this.importRevisions(fresh.id, owner, {revisions:versions,currentDocument:versions.at(-1)});
       const receipt = { id:randomUUID(), idempotencyKey:body.idempotencyKey, sourceDocumentId:documentId, sourceRevision:body.sourceRevision, sourceHash:digest(originalSnapshot), createdAt:timestamp() };
       const result = {document,sourceDocumentId:documentId,sourceRevision:body.sourceRevision,originalSnapshot,mappings:plan.mappings,receipt};
       this.db.prepare('INSERT INTO migration_receipts VALUES(?,?,?,?,?)').run(documentId,body.idempotencyKey,requestHash,fresh.id,json(result));
       return result;
     });
+  }
+  expandV3TextBounds(layer, content, face) {
+    const size = content.fontSize, scale = size / face.unitsPerEm, leading = size * (content.lineHeight || 1.2);
+    let minX = 0, maxX = 0, minY = 0, maxY = 0;
+    const lines = content.text.split('\n');
+    for (const [lineIndex, text] of lines.entries()) {
+      const run = face.layout(text.replace(/[\p{Cc}\p{Cf}]/gu, '')); let penX = 0, penY = 0;
+      for (const [index, glyph] of run.glyphs.entries()) {
+        const position = run.positions[index], box = glyph.bbox;
+        const x = penX + position.xOffset * scale, baseline = size + lineIndex * leading - (penY + position.yOffset * scale);
+        minX = Math.min(minX, x + box.minX * scale); maxX = Math.max(maxX, x + box.maxX * scale);
+        minY = Math.min(minY, baseline - box.maxY * scale); maxY = Math.max(maxY, baseline - box.minY * scale);
+        penX += position.xAdvance * scale + (index < run.glyphs.length - 1 ? content.tracking || 0 : 0); penY += position.yAdvance * scale;
+      }
+      maxX = Math.max(maxX, penX);
+    }
+    maxY = Math.max(maxY, lines.length * leading);
+    const stroke = content.stroke && content.stroke !== 'none' ? (content.strokeWidth ?? 1) / 2 : 0, old = layer.localBounds;
+    const x = Math.floor(Math.min(old.x, minX - stroke)), y = Math.floor(Math.min(old.y, minY - stroke));
+    const right = Math.ceil(Math.max(old.x + old.width, maxX + stroke)), bottom = Math.ceil(Math.max(old.y + old.height, maxY + stroke));
+    fail([x,y,right,bottom,right-x,bottom-y].every(n => Number.isFinite(n) && Math.abs(n) <= 1e7), 'text glyph layout exceeds document geometry limits', 422, 'FONT_LAYOUT_TOO_LARGE');
+    layer.localBounds = {x,y,width:right-x,height:bottom-y};
   }
   validateFontAssets(document, owner) {
     if (document.schemaVersion === 3) return;
