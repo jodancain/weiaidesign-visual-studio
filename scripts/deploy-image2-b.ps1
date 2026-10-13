@@ -163,15 +163,39 @@ function Guest-Secret($Map) {
     Fail 'visitor_secret_missing' 'Original signed visitor configuration is unavailable.'
 }
 function Protect-PrivateDirectory([string]$Path) {
-    $null = [IO.Directory]::CreateDirectory($Path)
-    $acl = [Security.AccessControl.DirectorySecurity]::new()
-    $acl.SetAccessRuleProtection($true,$false)
+    $exists = Test-Path -LiteralPath $Path -PathType Container
+    if (!$exists) { $null = [IO.Directory]::CreateDirectory($Path) }
+    $directory = [IO.DirectoryInfo]::new($Path)
     $current = [Security.Principal.WindowsIdentity]::GetCurrent().User
-    $acl.SetOwner($current)
-    foreach ($sid in @($current,[Security.Principal.SecurityIdentifier]::new('S-1-5-18'),[Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))) {
+    $trusted = @($current,[Security.Principal.SecurityIdentifier]::new('S-1-5-18'),[Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))
+    $owner = $directory.GetAccessControl([Security.AccessControl.AccessControlSections]::Owner).GetOwner([Security.Principal.SecurityIdentifier])
+    Require ($owner.Value -ceq $current.Value) 'private_acl_owner_mismatch' 'Private release directory owner differs from the current release identity.'
+    # Existing protected directories need verification, not another owner/group write.
+    # Access-only descriptors also avoid requesting SeRestorePrivilege through Set-Acl.
+    $acl = $directory.GetAccessControl([Security.AccessControl.AccessControlSections]::Access)
+    if ($exists) {
+        Assert-PrivateDirectoryAcl $acl $trusted
+        return
+    }
+    $acl.SetAccessRuleProtection($true,$false)
+    foreach ($rule in @($acl.GetAccessRules($true,$false,[Security.Principal.SecurityIdentifier]))) { $acl.RemoveAccessRuleSpecific($rule) }
+    foreach ($sid in $trusted) {
         $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid,'FullControl','ContainerInherit,ObjectInherit','None','Allow'))
     }
-    Set-Acl -LiteralPath $Path -AclObject $acl
+    $directory.SetAccessControl($acl)
+    $verified = $directory.GetAccessControl([Security.AccessControl.AccessControlSections]::Access)
+    Assert-PrivateDirectoryAcl $verified $trusted
+}
+function Assert-PrivateDirectoryAcl($Acl, $Trusted) {
+    Require $Acl.AreAccessRulesProtected 'private_acl_drift' 'Private directory must not inherit access grants.'
+    $rules = @($Acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]))
+    Require ($rules.Count -eq $Trusted.Count) 'private_acl_drift' 'Private directory access rules differ from the restricted release policy.'
+    foreach ($sid in $Trusted) {
+        $matching = @($rules | Where-Object { $_.IdentityReference.Value -ceq $sid.Value })
+        Require ($matching.Count -eq 1) 'private_acl_drift' 'A required private-directory identity is missing or duplicated.'
+        $rule = $matching[0]
+        Require (!$rule.IsInherited -and $rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and $rule.FileSystemRights -eq [Security.AccessControl.FileSystemRights]::FullControl -and $rule.InheritanceFlags -eq ([Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit) -and $rule.PropagationFlags -eq [Security.AccessControl.PropagationFlags]::None) 'private_acl_drift' 'Private-directory grants must be explicit inherited-child FullControl grants for the trusted identities only.'
+    }
 }
 function Write-Env([string]$Path, $Map) {
     $lines = @($Map.Keys | Sort-Object | ForEach-Object { "$_=$($Map[$_])" })

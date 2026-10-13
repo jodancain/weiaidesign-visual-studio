@@ -104,9 +104,26 @@ test('failure diagnostics preserve the original error source with granular contr
   assert.doesNotMatch(failure,/\$failure\.(?:Message|ErrorDetails)|Exception\.Message|InvocationInfo\.(?:Line|PositionMessage)|\$env:|Config\.Env/);
   assert.ok(failure.indexOf('$diagnostic | ConvertTo-Json')<failure.indexOf('Write-Error'));
 });
+test('existing private ACLs are verified and reused; fresh ACL writes affect Access only and never change owner or group',()=>{
+  const protect=body('Protect-PrivateDirectory'),verify=body('Assert-PrivateDirectoryAcl');
+  assert.match(protect,/AccessControlSections\]::Owner.*GetOwner/);assert.match(protect,/owner\.Value -ceq \$current\.Value/);
+  assert.match(protect,/AccessControlSections\]::Access/);assert.match(protect,/if \(\$exists\) \{\s*Assert-PrivateDirectoryAcl \$acl \$trusted\s*return/s);
+  assert.ok(protect.indexOf('if ($exists)')<protect.indexOf('SetAccessRuleProtection'));
+  assert.match(protect,/\$directory\.SetAccessControl\(\$acl\)/);assert.doesNotMatch(protect,/SetOwner|SetGroup|Set-Acl\s+-|AccessControlSections\]::All|::new\(\).*DirectorySecurity/);
+  assert.match(verify,/AreAccessRulesProtected/);assert.match(verify,/\$rules\.Count -eq \$Trusted\.Count/);assert.match(verify,/matching\.Count -eq 1/);
+  for(const guard of ['!$rule.IsInherited','AccessControlType]::Allow','FileSystemRights]::FullControl','InheritanceFlags]::ContainerInherit','InheritanceFlags]::ObjectInherit','PropagationFlags]::None'])assert.ok(verify.includes(guard));
+  assert.match(protect,/'S-1-5-18'/);assert.match(protect,/'S-1-5-32-544'/);assert.doesNotMatch(protect,/'S-1-1-0'|'S-1-5-11'/);
+});
 
 const powershell=['pwsh','powershell'].find(name=>{const r=spawnSync(name,['-NoProfile','-NonInteractive','-Command','exit 0'],{encoding:'utf8',timeout:5000});return !r.error&&r.status===0;});
 const quote=(value:string)=>`'${value.replaceAll("'","''")}'`;
+test('real Windows private ACL creation and second phase preserve ownership, reject broad grants and do not rewrite valid descriptors',{skip:!powershell||process.platform!=='win32'?'Windows PowerShell and NTFS are required; static ACL checks do not prove actual privilege behavior':false},t=>{
+  const dir=mkdtempSync(join(tmpdir(),'image2-release-acl-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));const target=join(dir,'protected');
+  const signatures:Record<string,string>={Fail:'([string]$Code,[string]$Message)',Require:'($Condition,[string]$Code,[string]$Message)','Assert-PrivateDirectoryAcl':'($Acl,$Trusted)','Protect-PrivateDirectory':'([string]$Path)'};
+  const definitions=Object.entries(signatures).map(([name,signature])=>`function ${name}${signature} {${body(name)}}`).join('\n');
+  const code=`$ErrorActionPreference='Stop';${definitions};$path=${quote(target)};Protect-PrivateDirectory $path;$di=[IO.DirectoryInfo]::new($path);$first=$di.GetAccessControl();$before=$first.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::All);Protect-PrivateDirectory $path;$after=$di.GetAccessControl().GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::All);if($before -cne $after){throw 'Valid existing ACL was rewritten'};$acl=$di.GetAccessControl([Security.AccessControl.AccessControlSections]::Access);$acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new('S-1-1-0'),'Read','ContainerInherit,ObjectInherit','None','Allow'));$di.SetAccessControl($acl);$rejected=$false;try{Protect-PrivateDirectory $path}catch{$rejected=$script:FailureCode -eq 'private_acl_drift'};if(!$rejected){throw 'Broad grant was not rejected'};Write-Output '{"repeatPassed":true,"broadGrantRejected":true}'`;
+  const r=spawnSync(powershell!,['-NoProfile','-NonInteractive','-Command',code],{encoding:'utf8',timeout:15000});assert.equal(r.status,0,`${r.stdout}\n${r.stderr}`);assert.deepEqual(JSON.parse(r.stdout.trim()),{repeatPassed:true,broadGrantRejected:true});
+});
 test('real PowerShell AST parses the release script without executing it',{skip:!powershell?'PowerShell is not installed; lexical/static checks do not replace AST validation':false},()=>{
   const code=`$t=$null;$e=$null;$null=[Management.Automation.Language.Parser]::ParseFile(${quote(scriptPath)},[ref]$t,[ref]$e);if($e.Count){$e|ForEach-Object{$_.Message};exit 1};exit 0`;
   const r=spawnSync(powershell!,['-NoProfile','-NonInteractive','-Command',code],{encoding:'utf8',timeout:15000});assert.equal(r.status,0,`${r.stdout}\n${r.stderr}`);
