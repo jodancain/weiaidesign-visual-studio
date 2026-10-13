@@ -16,7 +16,7 @@ export function imageFontIdentity(asset: ImageAsset): string {
 /** Original font bytes only. At most two bounded same-origin reads; no full download fallback for large fonts. */
 export function createImageFontLoader(options: Options = {}) {
   const read = options.fetch || globalThis.fetch;
-  const timeoutMs = options.timeoutMs ?? 20_000, limit = options.cacheBytes ?? MAX_FONT_BYTES;
+  const timeoutMs = options.timeoutMs ?? 45_000, limit = options.cacheBytes ?? MAX_FONT_BYTES;
   if (!(timeoutMs > 0 && timeoutMs <= 60_000) || !(limit >= 0 && limit <= MAX_FONT_BYTES)) throw new Error('Invalid font loader bounds');
   const ready = new Map<string, ArrayBuffer>(), pending = new Map<string, Promise<ArrayBuffer>>(), controllers = new Set<AbortController>();
   let storedBytes = 0, generation = 0, serial = Promise.resolve();
