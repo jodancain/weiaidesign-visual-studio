@@ -1,68 +1,44 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { BaseBoxShapeUtil, HTMLContainer, Rectangle2d, T, type TLBaseShape, type TLResizeInfo, resizeBox } from 'tldraw';
 import { assetUrl } from '../../lib/image2/client';
 import type { ImageLayer } from '../../lib/image2/types';
+import { normalizeSvg } from '../../services/image2/svg-normalize.mjs';
 
 type DesignShape = TLBaseShape<'design-text' | 'design-vector' | 'source-mask' | 'design-group', { w: number; h: number; layer: ImageLayer }>;
 const props = { w: T.number, h: T.number, layer: T.jsonValue };
-export function safeSvg(markup: string, fill?: string, pathStyles?: Record<string, Record<string, unknown>>, scope = 'i2-vector') {
-  const doc = new DOMParser().parseFromString(markup, 'image/svg+xml');
-  if (doc.querySelector('parsererror') || doc.documentElement.localName !== 'svg') throw new Error('SVG 格式无效');
-  doc.documentElement.setAttribute('id', scope);
-  const counters: Record<string, number> = {};
-  for (const element of Array.from(doc.querySelectorAll('*'))) {
-    if (['script', 'foreignObject', 'iframe', 'object', 'embed'].includes(element.localName)) { element.remove(); continue; }
-    if (element.localName === 'style') {
-      // Preserve ordinary SVG class paint without allowing CSS to style the workspace itself.
-      const allowed = new Set(['fill', 'stroke', 'stroke-width', 'opacity', 'fill-opacity', 'stroke-opacity', 'stroke-linecap', 'stroke-linejoin', 'stroke-miterlimit', 'fill-rule', 'clip-rule', 'color', 'stop-color', 'stop-opacity']);
-      element.textContent = Array.from((element.textContent || '').matchAll(/([^{}]+)\{([^{}]*)\}/g)).map(match => {
-        if (/[@]|expression|javascript:/i.test(match[0]) || Array.from(match[0].matchAll(/url\(([^)]*)\)/gi)).some(url => !url[1].trim().replace(/^['"]|['"]$/g, '').startsWith('#'))) return '';
-        const declarations = match[2].split(';').filter(part => allowed.has(part.split(':')[0].trim())).join(';');
-        const selectors = match[1].split(',').filter(selector => /^[\w\s.#>:+\-\[\]="']+$/.test(selector.trim())).map(selector => `#${scope} ${selector.trim()}`);
-        return declarations && selectors.length ? `${selectors.join(',')}{${declarations}}` : '';
-      }).join('\n'); continue;
-    }
-    for (const attr of Array.from(element.attributes)) {
-      const externalUrl = Array.from(attr.value.matchAll(/url\(([^)]*)\)/gi)).some(url => !url[1].trim().replace(/^['"]|['"]$/g, '').startsWith('#'));
-      if (/^on/i.test(attr.name) || ((attr.name === 'href' || attr.name === 'xlink:href') && !attr.value.startsWith('#')) || externalUrl || /javascript:/i.test(attr.value)) element.removeAttribute(attr.name);
-    }
-    if (['path', 'polygon', 'rect', 'circle', 'ellipse', 'line', 'polyline'].includes(element.localName)) {
-      const tag = element.localName, index = counters[tag] || 0; counters[tag] = index + 1;
-      const id = element.id || `${tag}-${index}`, paint: Record<string, unknown> = { ...(fill ? { fill } : {}), ...pathStyles?.['*'], ...pathStyles?.[id] };
-      for (const key of ['fill', 'stroke', 'stroke-width']) if (paint[key] !== undefined) {
-        element.setAttribute(key, String(paint[key]));
-        if (element.hasAttribute('style')) element.setAttribute('style', element.getAttribute('style')!.split(';').filter(part => part.split(':')[0].trim() !== key).join(';'));
-        (element as SVGElement).style.setProperty(key, String(paint[key]), 'important');
-      }
-    }
-  }
-  // Two uploaded Logos often reuse paint0/clip0. Keep those resources local to this layer.
-  const ids = new Map(Array.from(doc.querySelectorAll('[id]')).map((element, index) => [element.id, `${scope}_${index}`]));
-  const references = (value: string) => value.replace(/url\(\s*(['"]?)#([^\s)'";]+)\1\s*\)/gi, (_all, quote: string, id: string) => `url(${quote}#${ids.get(id) || id}${quote})`);
-  for (const element of Array.from(doc.querySelectorAll('*'))) {
-    for (const attribute of Array.from(element.attributes)) {
-      if (attribute.name === 'id') element.setAttribute('id', ids.get(attribute.value) || attribute.value);
-      else if ((attribute.name === 'href' || attribute.name === 'xlink:href') && attribute.value.startsWith('#')) element.setAttribute(attribute.name, `#${ids.get(attribute.value.slice(1)) || attribute.value.slice(1)}`);
-      else element.setAttribute(attribute.name, references(attribute.value));
-    }
-    if (element.localName === 'style') element.textContent = (element.textContent || '').replace(/([^{}]+)\{([^{}]*)\}/g, (_all, selectors: string, declarations: string) => `${selectors.replace(/#([\w-]+)/g, (_match, id: string) => `#${ids.get(id) || id}`)}{${references(declarations)}}`);
-  }
-  doc.documentElement.setAttribute('width', '100%'); doc.documentElement.setAttribute('height', '100%'); doc.documentElement.setAttribute('preserveAspectRatio', 'none');
-  return new XMLSerializer().serializeToString(doc.documentElement);
+export function safeSvg(markup: string, fill?: string, pathStyles?: Record<string, Record<string, unknown>>, scope = 'i2-vector', sourceSize?: { width?: number; height?: number }) {
+  return normalizeSvg(markup, { scope, fill, styles: pathStyles, responsive: true, preserveAspectRatio: 'none', fallbackWidth: sourceSize?.width, fallbackHeight: sourceSize?.height }).svg;
 }
+
 function VectorLayer({ layer }: { layer: ImageLayer }) {
-  const [svg, setSvg] = useState(''), [error, setError] = useState('');
+  const sourceWidth = Number(layer.metadata?.intrinsicWidth) || Number(layer.metadata?.pixelWidth) || undefined;
+  const sourceHeight = Number(layer.metadata?.intrinsicHeight) || Number(layer.metadata?.pixelHeight) || undefined;
+  const assetKey = JSON.stringify([layer.id, layer.assetId]);
+  const pathStylesJson = JSON.stringify(layer.metadata?.pathStyles || {});
+  const [loaded, setLoaded] = useState({ key: '', markup: '', error: '' });
   useEffect(() => {
     if (!layer.assetId) return;
     let active = true;
     fetch(assetUrl(layer.assetId)).then(async response => { if (!response.ok) throw new Error('矢量文件不可用'); return response.text(); })
-      .then(text => { if (active) { setSvg(safeSvg(text, layer.fill, layer.metadata?.pathStyles as Record<string, Record<string, unknown>> | undefined, `i2-vector-${layer.id}`)); setError(''); } }).catch(err => { if (active) setError(err.message); });
+      .then(markup => { if (active) setLoaded({ key: assetKey, markup, error: '' }); })
+      .catch(err => { if (active) setLoaded({ key: assetKey, markup: '', error: err.message }); });
     return () => { active = false; };
-  }, [layer.id, layer.assetId, layer.fill, layer.metadata?.pathStyles]);
-  return svg ? <div className="i2-svg" style={{ width: '100%', height: '100%' }} dangerouslySetInnerHTML={{ __html: svg }} /> : <span>{error || '读取图形…'}</span>;
+  }, [assetKey, layer.assetId]);
+  // Immutable source bytes stay cached while paint controls change locally.
+  const rendered = useMemo(() => {
+    if (loaded.key !== assetKey || !loaded.markup) return { svg: '', error: loaded.error };
+    try {
+      return { svg: safeSvg(loaded.markup, layer.fill, JSON.parse(pathStylesJson) as Record<string, Record<string, unknown>>, `i2-vector-${layer.id}`, { width: sourceWidth, height: sourceHeight }), error: '' };
+    } catch (error) { return { svg: '', error: error instanceof Error ? error.message : '矢量文件不可用' }; }
+  }, [assetKey, loaded, layer.id, layer.fill, pathStylesJson, sourceWidth, sourceHeight]);
+  // An old fetch or failed replacement must never display another asset as this layer.
+  if (!layer.assetId) return <span>矢量素材缺失，请重新选择本地素材</span>;
+  if (loaded.key !== assetKey) return <span>读取图形…</span>;
+  return rendered.svg ? <div className="i2-svg" style={{ width: '100%', height: '100%' }} dangerouslySetInnerHTML={{ __html: rendered.svg }} /> : <span>{rendered.error || '矢量文件不可用'}</span>;
 }
-function RenderLayer({ layer }: { layer: ImageLayer }) {
+
+function LayerContent({ layer }: { layer: ImageLayer }) {
   if (layer.metadata?.presentationArtboard) return <div style={{ width: '100%', height: '100%', background: '#fff', border: '1px solid #dadce3', boxShadow: '0 3px 14px #0000000c' }} />;
   if (layer.type === 'group') return null;
   const sourcePatch = layer.type === 'text' && layer.metadata?.fontConfirmed !== true && layer.assetId;
@@ -78,8 +54,13 @@ function RenderLayer({ layer }: { layer: ImageLayer }) {
   if (!layer.assetId) return <div className="i2-layer-placeholder">{layer.name}</div>;
   // Immutable pixel assets must not be resampled by Next's image optimizer.
   // eslint-disable-next-line @next/next/no-img-element
-  return <img src={assetUrl(layer.assetId)} alt={layer.name} draggable={false} style={{ width: '100%', height: '100%', objectFit: 'fill',
-    ...(layer.maskAssetId ? { maskImage: `url("${assetUrl(layer.maskAssetId)}")`, maskSize: '100% 100%', maskMode: 'luminance' as const } : {}) }} />;
+  return <img src={assetUrl(layer.assetId)} alt={layer.name} draggable={false} style={{ width: '100%', height: '100%', objectFit: 'fill' }} />;
+}
+function RenderLayer({ layer }: { layer: ImageLayer }) {
+  if (layer.type === 'group') return null;
+  // The display mask applies equally to pixels, text and vector contents.
+  return <div className="i2-layer-content" style={{ width: '100%', height: '100%',
+    ...(layer.maskAssetId ? { maskImage: `url("${assetUrl(layer.maskAssetId)}")`, maskSize: '100% 100%', maskMode: 'luminance' as const } : {}) }}><LayerContent layer={layer} /></div>;
 }
 abstract class DesignShapeBase extends BaseBoxShapeUtil<DesignShape> {
   static props = props;

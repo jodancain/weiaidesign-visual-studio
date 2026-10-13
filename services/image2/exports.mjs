@@ -6,8 +6,7 @@ import { Resvg } from '@resvg/resvg-js';
 import PDFDocument from 'pdfkit';
 import SVGtoPDF from 'svg-to-pdfkit';
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate';
-import { XMLParser, XMLBuilder } from 'fast-xml-parser';
-import * as cssTree from 'css-tree';
+import { normalizeSvg } from './svg-normalize.mjs';
 import * as fontkit from 'fontkit';
 import { fontWeight, pdfFontBytes } from './fonts.mjs';
 import { decodeRGBA, encodePNG } from './processors.mjs';
@@ -19,6 +18,8 @@ const fail = (ok, detail, code = 'invalid_export') => { if (!ok) throw Object.as
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const uri = record => `data:${record.asset.mime};base64,${record.bytes.toString('base64')}`;
 const fontAlias = id => `i2-font-${hash(Buffer.from(id)).slice(0,24)}`;
+const layerSvg = (record,layer) => normalizeSvg(record.bytes.toString('utf8'), { scope: `v_${hash(Buffer.from(layer.id)).slice(0,24)}`, fill: layer.fill, styles: layer.metadata?.pathStyles, fallbackWidth: record.asset.width, fallbackHeight: record.asset.height, preserveAspectRatio: 'none' });
+const complexPdfSvg = source => /<(?:[\w-]+:)?(?:style|text|tspan|filter|mask|image)\b|\b(?:opacity|fill-opacity|stroke-opacity)\s*=|\b(?:opacity|filter|mask)\s*:/i.test(source);
 
 /** A scoped export is a view of the frozen document, never an authored revision. */
 export function scopedExportDocument(document, options = {}) {
@@ -75,83 +76,7 @@ function glyphPaths(layer, face) {
   return paths.join('');
 }
 
-function stylePaths(svg, styles = {}) {
-  // Uploaded SVG is validated by inspectAsset; overrides only change known path paint.
-  const parser = new XMLParser({ ignoreAttributes: false, preserveOrder: true });
-  const tree = parser.parse(svg);
-  const pathIndices = {};
-  function walk(value) {
-    if (!value || typeof value !== 'object') return;
-    const tag = Object.keys(value).find(tag => ['path','polygon','polyline','rect','circle','ellipse','line'].includes(tag));
-    if (tag) {
-      value[':@'] ||= {};
-      const attrs = value[':@'];
-      const id = attrs['@_id'] || `${tag}-${pathIndices[tag] || 0}`;
-      pathIndices[tag] = (pathIndices[tag] || 0) + 1;
-      const paint = { ...styles['*'], ...styles[id] };
-      const changed = [];
-      for (const key of ['fill', 'stroke', 'stroke-width']) if (paint[key] !== undefined) {
-        fail(!/url\s*\(|[{}<>]/i.test(String(paint[key])), '路径颜色无效');
-        attrs[`@_${key}`] = paint[key]; changed.push(key);
-      }
-      if (changed.length) {
-        const prior = String(attrs['@_style'] || '').split(';').filter(rule => !changed.includes(rule.split(':')[0].trim()));
-        attrs['@_style'] = [...prior, ...changed.map(k => `${k}:${paint[k]} !important`)].filter(Boolean).join(';');
-      }
-    }
-    for (const [key, v] of Object.entries(value)) if (key !== ':@') { if (Array.isArray(v)) v.forEach(walk); else walk(v); }
-  }
-  walk(tree);
-  return new XMLBuilder({ ignoreAttributes: false, preserveOrder: true }).build(tree);
-}
-
-function scopedSvg(svg, scope, width, height, fallbackViewBox) {
-  const tree = new XMLParser({ ignoreAttributes: false, preserveOrder: true }).parse(svg);
-  const root = tree.find(node => node.svg);
-  fail(root, 'SVG元素无效');
-  const ids = new Map(); let index = 0;
-  function visit(value, fn) { if (!value || typeof value !== 'object') return; fn(value); for (const [key, v] of Object.entries(value)) if (key !== ':@') { if (Array.isArray(v)) v.forEach(n => visit(n, fn)); else visit(v, fn); } }
-  visit(tree, node => { if (node[':@']?.['@_id']) ids.set(node[':@']['@_id'], `s_${scope}_${index++}`); });
-  if (root[':@']?.['@_id']) ids.set(root[':@']['@_id'], scope);
-  const refs = value => String(value).replace(/url\(\s*(['"]?)#([^)'"\s]+)\1\s*\)/g, (_, quote, id) => `url(#${ids.get(id) || id})`);
-  visit(tree, node => {
-    const attrs = node[':@'];
-    if (attrs) for (const [key, value] of Object.entries(attrs)) {
-      if (key === '@_id') attrs[key] = ids.get(value) || value;
-      else if (key === '@_href' || key === '@_xlink:href') attrs[key] = String(value).startsWith('#') ? `#${ids.get(String(value).slice(1)) || String(value).slice(1)}` : value;
-      else attrs[key] = refs(value);
-    }
-    if (Array.isArray(node.style)) for (const text of node.style) if (text['#text']) {
-      const ast = cssTree.parse(refs(text['#text']));
-      cssTree.walk(ast, { visit: 'IdSelector', enter(selector) { selector.name = ids.get(selector.name) || selector.name; } });
-      cssTree.walk(ast, { visit: 'Rule', enter(rule) {
-        if (rule.prelude?.type !== 'SelectorList') return;
-        const selectors = [];
-        rule.prelude.children.forEach(selector => {
-          const original = cssTree.generate(selector);
-          selectors.push(`${original.replace(/:root/g, `#${scope}`)}.${scope}_content`);
-        });
-        rule.prelude = cssTree.parse(selectors.join(','), { context: 'selectorList' });
-      } });
-      text['#text'] = cssTree.generate(ast);
-    }
-  });
-  root[':@'] ||= {}; Object.assign(root[':@'], { '@_id': scope, '@_width': width, '@_height': height, '@_viewBox': root[':@']['@_viewBox'] || fallbackViewBox, '@_preserveAspectRatio': 'none' });
-  visit(tree, node => {
-    const element = Object.keys(node).find(key => key !== ':@' && key !== '#text' && Array.isArray(node[key]));
-    if (!element) return;
-    node[':@'] ||= {};
-    node[':@']['@_class'] = `${node[':@']['@_class'] || ''} ${scope}_content`.trim();
-  });
-  // resvg applies nested <svg opacity> twice; a real compositing group applies it once.
-  if (root[':@']['@_opacity'] !== undefined) {
-    const opacity = root[':@']['@_opacity']; delete root[':@']['@_opacity'];
-    root.svg = [{ g: root.svg, ':@': { '@_opacity': opacity } }];
-  }
-  return new XMLBuilder({ ignoreAttributes: false, preserveOrder: true }).build([root]);
-}
-
-export async function documentSvg(document, getAsset, { textAsPaths = false } = {}) {
+export async function documentSvg(document, getAsset, { textAsPaths = false, compileVectors = false } = {}) {
   const cache = new Map();
   const load = async id => { if (!cache.has(id)) cache.set(id, await getAsset(id)); return cache.get(id); };
   const fonts = new Map();
@@ -167,6 +92,13 @@ export async function documentSvg(document, getAsset, { textAsPaths = false } = 
     byParent.set(key, [...(byParent.get(key) || []), layer]);
   }
   const defs = [];
+  let compilerFontDirectory,compilerFontFiles;
+  async function vectorFontFiles(){
+    if(compilerFontFiles)return compilerFontFiles;
+    compilerFontFiles=[];
+    if(fonts.size){compilerFontDirectory=mkdtempSync(join(tmpdir(),'image2-svg-fonts-'));let index=0;for(const font of fonts.values()){fail(font.bytes.toString('ascii',0,4)!=='wOFF','SVG 文字渲染暂不支持 WOFF1，请使用 TTF、OTF 或 WOFF2；原文件保留。','SVG_FONT_CONTAINER_UNAVAILABLE');const file=join(compilerFontDirectory,`${index++}.ttf`);writeFileSync(file,await pdfFontBytes(font.bytes));compilerFontFiles.push(file);}}
+    return compilerFontFiles;
+  }
   async function render(layer, ancestors) {
     if (!layer.visible || layer.type === 'mask') return '';
     fail(!ancestors.has(layer.id), '图层父级循环');
@@ -186,13 +118,23 @@ export async function documentSvg(document, getAsset, { textAsPaths = false } = 
     if (layer.type === 'raster' || preservedText) {
       if (layer.assetId) {
         const original = await load(layer.assetId);
-        const record = { ...original, bytes: await encodePNG(await decodeRGBA(original.bytes, original.asset.mime)), asset: { ...original.asset, mime: 'image/png' } };
+        const bytes=original.asset.mime==='image/svg+xml'?Buffer.from(layerSvg(original,layer).svg):original.bytes;
+        const record = { ...original, bytes: await encodePNG(await decodeRGBA(bytes, original.asset.mime)), asset: { ...original.asset, mime: 'image/png' } };
         body = `<image href="${uri(record)}" width="${layer.width}" height="${layer.height}" preserveAspectRatio="none"/>`;
       }
     } else if (layer.type === 'vector' && layer.assetId) {
       const record = await load(layer.assetId);
-      const parsed = stylePaths(record.bytes.toString('utf8'), { ...(layer.fill ? { '*': { fill: layer.fill } } : {}), ...layer.metadata?.pathStyles });
-      body = scopedSvg(parsed, `v_${hash(Buffer.from(layer.id)).slice(0,24)}`, layer.width, layer.height, `0 0 ${record.asset.width || layer.width} ${record.asset.height || layer.height}`);
+      const normalized = layerSvg(record,layer);
+      if(compileVectors){
+        fail(!/<(?:[\w-]+:)?(?:text|tspan)\b/i.test(record.bytes.toString('utf8'))||Boolean(layer.fontAssetId),'SVG 含有文字，但没有绑定实际字体。请先绑定字体或把原文字转为路径；原始文件保留。','SVG_FONT_REQUIRED');
+        // Compile the source in its native viewport: CSS/root opacity becomes an
+        // internal group and registered SVG text becomes actual glyph paths. This
+        // avoids resvg's nested-SVG root opacity bug without clipping or resampling.
+        const hasText=/<(?:[\w-]+:)?(?:text|tspan)\b/i.test(record.bytes.toString('utf8'));
+        const compiled=new Resvg(normalized.svg,{font:{loadSystemFonts:false,fontFiles:hasText?await vectorFontFiles():[],defaultFontFamily:'Noto Sans CJK SC'}}).toString();
+        const proxy=normalizeSvg(compiled,{scope:`compiled_${hash(Buffer.from(layer.id)).slice(0,24)}`,preserveAspectRatio:'none'});
+        body=`<g transform="scale(${layer.width / normalized.width} ${layer.height / normalized.height})">${proxy.svg}</g>`;
+      }else body = `<g transform="scale(${layer.width / normalized.width} ${layer.height / normalized.height})">${normalized.svg}</g>`;
     } else if (layer.type === 'text') {
       const size = layer.fontSize || 24, leading = (layer.lineHeight || 1.2) * size;
       const lines = String(layer.text || '').split('\n');
@@ -207,15 +149,17 @@ export async function documentSvg(document, getAsset, { textAsPaths = false } = 
     for (const child of byParent.get(layer.id) || []) body += await render(child, next);
     return `<g data-layer-id="${escape(layer.id)}" transform="${transform}" opacity="${opacity}"${mask}${clip}>${body}</g>`;
   }
-  let content = '';
-  for (const layer of byParent.get('') || []) content += await render(layer, new Set());
-  return { svg: `<svg xmlns="http://www.w3.org/2000/svg" width="${document.width}" height="${document.height}" viewBox="0 0 ${document.width} ${document.height}"><defs>${css ? `<style>${css}</style>` : ''}${defs.join('')}</defs>${content}</svg>`, fonts };
+  try{
+    let content = '';
+    for (const layer of byParent.get('') || []) content += await render(layer, new Set());
+    return { svg: `<svg xmlns="http://www.w3.org/2000/svg" width="${document.width}" height="${document.height}" viewBox="0 0 ${document.width} ${document.height}"><defs>${css ? `<style>${css}</style>` : ''}${defs.join('')}</defs>${content}</svg>`, fonts };
+  }finally{if(compilerFontDirectory)rmSync(compilerFontDirectory,{recursive:true,force:true});}
 }
 
 export async function documentPng(document, getAsset) {
   // resvg resolves fonts by their embedded family name and does not load SVG @font-face aliases.
   // Render registered text from its own actual glyph paths; downloadable SVG keeps semantic text.
-  const { svg, fonts } = await documentSvg(document, getAsset, { textAsPaths: true });
+  const { svg, fonts } = await documentSvg(document, getAsset, { textAsPaths: true, compileVectors: true });
   const dir = mkdtempSync(join(tmpdir(), 'image2-fonts-'));
   try {
     const files = [...fonts.values()].map((font, index) => {
@@ -272,13 +216,18 @@ export async function documentPdf(document, getAsset) {
       if (layer.stroke) pdf.strokeColor(layer.stroke).lineWidth(layer.strokeWidth || 1);
       // Explicit lines share the SVG baseline. The editing box is not a text clipping box.
       for (const [index, line] of String(layer.text || '').split('\n').entries()) pdf.text(line, 0, size + index * size * (layer.lineHeight || 1.2), { lineBreak: false, baseline: 'alphabetic', characterSpacing: layer.tracking || 0, fill: true, stroke: Boolean(layer.stroke) });
-    } else if (layer.type === 'vector' && layer.assetId && !layer.maskAssetId) {
+    } else if (layer.type === 'vector' && layer.assetId) {
       const record = await getAsset(layer.assetId);
-      SVGtoPDF(pdf, stylePaths(record.bytes.toString('utf8'), { ...(layer.fill ? { '*': { fill: layer.fill } } : {}), ...layer.metadata?.pathStyles }), 0, 0, { width: layer.width, height: layer.height, preserveAspectRatio: 'none', assumePt: true });
+      const normalized = layerSvg(record,layer);
+      if(layer.maskAssetId||layer.opacity<1||complexPdfSvg(record.bytes.toString('utf8'))){
+        const local={...document,width:Math.max(1,Math.ceil(layer.width)),height:Math.max(1,Math.ceil(layer.height)),layers:[{...layer,x:0,y:0,rotation:0,opacity:1,parentId:undefined}]};
+        pdf.image(await documentPng(local,getAsset),0,0,{width:layer.width,height:layer.height});
+      }else SVGtoPDF(pdf, normalized.svg, 0, 0, { width: layer.width, height: layer.height, preserveAspectRatio: 'none', assumePt: true });
     } else {
       // Raster/vector effects retain appearance; standalone SVG keeps true paths.
       const record = await getAsset(layer.assetId);
-      const raw = await decodeRGBA(record.bytes, record.asset.mime);
+      const bytes=record.asset.mime==='image/svg+xml'?Buffer.from(layerSvg(record,layer).svg):record.bytes;
+      const raw = await decodeRGBA(bytes, record.asset.mime);
       if (layer.maskAssetId) {
         const mask = await getAsset(layer.maskAssetId), pixels = await decodeRGBA(mask.bytes, mask.asset.mime);
         fail(pixels.width === raw.width && pixels.height === raw.height, '图层遮罩尺寸不匹配');

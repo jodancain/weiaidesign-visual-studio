@@ -12,13 +12,15 @@ test('image BFF retries a disconnected read with the same owner, but never repla
     const visitor = studioVisitor(new Request('https://studio.example'));
     const headers = { cookie: visitor.cookie.split(';')[0], range: 'bytes=0-2' };
     const context = { params: Promise.resolve({ path: ['image2', 'assets', 'original', 'content'] }) };
+    const svgPolicy = "default-src 'none'; img-src data:; font-src data:; style-src 'unsafe-inline'; sandbox";
     globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
       const h = new Headers(init?.headers); calls.push({ method: init?.method, owner: h.get('x-studio-visitor-id'), range: h.get('range') });
       if (calls.length === 1) throw new TypeError('connection reset');
-      return new Response('png', { status: 206, headers: { 'content-range': 'bytes 0-2/3' } });
+      return new Response('<sv', { status: 206, headers: { 'content-type': 'image/svg+xml', 'content-range': 'bytes 0-2/6', 'content-security-policy': svgPolicy } });
     }) as typeof fetch;
     const read = await GET(new Request('https://studio.example/api/v3/image2/assets/original/content', { headers }), context);
     assert.equal(read.status, 206); assert.equal(calls.length, 2); assert.deepEqual(calls[0], calls[1]); assert.equal(calls[0].owner, visitor.id);
+    assert.equal(read.headers.get('content-security-policy'), svgPolicy); assert.equal(read.headers.get('content-range'), 'bytes 0-2/6'); assert.equal(await read.text(), '<sv');
     calls.length = 0;
     globalThis.fetch = (async (_url: unknown, init?: RequestInit) => { calls.push({ method: init?.method, owner: null, range: null }); throw new TypeError('lost mutation receipt'); }) as typeof fetch;
     const mutation = await POST(new Request('https://studio.example/api/v3/image2/operations', { method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify({ idempotencyKey: 'frozen-original-key' }) }), { params: Promise.resolve({ path: ['image2', 'operations'] }) });

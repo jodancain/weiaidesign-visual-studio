@@ -2,6 +2,8 @@
 
 This repository keeps the Next.js workbench at its root. It includes the ontology-video workflow, Studio v3 editor, timeline, generation pipeline and effects controls.
 
+[Development index](docs/DEVELOPMENT_INDEX.md) lists the implemented modules and their frontend, backend and worker source locations.
+
 ## Web development
 
 ```sh
@@ -13,9 +15,15 @@ Configure server credentials using `.env.example`. Studio v3 calls the separate 
 
 ## Image Studio 2.0
 
-The `/image2` preview entry uses a separate Node 22 service and SQLite volume. Install its dependencies with `npm ci --prefix services/image2`. CPU edits, real Chinese text/SVG layers, pixel-preserving layer restoration and persistent candidate jobs share one operation registry. The original entry remains available.
+The original workbench integrates Image Studio 2.0 through its existing controls; `/image2` remains a separate preview entry. Both use a separate Node 22 service and SQLite volume. Install its dependencies with `npm ci --prefix services/image2`. CPU edits, real Chinese text/SVG layers, pixel-preserving layer restoration and persistent candidate jobs share one operation registry.
 
 See [the service README](services/image2/README.md), [implementation and acceptance scope](docs/IMAGE2_2.0.md), and [Docker deployment and recovery](docs/IMAGE2_DEPLOYMENT.md). Image2-specific tests are `npm run test:image2`, `npm run test:image2:client` and `npm run test:image2:browser`; the real CPU OCR smoke is explicit. These commands do not authorize production deployment or paid model submissions.
+
+## DLSS 5 / NR enhancement
+
+Studio includes source-bound NR tasks, original/enhanced version comparison, worker scheduling and strict runtime/media receipts. The integration uses the community video player's NR Feature 18 path with a pinned converter and DLL; it requires the separately configured Windows GPU runtime.
+
+See [the integration source and dependency guide](docs/DLSS5_NR.md). The dependency lock and read-only runtime checker are restored into `tools/dlss5/` with the backend workspace. Proprietary SDK components and experimental runtime binaries are external dependencies.
 
 ## Complete Studio source workspace
 

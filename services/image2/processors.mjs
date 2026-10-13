@@ -5,8 +5,13 @@ import * as fontkit from 'fontkit';
 import { randomUUID,createHash } from 'node:crypto';
 import {Worker} from 'node:worker_threads';
 import {createRequire} from 'node:module';
+import {mkdtemp,writeFile,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import { runComfy, generateImages, providerCapabilities,imageFrameFor,configFromEnv } from './providers.mjs';
 import { restoreLayers } from './restore.mjs';
+import { normalizeSvg } from './svg-normalize.mjs';
+import {pdfFontBytes} from './fonts.mjs';
 
 export const registry = Object.fromEntries([
   ['resize','cpu','调整像素尺寸'], ['crop','cpu','裁切'], ['pad','cpu','扩展画布'],
@@ -24,6 +29,13 @@ export function processingError(message, code='INVALID_PARAMS', extra={}) {
   return Object.assign(new Error(message), { code, status: code==='UNAVAILABLE'?503:400, ...extra });
 }
 const finite=(v,fallback)=>Number.isFinite(Number(v))?Number(v):fallback;
+function sourceFontIds(request,target,id,asset){
+  const explicit=(request.inputs||[]).filter(input=>['font','font_source'].includes(input.role)).map(input=>input.assetId);
+  if(explicit.length)return [...new Set(explicit)];
+  if(id===target?.assetId&&target.fontAssetId)return [target.fontAssetId];
+  const own=[asset?.metadata?.fontAssetId,...(Array.isArray(asset?.metadata?.fontAssetIds)?asset.metadata.fontAssetIds:[]),...(asset?.inputs||[]).filter(input=>['font','font_source'].includes(input.role)).map(input=>input.assetId)].filter(value=>typeof value==='string');
+  return [...new Set(own)];
+}
 export function positiveInt(v, name, max=16384) {
   const n=Number(v);
   if (!Number.isInteger(n)||n<1||n>max) throw processingError(`${name} must be an integer in 1..${max}`);
@@ -37,9 +49,7 @@ export function parseColor(value, fallback) {
   return {r:parseInt(m[1].slice(0,2),16),g:parseInt(m[1].slice(2,4),16),b:parseInt(m[1].slice(4,6),16),alpha:m[2]?parseInt(m[2],16)/255:1};
 }
 function safeSvg(bytes) {
-  const s=bytes.toString('utf8');
-  if (/<(?:script|foreignObject)\b|\bon\w+\s*=|<!DOCTYPE|<!ENTITY|(?:href|url)\s*(?:=|\()\s*["']?(?:https?:|file:|\/\/)/i.test(s)) throw processingError('SVG contains active or external content');
-  return s;
+  return normalizeSvg(bytes.toString('utf8')).svg;
 }
 export async function decodeRGBA(bytes, mime, maxPixels=40000000) {
   const b=Buffer.from(bytes);
@@ -68,8 +78,9 @@ export async function inspectAsset(bytes,mime) {
   if(b.subarray(0,5).toString()==='%PDF-')return {mime:'application/pdf',metadata:{format:'pdf'}};
   if(b.length>=4&&[0x04034b50,0x06054b50,0x08074b50].includes(b.readUInt32LE(0)))return {mime:'application/zip',metadata:{format:'zip'}};
   if (mime==='image/svg+xml') {
-    const r=await decodeRGBA(bytes,mime);
-    return {mime,width:r.width,height:r.height,metadata:{format:'svg',renderable:true}};
+    const normalized=normalizeSvg(b.toString('utf8')),r=await decodeRGBA(Buffer.from(normalized.svg),mime);
+    const requiresFont=/<(?:[\w-]+:)?(?:text|tspan)\b/i.test(b.toString('utf8'));
+    return {mime,width:r.width,height:r.height,metadata:{format:'svg',renderable:true,requiresFont,...(requiresFont?{fontStatus:'svg_font_binding_required'}:{}),svgNormalizationVersion:1,sourceViewBox:normalized.viewBox,intrinsicWidth:normalized.width,intrinsicHeight:normalized.height}};
   }
   const m=await sharp(bytes,{limitInputPixels:40000000}).metadata();
   const resolved={png:'image/png',jpeg:'image/jpeg',webp:'image/webp',gif:'image/gif',tiff:'image/tiff',avif:'image/avif'}[m.format];
@@ -82,10 +93,25 @@ export async function baseInput(request,ctx) {
   const id=request.inputs?.find(x=>x.role==='base')?.assetId||target?.assetId;
   if (!id) throw processingError('A base asset or target layer is required');
   const source=await ctx.getAsset(id);
-  return {...source,id,target,activeMaskId:target?.maskAssetId||request.inputs?.find(x=>x.role==='active_mask')?.assetId};
+  return {...source,id,target,fontAssetIds:sourceFontIds(request,target,id,source.asset),activeMaskId:request.inputs?.find(x=>x.role==='active_mask')?.assetId||(id===target?.assetId?target.maskAssetId:undefined)};
+}
+async function sourceDisplayRGBA(base,ctx){
+  const styled=base.asset.mime==='image/svg+xml'&&base.id===base.target?.assetId;
+  const bytes=styled?Buffer.from(normalizeSvg(base.bytes.toString('utf8'),{fill:base.target.fill,styles:base.target.metadata?.pathStyles}).svg):base.bytes;
+  if(base.asset.mime==='image/svg+xml'&&/<(?:[\w-]+:)?(?:text|tspan)\b/i.test(bytes.toString('utf8'))&&!base.fontAssetIds?.length)throw processingError('SVG 含有文字，但没有绑定可重复使用的实际字体。请先绑定字体或把原文字转为路径；原始文件保留。','SVG_FONT_REQUIRED',{status:422,retryable:false});
+  if(base.asset.mime!=='image/svg+xml'||!base.fontAssetIds?.length)return decodeRGBA(bytes,base.asset.mime,ctx.config?.maxPixels);
+  if(base.fontAssetIds.length>16)throw processingError('SVG font source exceeds the 16-face limit','FONT_ASSET',{status:422});
+  const directory=await mkdtemp(join(tmpdir(),'image2-input-fonts-'));
+  try{
+    const files=[];
+    for(const id of base.fontAssetIds){const font=await ctx.getAsset(id);if(!font.asset.mime.startsWith('font/'))throw processingError('SVG 字形源需要实际字体资产。','FONT_ASSET',{status:422});if(font.bytes.toString('ascii',0,4)==='wOFF')throw processingError('SVG 像素处理暂不支持 WOFF1 字体，请使用 TTF、OTF 或 WOFF2；原文件保留。','SVG_FONT_CONTAINER_UNAVAILABLE',{status:422});const file=join(directory,`${files.length}.ttf`);await writeFile(file,await pdfFontBytes(font.bytes));files.push(file);}
+    const renderer=new Resvg(safeSvg(bytes),{font:{loadSystemFonts:false,fontFiles:files,defaultFontFamily:base.target?.fontFamily||'Noto Sans CJK SC'}});
+    if(renderer.width*renderer.height>(ctx.config?.maxPixels||40000000))throw processingError('Image exceeds pixel budget');
+    return decodeRGBA(Buffer.from(renderer.render().asPng()),'image/png',ctx.config?.maxPixels);
+  }finally{await rm(directory,{recursive:true,force:true});}
 }
 export async function decodeTargetRGBA(base,ctx){
-  const raw=await decodeRGBA(base.bytes,base.asset.mime,ctx.config?.maxPixels);
+  const raw=await sourceDisplayRGBA(base,ctx);
   if(!base.activeMaskId)return raw;
   const mask=await ctx.getAsset(base.activeMaskId),decoded=await decodeRGBA(mask.bytes,mask.asset.mime,ctx.config?.maxPixels);
   if(decoded.width!==raw.width||decoded.height!==raw.height)throw processingError('Active layer mask dimensions do not match source pixels','MASK_SIZE',{status:422});
@@ -145,9 +171,12 @@ function layerCommands(request,ctx,asset,extras={}) {
   // source must not shrink a scaled/rotated object when only its pixels change.
   const pixelEdits=['recolor','erase','repair','fill','color_key','inpaint','matting','trace','flip'];
   const keepLayout=target&&(pixelEdits.includes(request.operation)||['resize','super_resolution'].includes(request.operation)&&request.params?.resizeLayout!==true);
+  const {clearVectorPaint,clearSourceMask,...layerExtras}=extras;
   const priorMetadata={...target?.metadata};
   if(request.operation==='trace'){delete priorMetadata.traceVersion;delete priorMetadata.lineart;}
-  const patch={assetId:asset.id,width:keepLayout?target.width:asset.width,height:keepLayout?target.height:asset.height,...extras,maskAssetId:null,metadata:{...priorMetadata,...asset.metadata,...extras.metadata}};
+  if(clearVectorPaint)delete priorMetadata.pathStyles;
+  if(clearSourceMask)delete priorMetadata.sourceMaskAssetId;
+  const patch={assetId:asset.id,width:keepLayout?target.width:asset.width,height:keepLayout?target.height:asset.height,...layerExtras,...(clearVectorPaint&&target?{fill:null}:{}),maskAssetId:null,metadata:{...priorMetadata,...asset.metadata,...layerExtras.metadata}};
   if(target)return [{type:'layer.update',layerId:target.id,patch}];
   // Null clears a property in update commands; newly added layers must omit absent IDs.
   const {maskAssetId:_mask,...added}=patch;void _mask;
@@ -156,12 +185,14 @@ function layerCommands(request,ctx,asset,extras={}) {
 async function saveResult(request,ctx,bytes,mime,metadata={},key='output') {
   const info=await inspectAsset(bytes,mime);
   const target=ctx.document.layers.find(l=>l.id===request.targetLayerId);
-  const maskId=target?.maskAssetId||request.inputs?.find(x=>x.role==='active_mask')?.assetId;
+  const requestedBaseId=request.inputs?.find(x=>x.role==='base')?.assetId||target?.assetId;
+  const maskId=request.inputs?.find(x=>x.role==='active_mask')?.assetId||(requestedBaseId===target?.assetId?target?.maskAssetId:undefined);
   const inputs=[];
   for(const ref of request.inputs||[]){const record=await ctx.getAsset(ref.assetId);inputs.push({...ref,hash:record.asset.hash||createHash('sha256').update(record.bytes).digest('hex')});}
   const baseId=request.inputs?.find(x=>x.role==='base')?.assetId||target?.assetId;
   if(baseId&&!inputs.some(x=>x.role==='base')){const base=await ctx.getAsset(baseId);inputs.push({role:'base',assetId:baseId,hash:base.asset.hash||createHash('sha256').update(base.bytes).digest('hex')});}
   if(maskId&&!inputs.some(x=>x.role==='active_mask')){const mask=await ctx.getAsset(maskId);inputs.push({role:'active_mask',assetId:maskId,hash:mask.asset.hash||createHash('sha256').update(mask.bytes).digest('hex')});}
+  if(baseId){const source=await ctx.getAsset(baseId);if(source.asset.mime==='image/svg+xml')for(const id of sourceFontIds(request,target,baseId,source.asset))if(!inputs.some(input=>['font','font_source'].includes(input.role)&&input.assetId===id)){const font=await ctx.getAsset(id);inputs.push({role:'font',assetId:id,hash:font.asset.hash||createHash('sha256').update(font.bytes).digest('hex')});}}
   return ctx.saveAsset(key,{name:`${request.operation}.${mime==='image/svg+xml'?'svg':'png'}`,mime,...info,inputs,metadata:{...info.metadata,...metadata,...(maskId?{sourceMaskAssetId:maskId}: {})}},bytes);
 }
 function checkpointCancel(ctx){if(ctx.cancelled?.())throw processingError('Operation cancelled','CANCELLED',{status:409});}
@@ -203,18 +234,19 @@ async function prepareText(request,ctx,base,raw){
  * processed pixels that a mask may reveal. Never derive a processed layer from stale
  * provenance: doing so would silently undo its crop, orientation and colour edits. */
 async function visibilitySource(base,ctx,current){
-  const target=base.target,metadata=target?.metadata||{};
-  let id=metadata.visibilitySourceAssetId,rect=metadata.visibilitySourceRect;
+  const target=base.id===base.target?.assetId?base.target:undefined,metadata=target?.metadata||base.asset.metadata||{};
+  const svgSource=base.asset.mime==='image/svg+xml';
+  let id=svgSource?undefined:metadata.visibilitySourceAssetId,rect=svgSource?undefined:metadata.visibilitySourceRect;
   let legacyOriginal=false;
   // Compatibility for original restoration patches. Old processed results have no valid
   // transform history, so retain their current pixels instead of guessing a transform.
   const processed=metadata.operation||base.asset.metadata?.operation;
-  if(!id&&(!processed||processed==='restore_layers')&&target?.sourceAssetId&&Array.isArray(target.sourceRect)){
+  if(!svgSource&&!id&&(!processed||processed==='restore_layers')&&target?.sourceAssetId&&Array.isArray(target.sourceRect)){
     id=target.sourceAssetId;rect=target.sourceRect;legacyOriginal=true;
   }
   if(!id){id=base.id;rect=undefined;}
   const record=id===base.id?base:await ctx.getAsset(id);
-  let raw=await decodeRGBA(record.bytes,record.asset.mime,ctx.config?.maxPixels);
+  let raw=record===base?await sourceDisplayRGBA(base,ctx):await decodeRGBA(record.bytes,record.asset.mime,ctx.config?.maxPixels);
   if(rect!==undefined){
     if(!Array.isArray(rect)||rect.length!==4||!rect.every(Number.isInteger))throw processingError('Visibility source rectangle must use integer source pixels','SOURCE_RECT',{status:422});
     const [x,y,width,height]=rect;
@@ -222,7 +254,7 @@ async function visibilitySource(base,ctx,current){
     if(x!==0||y!==0||width!==raw.width||height!==raw.height)raw=await decodeRGBA(await sharp(raw.data,{raw:{width:raw.width,height:raw.height,channels:4}}).extract({left:x,top:y,width,height}).png().toBuffer(),'image/png');
   }
   if(raw.width!==current.width||raw.height!==current.height)raw=await decodeRGBA(await sharp(raw.data,{raw:{width:raw.width,height:raw.height,channels:4}}).resize(current.width,current.height,{fit:'fill'}).png().toBuffer(),'image/png');
-  const canExpand=legacyOriginal||metadata.visibilityCanExpand===true||raw.data.some((alpha,i)=>i%4===3&&alpha>current.data[i]);
+  const canExpand=!svgSource&&(legacyOriginal||metadata.visibilityCanExpand===true)||raw.data.some((alpha,i)=>i%4===3&&alpha>current.data[i]);
   return {raw,id,canExpand,legacyOriginal};
 }
 async function saveVisibilitySource(request,ctx,state,raw,method){
@@ -453,10 +485,14 @@ async function computeOperation(request,ctx) {
   if(preparingBackground&&(!['repair','inpaint','fill'].includes(op)||!unknownTextPatch(base.target)))throw backgroundRequired('文字背景修补需要尚未确认字体的原文字裁片。');
   const masks=await masksFor(request,ctx,raw);
   let out,bytes,mime='image/png',meta={...base.target?.metadata,operation:op,processingSourceAssetId:base.id,...(base.activeMaskId?{sourceMaskAssetId:base.activeMaskId}: {})};
+  if(base.target&&base.id!==base.target.assetId){
+    for(const key of ['visibilitySourceAssetId','visibilitySourceRect','visibilityCanExpand'])delete meta[key];
+    if(!base.activeMaskId)delete meta.sourceMaskAssetId;
+  }
   if(op==='trace') {
     // Mode-specific processing facts describe this output, not a previous trace.
     delete meta.traceVersion;delete meta.lineart;
-    const options={ltres:1,qtres:1,pathomit:8,numberofcolors:16,mincolorratio:0,scale:1,roundcoords:3,desc:false};
+    const options={ltres:1,qtres:1,pathomit:8,numberofcolors:16,mincolorratio:0,scale:1,roundcoords:3,desc:false,viewbox:true};
     const presets={monochrome:{numberofcolors:2,colorsampling:0},color:{numberofcolors:16},logo:{numberofcolors:8,pathomit:0,ltres:.5,qtres:.5},posterized2:{...ImageTracer.optionpresets.posterized2}};
     const preset=p.preset||'posterized2';if(!presets[preset])throw processingError('Unknown tracing preset');
     Object.assign(options,presets[preset]);
@@ -475,6 +511,7 @@ async function computeOperation(request,ctx) {
     }
     let svg=await traceSVG(traceInput,options,ctx);
     if(preset==='monochrome')svg=clipMonochromeSVG(svg,traceInput);
+    svg=normalizeSvg(svg).svg;
     bytes=Buffer.from(svg);mime='image/svg+xml';meta={...meta,preset,options,approximation:true};
   } else if(['matting','segment','super_resolution'].includes(op)) {
     const preparedBase={...base,asset:{...base.asset,mime:'image/png',width:raw.width,height:raw.height},bytes:await encodePNG(raw)};
@@ -548,6 +585,8 @@ async function computeOperation(request,ctx) {
     const metadata=base.target.metadata||{};
     return {commands:[{type:'layer.update',layerId:base.target.id,patch:{metadata:{...metadata,...meta,cleanBackgroundAssetId:asset.id,backgroundStatus:'ready',backgroundMethod:op,sourcePatchAssetId:metadata.sourcePatchAssetId||base.id,fontStatus:'unknown',fontConfirmed:false}}}],output:{assetId:asset.id,cleanBackgroundAssetId:asset.id,cleanBgAssetId:asset.id,sourcePatchAssetId:metadata.sourcePatchAssetId||base.id,width:asset.width,height:asset.height,metadata:meta},needsReview:op!=='fill'};
   }
+  const clearVectorPaint=op==='trace'||mime==='image/png'&&(base.asset.mime==='image/svg+xml'||base.target?.type==='vector');
+  if(clearVectorPaint)delete meta.pathStyles;
   let saveRequest=request;
   if(mime==='image/png'){
     const visibility=await processedVisibility(request,ctx,base,raw,out,masks);
@@ -563,7 +602,8 @@ async function computeOperation(request,ctx) {
     saveRequest={...request,inputs:[...(request.inputs||[]),{role:'visibility_source',assetId:visibility.asset.id}]};
   }
   const asset=await saveResult(saveRequest,ctx,bytes,mime,meta);
-  return {commands:layerCommands(request,ctx,asset,{...geometry,sourceAssetId:base.target?.sourceAssetId||base.id,...(op==='trace'?{type:'vector',editability:'path'}:{type:'raster',editability:'pixels'})}),output:{assetId:asset.id,width:asset.width,height:asset.height,metadata:meta},needsReview:['matting','inpaint','trace'].includes(op)||meta.needsReview===true};
+  const differentBase=base.target&&base.id!==base.target.assetId;
+  return {commands:layerCommands(request,ctx,asset,{...geometry,clearVectorPaint,clearSourceMask:differentBase&&!base.activeMaskId,sourceAssetId:differentBase?base.id:base.target?.sourceAssetId||base.id,...(differentBase?{sourceRect:null}:{}),...(op==='trace'?{type:'vector',editability:'path'}:{type:'raster',editability:'pixels'})}),output:{assetId:asset.id,width:asset.width,height:asset.height,metadata:meta},needsReview:['matting','inpaint','trace'].includes(op)||meta.needsReview===true};
 }
 
 export async function executeOperation(request,ctx){

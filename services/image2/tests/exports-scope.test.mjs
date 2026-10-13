@@ -53,6 +53,30 @@ test('PNG/SVG/PDF full-page exports use requested infinite bounds and preserve t
   const svg = (await exportDocument('svg',doc,scope)).bytes.toString(); assert.match(svg,/width="8" height="6" viewBox="0 0 8 6"/); assert.match(svg, /d="M0 0H8V6H0Z"/); assert.match(svg, /data-layer-id="logo" transform="translate\(0 0\)/);
   const pdf = await renderPdf(t,(await exportDocument('pdf',doc,scope)).bytes); assert.deepEqual([pdf.width,pdf.height],[8,6]); assert.deepEqual(pixel(pdf,3,3),[0,255,0,255]);
 });
+test('complex SVG CSS, source/layer opacity and blur use a faithful PNG-backed PDF while SVG retains paths', {skip:!hasPoppler},async t=>{
+  const sources=[
+    '<svg width="32" height="20" id="logo"><style>#logo > path{fill:#168a55}</style><path d="M0 0H32V20H0Z"/></svg>',
+    '<svg width="32" height="20" style="opacity:.5"><path fill="#b82a2a" d="M0 0H24V20H0Z"/><path fill="#b82a2a" d="M8 0H32V20H8Z"/></svg>',
+    '<svg width="32" height="20"><path fill="#168a55" d="M0 0H32V20H0Z"/></svg>',
+    '<svg width="32" height="20"><defs><filter id="b"><feGaussianBlur stdDeviation="2"/></filter></defs><rect x="8" y="6" width="16" height="8" filter="url(#b)"/></svg>',
+  ];
+  for(let index=0;index<sources.length;index++){
+    const bytes=Buffer.from(sources[index]),records=new Map([['logo',{asset:{id:'logo',mime:'image/svg+xml',width:32,height:20},bytes}]]),doc={...document([layer('logo','vector',{assetId:'logo',width:32,height:20,opacity:index===1||index===2?.6:1})]),width:32,height:20};
+    const png=await decodeRGBA(await (await import('../exports.mjs')).documentPng(doc,load(records)),'image/png'),pdfBytes=await (await import('../exports.mjs')).documentPdf(doc,load(records)),pdf=await renderPdf(t,pdfBytes);
+    assert.match(pdfBytes.toString('latin1'),/\/Subtype \/Image/,'documented raster fallback');
+    for(const [x,y] of [[12,10],[20,10],[4,3]]){const a=pixel(png,x,y),b=pixel(pdf,x,y);for(let c=0;c<3;c++){const white=Math.round(a[c]*a[3]/255+255*(1-a[3]/255));assert.ok(Math.abs(white-b[c])<=3,`case ${index} ${x},${y} channel ${c}`);}}
+    const svg=(await (await import('../exports.mjs')).documentSvg(doc,load(records))).svg;assert.doesNotMatch(svg,/data:image/);assert.deepEqual(records.get('logo').bytes,bytes);
+  }
+});
+test('masked SVG PDF fallback uses current path paint and actual registered Chinese font', {skip:!hasPoppler},async t=>{
+  const {readFile}=await import('node:fs/promises'),font=await readFile(new URL('../fonts/NotoSansCJKsc-Regular.otf',import.meta.url));
+  const source=Buffer.from('<svg width="240" height="80"><text x="8" y="40" font-size="32" font-family="Noto Sans CJK SC">中文 MAI</text></svg>'),mask=await encodePNG({width:240,height:80,data:Buffer.from(Array.from({length:240*80},(_,i)=>i%240<180?[255,255,255,255]:[0,0,0,255]).flat())});
+  const records=new Map([['logo',{asset:{id:'logo',mime:'image/svg+xml',width:240,height:80},bytes:source}],['font',{asset:{id:'font',mime:'font/otf'},bytes:font}],['mask',{asset:{id:'mask',mime:'image/png',width:240,height:80},bytes:mask}]]);
+  const doc={...document([layer('logo','vector',{assetId:'logo',fontAssetId:'font',fontFamily:'Noto Sans CJK SC',width:240,height:80,maskAssetId:'mask',fill:'#00ff00'})]),width:240,height:80,assetIds:[...records.keys()]};
+  const exports=await import('../exports.mjs'),png=await decodeRGBA(await exports.documentPng(doc,load(records)),'image/png'),pdf=await renderPdf(t,await exports.documentPdf(doc,load(records)));let glyphPixels=0,pdfGreenGlyphPixels=0;
+  for(let y=0;y<80;y++)for(let x=0;x<180;x++){const a=pixel(png,x,y),b=pixel(pdf,x,y);if(a[3]>200){glyphPixels++;assert.equal(a[1],255);}if(b[1]>b[0]+80&&b[1]>b[2]+80)pdfGreenGlyphPixels++;}
+  assert.ok(glyphPixels>600,'bound Chinese glyphs retained');assert.ok(pdfGreenGlyphPixels>glyphPixels*.65,`PDF retains actual green Chinese/Latin glyphs: ${pdfGreenGlyphPixels}/${glyphPixels}`);assert.equal(pixel(png,220,25)[3],0);assert.deepEqual(pixel(pdf,220,25).slice(0,3),[255,255,255]);assert.deepEqual(records.get('logo').bytes,source);
+});
 
 test('group masks hide the same region in PNG/SVG/PDF including a scoped nested selection', { skip:!hasPoppler }, async t => {
   const doc = document([layer('group','group',{maskAssetId:'mask',x:-10,y:-20}),layer('child','raster',{assetId:'red',parentId:'group'})]), ctx = { layerIds:['child'],bounds:{x:-10,y:-20,width:8,height:6},getAsset:load(await assets()) };

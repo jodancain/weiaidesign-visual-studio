@@ -29,6 +29,8 @@
     "@remotion/three": "4.0.532",
     "@xyflow/react": "12.12.0",
     "@xzdarcy/react-timeline-editor": "1.0.0",
+    "css-tree": "3.1.0",
+    "fast-xml-parser": "5.11.2",
     "imagetracerjs": "^1.2.6",
     "jspdf": "^4.2.1",
     "lucide-react": "^0.555.0",

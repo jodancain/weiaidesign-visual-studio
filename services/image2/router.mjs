@@ -1,5 +1,6 @@
 import { timingSafeEqual, randomUUID } from 'node:crypto';
 import { fail, ImageError, requireOwner, validId } from './domain.mjs';
+import { CONTENT_MIME } from './domain-v3.mjs';
 
 const PREFIX = '/api/v3/image2';
 const MAX_BODY = 96 * 1024 * 1024;
@@ -81,6 +82,7 @@ export function createImageRouter({ store, runner, config = {}, assetInspector }
         const id = parts[1]; store.getDocument(id, owner);
         if (parts.length === 2 && method === 'GET') value = store.getDocument(id, owner);
         else if (parts[2] === 'commands' && parts.length === 3 && method === 'POST') value = store.command(id, owner, await body(req, 2 * 1024 * 1024));
+        else if (parts[2] === 'migrate-v3' && parts.length === 3 && method === 'POST') value = await store.migrateV3(id, owner, await body(req, 2 * 1024 * 1024));
         else if (parts[2] === 'history' && parts.length === 3 && method === 'POST') value = store.history(id, owner, await body(req, 2 * 1024 * 1024));
         else if (parts[2] === 'revisions' && parts.length === 3 && method === 'GET') value = store.listRevisions(id, owner);
         else if (parts[2] === 'assets' && parts.length === 3 && method === 'GET') value = store.listAssets(id, owner);
@@ -95,7 +97,7 @@ export function createImageRouter({ store, runner, config = {}, assetInspector }
         const b = await body(req), bytes = base64(b.data);
         fail(!('assignedId' in b), 'asset identity is assigned by the server');
         store.getDocument(b.documentId, owner);
-        const inspected = assetInspector ? await assetInspector(bytes, b.mime) : {};
+        const inspected = assetInspector && b.mime !== CONTENT_MIME ? await assetInspector(bytes, b.mime) : {};
         value = store.addAsset(b.documentId, owner, { ...b, ...inspected, metadata: { ...b.metadata, ...inspected.metadata } }, bytes);
       } else if (parts[0] === 'assets' && parts[1] && parts[2] === 'content' && parts.length === 3 && ['GET','HEAD'].includes(method)) { content(req, res, store.getAsset(parts[1], owner)); return true; }
       else if (parts[0] === 'operations' && parts.length === 1 && method === 'POST') {

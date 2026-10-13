@@ -4,6 +4,8 @@ import { mkdirSync, readFileSync, existsSync, openSync, writeFileSync, fsyncSync
 import { resolve, join } from 'node:path';
 import * as fontkit from 'fontkit';
 import { fontWeight } from './fonts.mjs';
+import { CONTENT_MIME, validateContentJSON, contentAssetReferences } from './domain-v3.mjs';
+import { planV3Migration } from './migration-v3.mjs';
 import { fail, ImageError, clone, canonical, digest, timestamp, requireOwner, validId, createImageDocument, validateDocument, applyCommands, mergeBranch, inspectBytes, publicJob, publicRun } from './domain.mjs';
 
 const JOB_STATES = new Set(['queued','running','complete','failed','uncertain','cancelled','awaiting_user']);
@@ -32,6 +34,7 @@ export class ImageStore {
       CREATE TABLE IF NOT EXISTS conversations(id TEXT PRIMARY KEY, document_id TEXT NOT NULL, json TEXT NOT NULL, FOREIGN KEY(document_id) REFERENCES documents(id));
       CREATE TABLE IF NOT EXISTS messages(id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, request_key TEXT NOT NULL, request_hash TEXT NOT NULL, json TEXT NOT NULL, UNIQUE(conversation_id,request_key), FOREIGN KEY(conversation_id) REFERENCES conversations(id));
       CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY, document_id TEXT NOT NULL, conversation_id TEXT NOT NULL, request_key TEXT NOT NULL, request_hash TEXT NOT NULL, json TEXT NOT NULL, private_json TEXT NOT NULL, UNIQUE(conversation_id,request_key), FOREIGN KEY(conversation_id) REFERENCES conversations(id));
+      CREATE TABLE IF NOT EXISTS migration_receipts(source_document_id TEXT NOT NULL, request_key TEXT NOT NULL, request_hash TEXT NOT NULL, destination_document_id TEXT NOT NULL, response_json TEXT NOT NULL, PRIMARY KEY(source_document_id,request_key), FOREIGN KEY(source_document_id) REFERENCES documents(id), FOREIGN KEY(destination_document_id) REFERENCES documents(id));
       PRAGMA user_version=1;`);
   }
   close() { this.db.close(); this.fontFaces.clear(); }
@@ -56,6 +59,7 @@ export class ImageStore {
   createDocument(owner, body = {}) {
     const tenant = requireOwner(owner), document = createImageDocument(body);
     for (const id of document.assetIds) this.getAsset(id, tenant);
+    this.validateDocumentAssets(document, tenant);
     this.validateFontAssets(document, tenant);
     return this.transaction(() => {
       this.db.prepare('INSERT INTO documents(id,owner,json) VALUES(?,?,?)').run(document.id, tenant, json(document));
@@ -74,6 +78,7 @@ export class ImageStore {
   }
   persistDocument(document, kind) {
     validateDocument(document);
+    this.validateDocumentAssets(document, this.db.prepare('SELECT owner FROM documents WHERE id=?').get(document.id)?.owner);
     this.validateFontAssets(document, this.db.prepare('SELECT owner FROM documents WHERE id=?').get(document.id)?.owner);
     this.db.prepare('UPDATE documents SET json=? WHERE id=?').run(json(document), document.id);
     this.db.prepare('INSERT INTO revisions VALUES(?,?,?,?)').run(document.id, document.revision, json(document), kind); return clone(document);
@@ -114,7 +119,96 @@ export class ImageStore {
     });
   }
   listRevisions(id, owner) { this.getDocument(id, owner); return this.db.prepare('SELECT revision,kind,json FROM revisions WHERE document_id=? ORDER BY revision').all(id).map(r => ({ ...parse(r), kind: r.kind })); }
+  validateContentAsset(value, document, owner, seen = new Set()) {
+    validateContentJSON(value);
+    for (const ref of contentAssetReferences(value)) {
+      fail(document.assetIds.includes(ref.assetId), 'recursive resource is not registered in this document', 422, 'CONTENT_RESOURCE_UNREGISTERED');
+      const record = this.getAsset(ref.assetId, owner);
+      if (value.kind === 'svg' && ref.assetId === value.sourceAssetId) fail(record.asset.mime === 'image/svg+xml', 'SVG source reference requires actual SVG bytes', 422, 'CONTENT_KIND_MISMATCH');
+      if (value.kind === 'preservedText' && ref.assetId === value.assetId) fail(['image/png','image/jpeg','image/webp'].includes(record.asset.mime), 'preserved text requires actual original pixels', 422, 'CONTENT_KIND_MISMATCH');
+      if (ref.role === 'font') {
+        fail(record.asset.mime.startsWith('font/'), 'font reference requires a real font asset', 422, 'FONT_ASSET_REQUIRED');
+        const face = this.fontFace(record.asset.hash, record.bytes), missing = [];
+        for (const char of new Set(value.text || '')) {
+          if (/[\p{Cc}\p{Cf}]/u.test(char)) continue;
+          if (!face.hasGlyphForCodePoint(char.codePointAt(0))) missing.push(char);
+          if (missing.length >= 16) break;
+        }
+        fail(missing.length === 0, `字体缺少字符：${missing.join('、')}`, 422, 'FONT_GLYPH_MISSING');
+      }
+      if (record.asset.mime === CONTENT_MIME) {
+        fail(!seen.has(ref.assetId), 'cyclic content resource', 422, 'CONTENT_RESOURCE_CYCLE');
+        const next = new Set(seen); next.add(ref.assetId);
+        this.validateContentAsset(JSON.parse(record.bytes.toString('utf8')), document, owner, next);
+      }
+    }
+  }
+  validateDocumentAssets(document, owner) {
+    if (document.schemaVersion !== 3) return;
+    const records = new Map();
+    for (const id of document.assetIds) records.set(id, this.getAsset(id, owner));
+    for (const content of document.contentAssets) {
+      const record = records.get(content.assetId);
+      fail(record, 'content asset is not registered', 422, 'CONTENT_RESOURCE_UNREGISTERED');
+      const mime = record.asset.mime;
+      if (content.kind === 'raster') fail(['image/png','image/jpeg','image/webp'].includes(mime), 'raster content requires actual image bytes', 422, 'CONTENT_KIND_MISMATCH');
+      else if (content.kind === 'svg' && mime === 'image/svg+xml') continue;
+      else {
+        fail(mime === CONTENT_MIME, 'drawing content requires validated JSON bytes', 422, 'CONTENT_KIND_MISMATCH');
+        const value = JSON.parse(record.bytes.toString('utf8'));
+        fail(value.kind === content.kind && value.formatVersion === content.formatVersion, 'content descriptor does not match immutable bytes', 422, 'CONTENT_KIND_MISMATCH');
+        this.validateContentAsset(value, document, owner, new Set([content.assetId]));
+      }
+    }
+  }
+  migrateV3(documentId, owner, body) {
+    const source = this.getDocument(documentId, owner);
+    key(body.idempotencyKey);
+    fail(Number.isSafeInteger(body.sourceRevision) && body.sourceRevision >= 0, 'explicit sourceRevision is required');
+    const requestHash = digest({ sourceRevision: body.sourceRevision });
+    const old = this.db.prepare('SELECT * FROM migration_receipts WHERE source_document_id=? AND request_key=?').get(documentId, body.idempotencyKey);
+    if (old) {
+      fail(old.request_hash === requestHash, 'migration identity reused with different source revision', 409, 'idempotency_conflict');
+      this.getDocument(old.destination_document_id, owner);
+      return parse(old, 'response_json');
+    }
+    fail(source.schemaVersion === 2, 'only explicit v2 to v3 copy migration is supported', 422, 'unsupported_schema');
+    const originalSnapshot = this.getRevision(documentId, owner, body.sourceRevision);
+    const revisions = this.listRevisions(documentId, owner).filter(d => d.revision <= body.sourceRevision);
+    fail(revisions.length && revisions.at(-1).revision === body.sourceRevision, 'migration source revision not found', 404, 'not_found');
+    const assetRecords = source.assetIds.map(id => this.getAsset(id, owner));
+    const plan = planV3Migration(revisions, assetRecords);
+    const remap = value => {
+      if (typeof value === 'string') return plan.assetIds.get(value) || plan.layerIds.get(value) || value;
+      if (Array.isArray(value)) return value.map(remap);
+      if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) => [k,remap(v)]));
+      return value;
+    };
+    return this.transaction(() => {
+      // The transaction commits a copied ledger; the source remains untouched.
+      this.getRevision(documentId, owner, body.sourceRevision);
+      const fresh = this.createDocument(owner, { schemaVersion: 3, name: source.name, width: source.width, height: source.height, resolution: {dpiX:72,dpiY:72,unit:'px'} });
+      for (const record of assetRecords) {
+        const asset = {...remap(record.asset), id:plan.assetIds.get(record.asset.id), documentId:fresh.id, createdAt:timestamp()};
+        asset.url = `/api/v3/image2/assets/${asset.id}/content`;
+        const path = this.writeBlob(record.bytes, asset.hash);
+        this.db.prepare('INSERT INTO assets VALUES(?,?,?,?)').run(asset.id, fresh.id, json(asset), path);
+        this.linkAsset(fresh.id, asset.id);
+      }
+      for (const content of plan.jsonAssets) {
+        const bytes = content.bytes || Buffer.from(JSON.stringify(content.value));
+        this.addAsset(fresh.id, owner, {...content, value:undefined, bytes:undefined}, bytes);
+      }
+      const versions = plan.versions.map(d => ({...d,id:fresh.id}));
+      const document = this.importRevisions(fresh.id, owner, {revisions:versions,currentDocument:versions.at(-1)});
+      const receipt = { id:randomUUID(), idempotencyKey:body.idempotencyKey, sourceDocumentId:documentId, sourceRevision:body.sourceRevision, sourceHash:digest(originalSnapshot), createdAt:timestamp() };
+      const result = {document,sourceDocumentId:documentId,sourceRevision:body.sourceRevision,originalSnapshot,mappings:plan.mappings,receipt};
+      this.db.prepare('INSERT INTO migration_receipts VALUES(?,?,?,?,?)').run(documentId,body.idempotencyKey,requestHash,fresh.id,json(result));
+      return result;
+    });
+  }
   validateFontAssets(document, owner) {
+    if (document.schemaVersion === 3) return;
     const faces = new Map();
     for (const fontId of new Set(document.layers.filter(layer => layer.fontAssetId).map(layer => layer.fontAssetId))) {
       const { asset, bytes } = this.getAsset(fontId, owner);
@@ -142,6 +236,7 @@ export class ImageStore {
     }
   }
   validateSourceTextTransitions(before, after) {
+    if (after.schemaVersion === 3) return;
     for (const original of before.layers) {
       if (original.type !== 'text' || !original.assetId || original.metadata?.fontConfirmed === true) continue;
       const next = after.layers.find(layer => layer.id === original.id);
@@ -210,16 +305,17 @@ export class ImageStore {
       const allowed = new Set(fresh.assetIds);
       const normalize = source => {
         const snapshot = clone(source); delete snapshot.kind;
-        snapshot.id = documentId; snapshot.schemaVersion = 2;
+        snapshot.id = documentId;
+        fail(snapshot.schemaVersion === fresh.schemaVersion, 'imported history schema does not match destination');
         delete snapshot.parentDocumentId; delete snapshot.baseRevision;
         fail(Array.isArray(snapshot.assetIds) && snapshot.assetIds.every(id => allowed.has(id)), 'history references an asset outside this document');
         for (const id of snapshot.assetIds) this.getAsset(id, owner);
-        validateDocument(snapshot); this.validateFontAssets(snapshot, owner); return snapshot;
+        validateDocument(snapshot); this.validateDocumentAssets(snapshot, owner); this.validateFontAssets(snapshot, owner); return snapshot;
       };
       const versions = revisions.map(r => ({ document: normalize(r), kind: typeof r.kind === 'string' ? r.kind : 'imported' })).sort((a,b) => a.document.revision - b.document.revision);
       fail(new Set(versions.map(v => v.document.revision)).size === versions.length, 'duplicate imported revision');
       const current = normalize(currentDocument), last = versions.at(-1).document;
-      const authored = d => digest({ name: d.name, width: d.width, height: d.height, layers: d.layers });
+      const authored = d => digest({ name: d.name, width: d.width, height: d.height, layers: d.layers, ...(d.schemaVersion === 3 ? {contentAssets:d.contentAssets,artboards:d.artboards,guides:d.guides,savedSelections:d.savedSelections,resolution:d.resolution,workingColor:d.workingColor,renderVersion:d.renderVersion,requiredFeatures:d.requiredFeatures} : {}) });
       fail(current.revision === last.revision && authored(current) === authored(last), 'current document does not match imported history');
       const history = []; let head = 0, previous = versions[0].document;
       for (const item of versions.slice(1)) {
@@ -249,10 +345,14 @@ export class ImageStore {
     return file;
   }
   addAsset(documentId, owner, descriptor, bytes) {
-    this.getDocument(documentId, owner);
+    const document = this.getDocument(documentId, owner);
     fail(descriptor && typeof descriptor === 'object', 'asset descriptor is required');
     if (descriptor.assignedId !== undefined) fail(typeof descriptor.assignedId === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(descriptor.assignedId) && !this.db.prepare('SELECT id FROM assets WHERE id=?').get(descriptor.assignedId), 'invalid or existing assigned asset identity', 409, 'asset_identity_conflict');
     const inspected = inspectBytes(bytes, descriptor.mime), hash = digest(bytes);
+    if (inspected.mime === CONTENT_MIME) {
+      fail(document.schemaVersion === 3, 'content JSON requires a v3 document', 422, 'unsupported_schema');
+      this.validateContentAsset(JSON.parse(bytes.toString('utf8')), document, owner);
+    }
     const font = inspected.mime.startsWith('font/') ? this.fontFace(hash, bytes) : null;
     if (descriptor.width !== undefined || descriptor.height !== undefined) fail(Number.isSafeInteger(descriptor.width) && Number.isSafeInteger(descriptor.height) && descriptor.width > 0 && descriptor.height > 0 && descriptor.width <= 32768 && descriptor.height <= 32768 && descriptor.width * descriptor.height <= 100000000, 'asset pixel limit exceeded');
     fail(typeof descriptor.name === 'string' && descriptor.name.length > 0 && descriptor.name.length <= 500, 'invalid asset name');
@@ -346,7 +446,7 @@ export class ImageStore {
       const base = baseRevision === current.revision ? current : parse(revision);
       base.assetIds = current.assetIds;
       const now = timestamp(), branch = { ...clone(base), id: randomUUID(), revision: 0, name: name || base.name, parentDocumentId: documentId, baseRevision, createdAt: now, updatedAt: now, metadata: { ...base.metadata, ...metadata } };
-      validateDocument(branch); this.validateFontAssets(branch, owner); this.db.prepare('INSERT INTO documents(id,owner,json,parent_id,base_json) VALUES(?,?,?,?,?)').run(branch.id, requireOwner(owner), json(branch), documentId, json(base));
+      validateDocument(branch); this.validateDocumentAssets(branch, owner); this.validateFontAssets(branch, owner); this.db.prepare('INSERT INTO documents(id,owner,json,parent_id,base_json) VALUES(?,?,?,?,?)').run(branch.id, requireOwner(owner), json(branch), documentId, json(base));
       for (const id of base.assetIds) this.linkAsset(branch.id, id);
       this.db.prepare('INSERT INTO revisions VALUES(?,?,?,?)').run(branch.id, 0, json(branch), 'branch'); return branch;
     });
@@ -366,7 +466,7 @@ export class ImageStore {
       fail(!producers.some(job=>job.state!=='complete')||branch.revision>0||canonical(branch.layers)!==canonical(base.layers),'候选分支尚无已完成编辑，请保留任务回执等待处理',409,'candidate_empty');
       try { merged = mergeBranch(base, current, branch); } catch (error) { if (error instanceof ImageError) { error.status = 409; error.code = 'branch_conflict'; } throw error; }
       for (const id of branch.assetIds) this.linkAsset(documentId, id);
-      const authored=doc=>canonical({name:doc.name,width:doc.width,height:doc.height,layers:doc.layers,metadata:doc.metadata});
+      const authored=doc=>canonical({name:doc.name,width:doc.width,height:doc.height,layers:doc.layers,metadata:doc.metadata,...(doc.schemaVersion===3?{contentAssets:doc.contentAssets,artboards:doc.artboards,guides:doc.guides,savedSelections:doc.savedSelections,resolution:doc.resolution}: {})});
       const unchanged=authored(current)===authored(merged),accepted=unchanged?this.getDocument(documentId,owner):this.commit(documentId, current, merged, body.commandId, request, 'accept-branch');
       if(unchanged)this.db.prepare('INSERT INTO command_receipts VALUES(?,?,?,?)').run(documentId,body.commandId,digest(request),json(accepted));
       this.db.prepare('INSERT INTO branch_acceptances VALUES(?,?,?,?)').run(branch.id,documentId,timestamp(),accepted.revision);return accepted;

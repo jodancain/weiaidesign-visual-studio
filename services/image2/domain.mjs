@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { validateV3Document, createV3Document, applyV3Commands, CONTENT_MIME, validateContentJSON } from './domain-v3.mjs';
 
 export class ImageError extends Error {
   constructor(message, status = 400, code = 'invalid_request') { super(message); this.status = status; this.code = code; }
@@ -50,6 +51,7 @@ export function normalizeLayer(input) {
   return layer;
 }
 export function validateDocument(document) {
+  if (document?.schemaVersion === 3) return validateV3Document(document);
   record(document, 'document');
   fail(document.schemaVersion === 2 && validId(document.id) && text(document.name, 500), 'invalid document identity');
   fail(Number.isSafeInteger(document.revision) && document.revision >= 0, 'invalid document revision');
@@ -73,11 +75,14 @@ export function validateDocument(document) {
   return document;
 }
 export function createImageDocument(body = {}) {
+  if (body?.schemaVersion === 3) return createV3Document(body);
+  fail(body?.schemaVersion === undefined || body.schemaVersion === 2, 'unsupported document schema', 422, 'unsupported_schema');
   record(body, 'document');
   const now = timestamp();
   return validateDocument({ id: randomUUID(), schemaVersion: 2, revision: 0, name: body.name || 'Untitled', width: body.width ?? 1024, height: body.height ?? 1024, layers: clone(body.layers || []), assetIds: [...new Set(body.assetIds || [])], createdAt: now, updatedAt: now, ...(body.metadata === undefined ? {} : { metadata: clone(body.metadata) }) });
 }
 export function applyCommands(document, commands) {
+  if (document?.schemaVersion === 3) return applyV3Commands(document, commands);
   fail(Array.isArray(commands) && commands.length > 0 && commands.length <= 1000, 'commands must be a nonempty list');
   const result = clone(document);
   const locked = layer => {
@@ -113,7 +118,8 @@ export function applyCommands(document, commands) {
 function equal(a, b) { return canonical(a) === canonical(b); }
 export function mergeBranch(base, current, branch) {
   const merged = clone(current), conflicts = [];
-  for (const field of ['name','width','height']) {
+  fail(base.schemaVersion === current.schemaVersion && current.schemaVersion === branch.schemaVersion, 'branch schema mismatch', 409, 'branch_conflict');
+  for (const field of ['name','width','height', ...(current.schemaVersion === 3 ? ['resolution','workingColor','renderVersion','requiredFeatures','artboards','guides','savedSelections'] : [])]) {
     if (!equal(base[field], branch[field])) { if (!equal(base[field], current[field]) && !equal(branch[field], current[field])) conflicts.push(field); else merged[field] = clone(branch[field]); }
   }
   const metadata = { ...current.metadata }, bookkeeping = new Set(['candidateJobId','runId','acceptedAt','acceptedRevision','acceptedIntoDocumentId']);
@@ -136,13 +142,21 @@ export function mergeBranch(base, current, branch) {
     }
   }
   fail(conflicts.length === 0, `branch conflicts: ${conflicts.join(', ')}`, 409, 'branch_conflict');
+  if (current.schemaVersion === 3) {
+    const contents = new Map(current.contentAssets.map(c => [c.id,c]));
+    for (const c of branch.contentAssets) { const old = contents.get(c.id); fail(!old || equal(old,c), 'content identity conflict', 409, 'branch_conflict'); contents.set(c.id,clone(c)); }
+    merged.contentAssets = [...contents.values()];
+  }
   merged.layers = [...result.values()].sort((a,b) => a.z - b.z); merged.assetIds = [...new Set([...current.assetIds, ...branch.assetIds])];
   return validateDocument(merged);
 }
 export function inspectBytes(bytes, declaredMime) {
   fail(Buffer.isBuffer(bytes) && bytes.length > 0 && bytes.length <= 64 * 1024 * 1024, 'asset must be 1 byte–64 MB');
   const mime = String(declaredMime || '').split(';')[0].toLowerCase(); let width, height;
-  if (mime === 'image/png') { fail(bytes.length >= 24 && bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])), 'invalid PNG'); width = bytes.readUInt32BE(16); height = bytes.readUInt32BE(20); }
+  if (mime === CONTENT_MIME) {
+    let content; try { content = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); } catch { fail(false, 'invalid content JSON'); }
+    validateContentJSON(content);
+  } else if (mime === 'image/png') { fail(bytes.length >= 24 && bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])), 'invalid PNG'); width = bytes.readUInt32BE(16); height = bytes.readUInt32BE(20); }
   else if (mime === 'image/jpeg') fail(bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255, 'invalid JPEG');
   else if (mime === 'image/webp') fail(bytes.toString('ascii',0,4) === 'RIFF' && bytes.toString('ascii',8,12) === 'WEBP', 'invalid WebP');
   else if (mime === 'image/svg+xml') {

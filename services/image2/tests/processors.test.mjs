@@ -9,14 +9,15 @@ import {normalizeLayer,createImageDocument,applyCommands} from '../domain.mjs';
 import {createFontCandidateFitter,sourceGlyphGeometry} from '../font-candidates.mjs';
 import {Resvg} from '@resvg/resvg-js';
 import {fileURLToPath} from 'node:url';
+import {inspectDrawingNodes} from '../svg-normalize.mjs';
 
 async function image(width=8,height=6,fn=(x,y)=>[x*23,y*29,100,255]){
   const data=Buffer.alloc(width*height*4);for(let y=0;y<height;y++)for(let x=0;x<width;x++)data.set(fn(x,y),(y*width+x)*4);
   return encodePNG({width,height,data});
 }
-async function fixture(bytes){
+async function fixture(bytes,mime='image/png'){
   bytes ||= await image();
-  const info=await inspectAsset(bytes,'image/png'),assets=new Map([['base',{asset:{id:'base',name:'source',...info},bytes}]]);
+  const info=await inspectAsset(bytes,mime),assets=new Map([['base',{asset:{id:'base',name:'source',...info},bytes}]]);
   const checkpoints=[],calls=[];let seq=0;
   const ctx={document:{id:'doc',width:info.width,height:info.height,layers:[{id:'layer',type:'raster',assetId:'base',x:0,y:0,width:info.width,height:info.height,z:0}]},config:{},
     getAsset:async(id)=>{assert.ok(assets.has(id),`asset ${id}`);return assets.get(id);},
@@ -217,6 +218,8 @@ test('monochrome halftone tracing keeps 180 opaque dark dots, fine holes and tra
   assert.equal(result.output.metadata.traceVersion,'monochrome-luminance-fixed-alpha-v2');
   assert.deepEqual(result.output.metadata.lineart,{method:'luminance_threshold',threshold:128,alphaThreshold:128,alphaHandling:'below_threshold_transparent_otherwise_opaque',alphaContour:'pixel_boundary_clip'});
   const options=result.output.metadata.options;assert.equal(options.colorquantcycles,1);assert.equal(options.pathomit,0);assert.equal(options.blurradius,0);assert.equal(options.strokewidth,0);assert.deepEqual(options.pal,[{r:0,g:0,b:0,a:255},{r:255,g:255,b:255,a:255},{r:0,g:0,b:0,a:0}]);
+  assert.equal(options.viewbox,true);assert.match(svg,/viewBox="0 0 720 480"/);
+  const drawing=inspectDrawingNodes(svg);assert.ok(drawing.length>=180);assert.ok(drawing.every(node=>node.id&&node.id!=='lineart-visible-pixels'));assert.equal(drawing.find(node=>node.id==='i2-draw-path-0').legacyIds[0],'path-1');
   assert.deepEqual(f.assets.get('base').bytes,before);assert.equal(f.calls.length,0);
 });
 test('monochrome tracing records explicit luminance and alpha thresholds and rejects invalid thresholds without new assets',async()=>{
@@ -256,6 +259,73 @@ test('successive monochrome, colour and monochrome traces replace mode facts in 
   assert.equal(history[0].metadata.lineart.threshold,180);assert.equal(history[1].metadata.lineart,undefined);assert.equal(history[2].metadata.lineart.threshold,110);
   for(const previous of history){assert.deepEqual(f.assets.get(previous.assetId).bytes,previous.bytes);assert.deepEqual(f.assets.get(previous.assetId).asset.metadata,previous.metadata);}
   assert.equal(f.calls.length,0);
+});
+function acceptProcessorResult(f,result){
+  const doc=f.ctx.document.schemaVersion?{...f.ctx.document,assetIds:[...f.assets.keys()]}:createImageDocument({...f.ctx.document,assetIds:[...f.assets.keys()]});
+  f.ctx.document=applyCommands(doc,result.commands);return f.ctx.document.layers.find(layer=>layer.id==='layer');
+}
+test('current styled SVG flip bakes visible paint once, preserves layout opacity and refines from the same green hidden baseline',async()=>{
+  const original=Buffer.from('<svg width="4" height="2"><path id="primary" d="M0 0H4V2H0Z" fill="#0000ff"/></svg>'),f=await fixture(original,'image/svg+xml');
+  f.assets.set('baseline',{asset:{id:'baseline',mime:'image/png'},bytes:await image(4,2,()=>[0,0,255,255])});
+  f.assets.set('half',{asset:{id:'half',mime:'image/png'},bytes:await image(4,2,x=>x<2?[255,255,255,255]:[0,0,0,255])});
+  f.assets.set('full',{asset:{id:'full',mime:'image/png'},bytes:await image(4,2,()=>[255,255,255,255])});
+  Object.assign(f.ctx.document.layers[0],{type:'vector',fill:'#ff0000',maskAssetId:'half',opacity:.4,metadata:{pathStyles:{primary:{fill:'#00ff00'}},operation:'trace',visibilitySourceAssetId:'baseline',visibilitySourceRect:[0,0,4,2],visibilityCanExpand:true}});
+  f.ctx.fetchImpl=async()=>{throw Error('No models are allowed');};
+  const flipped=await f.run('flip',{axis:'horizontal'}),layer=acceptProcessorResult(f,flipped),pixels=await decodeRGBA(f.assets.get(flipped.output.assetId).bytes,'image/png');
+  assert.deepEqual([...pixels.data.subarray(8,12)],[0,255,0,255]);assert.equal(pixels.data[3],0);assert.equal(layer.opacity,.4);assert.equal(layer.fill,undefined);assert.equal(layer.metadata.pathStyles,undefined);assert.equal(f.assets.get(flipped.output.assetId).asset.metadata.pathStyles,undefined);
+  const restored=await f.run('refine_mask',{},[{role:'edit_mask',assetId:'full'}]),raw=await decodeRGBA(f.assets.get(restored.output.assetId).bytes,'image/png');for(let j=0;j<raw.data.length;j+=4)assert.deepEqual([...raw.data.subarray(j,j+4)],[0,255,0,255]);
+  assert.deepEqual(f.assets.get('base').bytes,original);
+});
+test('explicit historical SVG and its explicit active mask refine from red, never from current green paint or blue visibility',async()=>{
+  const current=Buffer.from('<svg width="4" height="2"><path id="primary" d="M0 0H4V2H0Z" fill="#0000ff"/></svg>'),historic=Buffer.from('<svg width="4" height="2"><path id="primary" d="M0 0H4V2H0Z" fill="#ff0000"/></svg>'),f=await fixture(current,'image/svg+xml');
+  f.assets.set('historic',{asset:{id:'historic',...await inspectAsset(historic,'image/svg+xml')},bytes:historic});
+  f.assets.set('baseline',{asset:{id:'baseline',mime:'image/png'},bytes:await image(4,2,()=>[0,0,255,255])});
+  f.assets.set('current-mask',{asset:{id:'current-mask',mime:'image/png'},bytes:await image(2,1,()=>[0,0,0,255])});
+  f.assets.set('half',{asset:{id:'half',mime:'image/png'},bytes:await image(4,2,x=>x<2?[255,255,255,255]:[0,0,0,255])});
+  f.assets.set('full',{asset:{id:'full',mime:'image/png'},bytes:await image(4,2,()=>[255,255,255,255])});
+  Object.assign(f.ctx.document.layers[0],{type:'vector',fill:'#00ff00',maskAssetId:'current-mask',sourceAssetId:'baseline',sourceRect:[0,0,4,2],metadata:{pathStyles:{primary:{fill:'#00ff00'}},operation:'trace',visibilitySourceAssetId:'baseline',visibilitySourceRect:[0,0,4,2],visibilityCanExpand:true}});
+  const read=f.ctx.getAsset,reads=[];f.ctx.getAsset=async id=>{reads.push(id);return read(id);};
+  const result=await f.run('flip',{axis:'horizontal'},[{role:'base',assetId:'historic'},{role:'active_mask',assetId:'half'}]),layer=acceptProcessorResult(f,result);
+  assert.equal(layer.sourceAssetId,'historic');assert.equal(layer.sourceRect,undefined);assert.equal(layer.fill,undefined);assert.equal(layer.metadata.pathStyles,undefined);assert.equal(reads.includes('current-mask'),false);assert.equal(reads.includes('baseline'),false);assert.equal(f.assets.get(result.output.assetId).asset.inputs.some(input=>input.assetId==='current-mask'||input.assetId==='baseline'),false);
+  const restored=await f.run('refine_mask',{},[{role:'edit_mask',assetId:'full'}]),raw=await decodeRGBA(f.assets.get(restored.output.assetId).bytes,'image/png');for(let j=0;j<raw.data.length;j+=4)assert.deepEqual([...raw.data.subarray(j,j+4)],[255,0,0,255]);
+  assert.deepEqual(f.assets.get('historic').bytes,historic);
+});
+test('historical PNG replacing a vector never inherits current mask or paint in pixels, assets or applied layers',async()=>{
+  const current=Buffer.from('<svg width="4" height="2"><path id="primary" d="M0 0H4V2H0Z" fill="#0000ff"/></svg>'),f=await fixture(current,'image/svg+xml'),historic=await image(4,2,()=>[255,0,0,255]);
+  f.assets.set('historic',{asset:{id:'historic',mime:'image/png',width:4,height:2},bytes:historic});f.assets.set('wrong-mask',{asset:{id:'wrong-mask',mime:'image/png'},bytes:await image(2,1,()=>[0,0,0,255])});
+  Object.assign(f.ctx.document.layers[0],{type:'vector',fill:'#00ff00',maskAssetId:'wrong-mask',metadata:{pathStyles:{primary:{fill:'#00ff00'}},sourceMaskAssetId:'wrong-mask',visibilitySourceAssetId:'wrong-mask',visibilitySourceRect:[0,0,2,1]}});
+  const read=f.ctx.getAsset,reads=[];f.ctx.getAsset=async id=>{reads.push(id);return read(id);};
+  const result=await f.run('flip',{axis:'horizontal'},[{role:'base',assetId:'historic'}]),layer=acceptProcessorResult(f,result),asset=f.assets.get(result.output.assetId);
+  assert.equal(reads.includes('wrong-mask'),false);assert.equal(asset.asset.inputs.some(input=>input.role==='active_mask'),false);assert.equal(asset.asset.metadata.sourceMaskAssetId,undefined);assert.equal(asset.asset.metadata.pathStyles,undefined);assert.equal(layer.metadata.sourceMaskAssetId,undefined);assert.equal(layer.metadata.pathStyles,undefined);assert.equal(layer.fill,undefined);
+  const raw=await decodeRGBA(asset.bytes,'image/png');for(let j=0;j<raw.data.length;j+=4)assert.deepEqual([...raw.data.subarray(j,j+4)],[255,0,0,255]);
+});
+test('new traced SVG content clears old global and per-path paint rather than recolouring its new palette',async()=>{
+  const source=Buffer.from('<svg width="8" height="6"><path id="primary" fill="red" d="M0 0H4V6H0Z"/><path id="background" fill="red" d="M4 0H8V6H4Z"/></svg>'),f=await fixture(source,'image/svg+xml');
+  Object.assign(f.ctx.document.layers[0],{type:'vector',fill:'#00ff00',metadata:{pathStyles:{primary:{fill:'#0000ff'},background:{fill:'#ffffff'}}}});
+  const result=await f.run('trace',{preset:'monochrome',ltres:0,qtres:0}),layer=acceptProcessorResult(f,result);assert.equal(layer.fill,undefined);assert.equal(layer.metadata.pathStyles,undefined);assert.equal(f.assets.get(result.output.assetId).asset.metadata.pathStyles,undefined);
+  const png=await decodeRGBA(await documentPng(f.ctx.document,f.ctx.getAsset),'image/png');assert.deepEqual([...png.data.subarray((3*8+1)*4,(3*8+1)*4+4)],[0,0,0,255]);assert.deepEqual([...png.data.subarray((3*8+6)*4,(3*8+6)*4+4)],[255,255,255,255]);assert.deepEqual(f.assets.get('base').bytes,source);
+});
+test('current SVG text pixel operations use a bound real font and record its immutable input hash',async()=>{
+  const source=Buffer.from('<svg width="240" height="80"><text x="8" y="40" font-size="32" font-family="Noto Sans CJK SC" fill="#0000ff">中文 MAI</text></svg>'),f=await fixture(source,'image/svg+xml');
+  const fontBytes=await readFile(new URL('../fonts/NotoSansCJKsc-Regular.otf',import.meta.url));f.assets.set('font',{asset:{id:'font',...await inspectAsset(fontBytes,'font/otf')},bytes:fontBytes});
+  Object.assign(f.ctx.document.layers[0],{type:'vector',fontAssetId:'font',fontFamily:'Noto Sans CJK SC',fill:'#00ff00',opacity:.4});
+  const result=await f.run('flip',{axis:'horizontal'}),raw=await decodeRGBA(f.assets.get(result.output.assetId).bytes,'image/png');let ink=0;
+  for(let j=0;j<raw.data.length;j+=4)if(raw.data[j+3]>128){ink++;assert.equal(raw.data[j],0);assert.equal(raw.data[j+1],255);assert.equal(raw.data[j+2],0);}
+  assert.ok(ink>600,'Chinese and Latin actual glyphs must survive pixel processing');assert.ok(f.assets.get(result.output.assetId).asset.inputs.some(input=>input.role==='font'&&input.assetId==='font'&&/^[a-f0-9]{64}$/.test(input.hash)));
+  assert.equal(result.commands[0].patch.opacity,undefined);assert.deepEqual(f.assets.get('base').bytes,source);assert.deepEqual(f.assets.get('font').bytes,fontBytes);
+});
+test('SVG text without an actual font stays unavailable instead of silently discarding glyphs',async()=>{
+  const source=Buffer.from('<svg width="80" height="40"><text x="2" y="25">中文</text></svg>'),f=await fixture(source,'image/svg+xml'),count=f.assets.size;
+  await assert.rejects(f.run('flip',{axis:'horizontal'}),error=>error.code==='SVG_FONT_REQUIRED'&&error.status===422);assert.equal(f.assets.size,count);assert.deepEqual(f.assets.get('base').bytes,source);
+  f.ctx.document.layers[0].fontAssetId='missing-current-font';f.assets.set('historical',{asset:{id:'historical',mime:'image/svg+xml',width:80,height:40},bytes:source});
+  await assert.rejects(f.run('flip',{axis:'horizontal'},[{role:'base',assetId:'historical'}]),error=>error.code==='SVG_FONT_REQUIRED'&&error.status===422);
+});
+test('bound SVG WOFF2 is actually expanded and rendered; WOFF1 is explicitly unavailable',async()=>{
+  const fontBytes=await readFile(new URL('../../../public/fonts/smiley-sans.woff2',import.meta.url)),info=await inspectAsset(fontBytes,'font/woff2'),source=Buffer.from(`<svg width="240" height="80"><text x="8" y="40" font-size="32" font-family="${info.metadata.family}">中文 MAI</text></svg>`),f=await fixture(source,'image/svg+xml');
+  f.assets.set('font',{asset:{id:'font',...info},bytes:fontBytes});Object.assign(f.ctx.document.layers[0],{type:'vector',fontAssetId:'font',fontFamily:info.metadata.family});
+  const result=await f.run('flip',{axis:'horizontal'}),raw=await decodeRGBA(f.assets.get(result.output.assetId).bytes,'image/png');assert.ok([...raw.data].filter((v,i)=>i%4===3&&v>128).length>600);assert.deepEqual(f.assets.get('font').bytes,fontBytes);
+  f.assets.set('woff1',{asset:{id:'woff1',mime:'font/woff'},bytes:Buffer.from('wOFF-not-supported')});f.ctx.document.layers[0].fontAssetId='woff1';const count=f.assets.size;
+  await assert.rejects(f.run('flip',{axis:'horizontal'}),error=>error.code==='SVG_FONT_CONTAINER_UNAVAILABLE'&&error.status===422);assert.equal(f.assets.size,count);
 });
 test('restore with OCR, SAM2 and connected regions gives full original pixel partition and unknown fonts',async()=>{
   const f=await fixture(await image(10,8,(x,y)=>x<4&&y<3?[0,0,0,255]:x>=7?[255,0,0,255]:[255,255,255,255]));

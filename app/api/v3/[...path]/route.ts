@@ -57,6 +57,11 @@ async function forward(request: Request, context: { params: Promise<{ path: stri
       const value = upstream.headers.get(name);
       if (value) outputHeaders.set(name, value);
     }
+    // Keep the image service's SVG sandbox on direct asset reads as well as previews.
+    if (image2) {
+      const policy = upstream.headers.get('content-security-policy');
+      if (policy) outputHeaders.set('content-security-policy', policy);
+    }
     outputHeaders.set('cache-control', 'no-store');
     outputHeaders.set('x-content-type-options', 'nosniff');
     if (!visitor.existing) outputHeaders.set('set-cookie', visitor.cookie);

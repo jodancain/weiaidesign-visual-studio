@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "integration": "Studio community NR Feature 18",
+  "upstream": {
+    "repository": "https://github.com/2600th/dlss5-video-player",
+    "tag": "dlss5-video-player-v0.27.0",
+    "commit": "9752b5667284f23c21ead46f14abc971ecba48c6",
+    "sourceUrl": "https://github.com/2600th/dlss5-video-player/tree/9752b5667284f23c21ead46f14abc971ecba48c6",
+    "sourceArchiveUrl": "https://github.com/2600th/dlss5-video-player/archive/9752b5667284f23c21ead46f14abc971ecba48c6.tar.gz",
+    "releaseUrl": "https://github.com/2600th/dlss5-video-player/releases/tag/dlss5-video-player-v0.27.0",
+    "sourceLicense": "MIT",
+    "fullPackage": {
+      "name": "dlss5-video-player-v0.27.0-win64.zip",
+      "bytes": 395738623,
+      "sha256": "a371e15cf5f935942534430a0ac1f453725a38ec2fb38aa81de7493836ca7677"
+    }
+  },
+  "runtimeFiles": [
+    {
+      "role": "converter",
+      "relativePath": "dlss5-convert.exe",
+      "sha256": "fdefd51abf31a63f20f970f8a7a82d230e825dd3da962836b8e9e8febbf16b89"
+    },
+    {
+      "role": "neural-runtime",
+      "relativePath": "neural-runtime/nvngx_dlssnr.dll",
+      "sha256": "6eb209e764f39872625debd6abaf45e2bb6322f6f270f781f70c059ae30b3927"
+    }
+  ],
+  "parameters": {
+    "stages": "nr",
+    "preset": "natural",
+    "passes": 1,
+    "processingScale": 100,
+    "frameGeneration": false,
+    "superResolution": false
+  }
+}

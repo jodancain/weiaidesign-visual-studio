@@ -232,6 +232,7 @@ export function useLegacyImage2({ editor, projectId, projectName, onError }: Opt
     const svg = await ed.getSvgString([shape.id], { background: false, padding: 0 });
     assertScope(captured);
     let proxy: ImageAsset;
+    let nativeSvgSourceAssetId: string | undefined;
     try {
       if (!svg) throw new Error('SVG 导出不可用');
       const xml = new DOMParser().parseFromString(svg.svg, 'image/svg+xml'), root = xml.documentElement;
@@ -241,9 +242,13 @@ export function useLegacyImage2({ editor, projectId, projectName, onError }: Opt
       const contents = Array.from(root.childNodes).map(node => new XMLSerializer().serializeToString(node)).join('');
       const localSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${geometry.width}" height="${geometry.height}" viewBox="${geometry.x} ${geometry.y} ${geometry.width} ${geometry.height}"><g transform="${inverse.toCssString()}">${contents}</g></svg>`;
       proxy = await rawUpload(new Blob([localSvg], { type: 'image/svg+xml' }), `${shape.type}.svg`, 'native_projection');
+      nativeSvgSourceAssetId = proxy.id;
+      if (proxy.metadata?.requiresFont) throw new Image2ApiError('原生对象中的复杂文字保留当前像素外观', 422, 'SVG_FONT_REQUIRED');
     }
     catch (err) {
-      if (!(err instanceof Image2ApiError) || err.status !== 400) throw err;
+      // Generated native-shape SVG may require an appearance-preserving bitmap
+      // projection. Authentication, conflicts and network/service errors still stop.
+      if (!(err instanceof Image2ApiError) || (err.status !== 400 && !(err.status === 422 && err.code?.startsWith('SVG_')))) throw err;
       const png = await exportToBlob({ editor: ed, ids: [shape.id], format: 'png', opts: { background: false, padding: 0, scale: 1 } });
       const image = new Image(), objectUrl = URL.createObjectURL(png);
       try {
@@ -266,7 +271,7 @@ export function useLegacyImage2({ editor, projectId, projectName, onError }: Opt
     const vector = proxy.mime === 'image/svg+xml', angle = shape.rotation, localX = shape.x + geometry.x * Math.cos(angle) - geometry.y * Math.sin(angle), localY = shape.y + geometry.x * Math.sin(angle) + geometry.y * Math.cos(angle);
     return { ...base, type: vector ? 'vector' : 'raster', x: localX, y: localY, width: geometry.width, height: geometry.height, rotation: shape.rotation * 180 / Math.PI, parentId: base.parentId,
       assetId: proxy.id, name: previous?.name || shape.type, editability: vector ? 'path' : 'pixels',
-      metadata: { ...base.metadata, ...(shape.type === 'text' ? { nativeProjection: true, nativeTextFormat: 'preserved', fontStatus: 'mixed_styles_preserved', recognizedText: plainRichText(props.richText) } : {}), legacyProxyAssetId: proxy.id, legacyProxyOrigin: { x: localX, y: localY }, legacyProxySize: { width: geometry.width, height: geometry.height } } };
+      metadata: { ...base.metadata, ...(!vector && nativeSvgSourceAssetId ? { nativeSvgSourceAssetId } : {}), ...(shape.type === 'text' ? { nativeProjection: true, nativeTextFormat: 'preserved', fontStatus: 'mixed_styles_preserved', recognizedText: plainRichText(props.richText) } : {}), legacyProxyAssetId: proxy.id, legacyProxyOrigin: { x: localX, y: localY }, legacyProxySize: { width: geometry.width, height: geometry.height } } };
   }
   async function sync(): Promise<ImageDocument> {
     if (syncPromise.current) return syncPromise.current;

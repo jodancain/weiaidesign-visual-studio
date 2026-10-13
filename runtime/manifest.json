@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "createdAt": "2026-10-10T13:17:43.335506+00:00",
+  "createdAt": "2026-10-13T01:49:06.099667+00:00",
   "frontendBaseline": "1c6227c14e8214709e19ef549ace2bb23fa1f7c3",
   "files": {
     ".env.example": {
@@ -726,6 +726,21 @@
       "sha256": "e9da590389b56825ba61533aa5be3f21d27572328b054384d5fbe4dc775df946",
       "bytes": 31346,
       "mode": 420
+    },
+    "tools/dlss5/README.md": {
+      "sha256": "0e132023ca0542fd97b496d97299a59dabf99fa4575023ec0622abe7eb6f280c",
+      "bytes": 3445,
+      "mode": 420
+    },
+    "tools/dlss5/dependency-lock.json": {
+      "sha256": "bd6ceae89bff37c3ff338110fd89393ddbdf2caea089087ff853b2918e8f2ead",
+      "bytes": 1372,
+      "mode": 420
+    },
+    "tools/dlss5/verify-runtime.mjs": {
+      "sha256": "6162f8dad6b08319f599d1dde1bd6ba08d95622ec90bcda269814034fe124a91",
+      "bytes": 6622,
+      "mode": 420
     }
   },
   "packagingAdjustments": [
@@ -814,5 +829,6 @@
     "docs/studio-v3/EFFECTS_AI_SOURCE_20261008.md",
     "gateway/ops/prep-env.ps1",
     "gateway/ops/swap-gateway.ps1"
-  ]
+  ],
+  "developmentScope": "Studio, ontology-video, NR enhancement and the integrated image workspace; third-party runtime binaries and private execution data excluded."
 }
