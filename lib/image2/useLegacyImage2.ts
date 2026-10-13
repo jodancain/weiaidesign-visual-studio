@@ -13,6 +13,7 @@ import { ProfessionalMigrationManager, MIGRATION_PREFIX } from './professional-m
 import { asProfessional, applyProfessionalCommands, worldBounds, deriveWorldDelta, duplicateProfessionalLayerCommands, groupProfessionalLayerCommands, ungroupProfessionalLayerCommands, worldMatrix, multiplyMatrix } from './professional-model';
 import { professionalLegacyView, projectProfessionalDocument } from './professional-projection';
 import { canvasParentLayerId, canvasShapesParentFirst } from './native-shape-order';
+import { createImageFontLoader, imageFontIdentity } from './font-loader';
 import type { Capabilities, Conversation, ConversationMessage, DocumentCommand, ImageAsset, ImageDocument, ImageJob, ImageLayer } from './types';
 
 interface Options { editor: Editor | null; projectId: string; projectName: string; onError?: (text: string) => void }
@@ -41,6 +42,9 @@ export function useLegacyImage2({ editor, projectId, projectName, onError }: Opt
   const fingerprints = useRef(new Map<string, string>()), aliases = useRef(new Map<string, string>()), fontCache = useRef(new Map<string, ImageAsset>()), syncPromise = useRef<Promise<ImageDocument> | null>(null);
   const creatingDocument = useRef<Promise<ImageDocument> | null>(null);
   const loadedFonts = useRef(new Set<string>());
+  const fontFaces = useRef(new Set<FontFace>()), fontLoader = useRef<ReturnType<typeof createImageFontLoader> | null>(null);
+  if (!fontLoader.current) fontLoader.current = createImageFontLoader();
+  const clearFonts = () => { fontLoader.current!.clear(); loadedFonts.current.clear(); for (const face of fontFaces.current) window.document.fonts.delete(face); fontFaces.current.clear(); };
   const editGeneration = useRef(0), canvasDraft = useRef<LegacyCanvasDraft | undefined>(undefined), draftConflict = useRef(false);
   const [hasDraftConflict, setHasDraftConflict] = useState(false);
   const [professionalDocument, setProfessionalDocument] = useState<ImageDocument | null>(null);
@@ -95,8 +99,14 @@ export function useLegacyImage2({ editor, projectId, projectName, onError }: Opt
     currentAssets.current = list; setAssets(list);
     for (const asset of list.filter(fontFile)) {
       const name = `i2-${asset.id}`;
-      if (loadedFonts.current.has(name)) continue; loadedFonts.current.add(name);
-      void new FontFace(name, `url("${assetUrl(asset.id)}")`, { weight: String(asset.metadata?.weight || 400) }).load().then(face => window.document.fonts.add(face)).catch(() => { loadedFonts.current.delete(name); report(new Error(`字体 ${asset.name} 加载失败`)); });
+      let key: string;
+      try { key = imageFontIdentity(asset); } catch (err) { report(err); continue; }
+      if (loadedFonts.current.has(key)) continue; loadedFonts.current.add(key);
+      const captured = scope();
+      void fontLoader.current!.load(asset).then(bytes => { assertScope(captured); return new FontFace(name, bytes, { weight: String(asset.metadata?.weight || 400) }).load(); }).then(face => { assertScope(captured); window.document.fonts.add(face); fontFaces.current.add(face); }).catch(err => {
+        if (epoch.current !== captured.generation || state.current.projectId !== captured.projectId || canonical.current?.id !== captured.documentId) return;
+        loadedFonts.current.delete(key); report(new Error(`字体 ${asset.name} 加载失败：${err instanceof Error ? err.message : '字体暂不可读取'}`));
+      });
     }
   };
   async function refresh() {
@@ -118,6 +128,7 @@ export function useLegacyImage2({ editor, projectId, projectName, onError }: Opt
   }
   async function bind(next: ImageDocument) {
     const captured = scope(), projectId = state.current.projectId;
+    if (canonical.current && canonical.current.id !== next.id) clearFonts();
     canonical.current = next; dirty.current = false; aliases.current.clear(); fingerprints.current.clear(); fontCache.current.clear(); contentPayloads.current = {}; loadedContents.current.clear();
     localStorage.setItem(mapKey(projectId), next.id); setNeedsImport(false);
     let draft = await legacyDraftStorage.read(projectId); assertScope({ ...captured, documentId: undefined });
@@ -157,6 +168,7 @@ export function useLegacyImage2({ editor, projectId, projectName, onError }: Opt
   }
   useEffect(() => {
     if (!editor) return;
+    clearFonts();
     const generation = ++epoch.current; canonical.current = null; conversation.current = null; syncPromise.current = null; creatingDocument.current = null;
     queueMicrotask(() => { if (generation === epoch.current) { setDocument(null); setRawDocument(null); setProfessionalDocument(null); setAssets([]); setJobs([]); setBranches([]); setMessages([]); setRevisions([]); setNeedsImport(false); setHasDraftConflict(false); } });
     dirty.current = false; canvasDraft.current = undefined; draftConflict.current = false; fingerprints.current.clear(); aliases.current.clear();
@@ -205,7 +217,7 @@ export function useLegacyImage2({ editor, projectId, projectName, onError }: Opt
     window.addEventListener('online', online);
     let polling = false;
     const poll = setInterval(() => { if (!canonical.current || polling) return; polling = true; void refresh().catch(report).finally(() => { polling = false; }); }, 2000);
-    const invalidate = () => { epoch.current++; };
+    const invalidate = () => { epoch.current++; clearFonts(); };
     return () => { invalidate(); clearTimeout(timer); clearInterval(poll); unlisten(); selection(); window.removeEventListener('online', online);window.removeEventListener('pointerup',pointerFinished);window.removeEventListener('pointercancel',pointerFinished); };
     // The adapter is scoped to the original project; long-lived callbacks read current refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
