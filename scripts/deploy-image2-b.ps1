@@ -184,6 +184,7 @@ function Save-State {
     Move-Item -LiteralPath $temp -Destination $StatePath -Force
 }
 function Require-State {
+    $script:Step = 'load-release-state'
     $script:State = Read-Json $StatePath
     Require (($script:State.ReleaseId -ceq $ReleaseId) -and ($script:State.SourceSha256 -ceq $ExpectedSha)) 'state_source_mismatch' 'Release state is bound to another source archive.'
     Require ($script:State.Prepared -is [bool] -and $script:State.Prepared) 'prepare_required' 'Prepare has not completed successfully.'
@@ -457,13 +458,20 @@ try {
     $script:Step='host-identity'
     Require (($env:COMPUTERNAME -ieq 'AI') -and ($env:USERNAME -ieq 'qrrwi')) 'host_mismatch' 'This script is restricted to the inspected Windows AI/qrrwi target.'
     Require (!$env:SSH_CONNECTION -and !$env:SSH_CLIENT) 'detached_execution_required' 'Use a Scheduled Task or a persistent local session; an SSH-owned process may die before finally can resume paused webs.'
+    $script:Step='local-tooling'
     foreach($tool in @('docker','tar')){Require ($null -ne (Get-Command $tool -ErrorAction SilentlyContinue)) 'tool_missing' 'Required local Windows tooling is unavailable.'}
-    Protect-PrivateDirectory $PrivateBase;Protect-PrivateDirectory $PrivateRoot
+    $script:Step='private-base-acl';Protect-PrivateDirectory $PrivateBase
+    $script:Step='private-release-acl';Protect-PrivateDirectory $PrivateRoot
+    $script:Step='deployment-lock'
     try{$script:Lock=[IO.File]::Open((Join-Path $PrivateBase 'deploy.lock'),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)}catch{Fail 'deployment_locked' 'Another Image2 deployment phase already owns the release lock.'}
     switch($Phase){Prepare{Prepare-Release};Canary{Start-Canary};Cutover{Cutover-Release};Rollback{Rollback-Release}}
     [ordered]@{DeploymentExecuted=$true;Phase=$Phase;ReleaseId=$ReleaseId;SourceSha256=$ExpectedSha;Prepared=$script:State.Prepared;CanaryRuntimeReady=$script:State.CanaryRuntimeReady;CutoverComplete=$script:State.CutoverComplete;RollbackComplete=$script:State.RollbackComplete;Acceptance=(Field $script:State 'Acceptance');NewWebImageId=$script:State.NewWebImageId;NewCoreImageId=$script:State.NewCoreImageId;CanaryBuildId=$script:State.CanaryBuildId;ReceiptPath=$StatePath} | ConvertTo-Json -Depth 5 -Compress
 } catch {
-    if($null -ne $script:State){$script:State.LastFailure=@{Phase=$Phase;Step=$script:Step;Code=$script:FailureCode;At=(Get-Date).ToUniversalTime().ToString('o')};try{Save-State}catch{}}
+    # Retain the original ErrorRecord before a state-write catch can change $_. Never emit Message or ErrorDetails.
+    $failure=$_
+    $diagnostic=[ordered]@{ReleaseId=$ReleaseId;Phase=$Phase;Step=$script:Step;Code=$script:FailureCode;ExceptionType=$failure.Exception.GetType().FullName;HResult=$failure.Exception.HResult;FullyQualifiedErrorId=(Field $failure 'FullyQualifiedErrorId');ScriptLineNumber=(Field (Field $failure 'InvocationInfo') 'ScriptLineNumber');ScriptStackTrace=(Field $failure 'ScriptStackTrace')}
+    if($null -ne $script:State){$script:State.LastFailure=@{Phase=$Phase;Step=$script:Step;Code=$script:FailureCode;At=(Get-Date).ToUniversalTime().ToString('o');Diagnostic=$diagnostic};try{Save-State}catch{}}
+    $diagnostic | ConvertTo-Json -Depth 3 -Compress
     Write-Error "Image2 release $ReleaseId phase $Phase failed at $($script:Step): $($script:FailureCode). Raw command output and private values were suppressed."
     exit 1
 } finally {

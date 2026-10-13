@@ -94,6 +94,16 @@ test('secret comparisons emit only boolean/count receipts, Docker errors suppres
   assert.doesNotMatch(script,/Config\.Env\s*\|\s*(?:ConvertTo-Json|Out-File)|Write-(?:Host|Output|Error).*\$(?:token|value|map|original|core\.IMAGE2_API_TOKEN)/i);
   assert.match(script,/SetAccessRuleProtection\(\$true,\$false\)/);assert.match(readme,/没有执行 Windows/);assert.match(readme,/没有 PowerShell/);assert.match(readme,/CanaryRuntimeReady=true/);assert.match(readme,/不会创建 `GateBPassed=true`/);
 });
+test('failure diagnostics preserve the original error source with granular controller steps and no exception message or environment',()=>{
+  for(const step of ['local-tooling','private-base-acl','private-release-acl','deployment-lock'])assert.ok(script.includes(`$script:Step='${step}'`));
+  assert.match(body('Require-State'),/\$script:Step = 'load-release-state'/);
+  const start=script.lastIndexOf('} catch {'),end=script.indexOf('} finally {',start),failure=script.slice(start,end);
+  assert.ok(failure.indexOf('$failure=$_')<failure.indexOf('try{Save-State}catch{}'));
+  for(const field of ['ExceptionType','HResult','FullyQualifiedErrorId','ScriptLineNumber','ScriptStackTrace'])assert.match(failure,new RegExp(field));
+  assert.match(failure,/Diagnostic=\$diagnostic/);assert.match(failure,/\$diagnostic \| ConvertTo-Json -Depth 3 -Compress/);
+  assert.doesNotMatch(failure,/\$failure\.(?:Message|ErrorDetails)|Exception\.Message|InvocationInfo\.(?:Line|PositionMessage)|\$env:|Config\.Env/);
+  assert.ok(failure.indexOf('$diagnostic | ConvertTo-Json')<failure.indexOf('Write-Error'));
+});
 
 const powershell=['pwsh','powershell'].find(name=>{const r=spawnSync(name,['-NoProfile','-NonInteractive','-Command','exit 0'],{encoding:'utf8',timeout:5000});return !r.error&&r.status===0;});
 const quote=(value:string)=>`'${value.replaceAll("'","''")}'`;
