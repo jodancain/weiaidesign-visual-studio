@@ -12,6 +12,7 @@ import { legacyColors, legacyFontSizes, legacyFontUrls, legacyFontVersion, layer
 import { ProfessionalMigrationManager, MIGRATION_PREFIX } from './professional-migration';
 import { asProfessional, applyProfessionalCommands, worldBounds, deriveWorldDelta, duplicateProfessionalLayerCommands, groupProfessionalLayerCommands, ungroupProfessionalLayerCommands, worldMatrix, multiplyMatrix } from './professional-model';
 import { professionalLegacyView, projectProfessionalDocument } from './professional-projection';
+import { canvasParentLayerId, canvasShapesParentFirst } from './native-shape-order';
 import type { Capabilities, Conversation, ConversationMessage, DocumentCommand, ImageAsset, ImageDocument, ImageJob, ImageLayer } from './types';
 
 interface Options { editor: Editor | null; projectId: string; projectName: string; onError?: (text: string) => void }
@@ -236,10 +237,10 @@ export function useLegacyImage2({ editor, projectId, projectName, onError }: Opt
   }
   async function layerForShape(shape: TLShape, previous?: ImageLayer, staged = new Map<string, ImageLayer>()): Promise<ImageLayer> {
     const captured = scope(), ed = state.current.editor!, props = shape.props as Record<string, unknown>;
-    const parentLayer = staged.get(shape.parentId) || canonical.current!.layers.find(layer => layerShapeId(layer) === shape.parentId);
+    const parentId = canvasParentLayerId(shape, ed.getCurrentPageId(), staged, canonical.current!.layers, layerShapeId);
     const geometry = ed.getShapeGeometry(shape).bounds, pageBounds = ed.getShapePageBounds(shape.id)!;
     const base = { ...(previous || emptyLayer('raster', shape.type)), x: shape.x, y: shape.y, width: Number(props.w || geometry.width), height: Number(props.h || geometry.height), rotation: shape.rotation * 180 / Math.PI,
-      opacity: shape.opacity, locked: shape.isLocked, visible: shape.meta.image2Hidden !== true, parentId: parentLayer?.type === 'group' ? parentLayer.id : undefined,
+      opacity: shape.opacity, locked: shape.isLocked, visible: shape.meta.image2Hidden !== true, parentId,
       metadata: { ...previous?.metadata, legacyShapeId: shape.id, ...(!shape.type.startsWith('design-') && shape.type !== 'source-mask' ? { legacyRecord: structuredClone(shape) } : {}) } };
     if (shape.type.startsWith('design-') || shape.type === 'source-mask') {
       const layer = props.layer as ImageLayer;
@@ -361,7 +362,7 @@ export function useLegacyImage2({ editor, projectId, projectName, onError }: Opt
     for (const layer of live.layers) if (missing.has(layer.id) && (!layer.parentId || !missing.has(layer.parentId))) commands.push({type:'layer.remove',layerId:layer.id});
     const all = ed.getCurrentPageShapes().sort((a,b)=>String(a.index).localeCompare(String(b.index))), staged = new Map<string,ImageLayer>();
     const newProxies=all.filter(shape=>shape.type==='design-proxy'&&!live.layers.some(layer=>layerShapeId(layer)===shape.id)),duplicateSources=new Set(newProxies.map(shape=>String(shape.meta.image2LayerId || '')));
-    for (const shape of all) {
+    for (const shape of canvasShapesParentFirst(all, ed.getCurrentPageId())) {
       if (shape.type === 'design-proxy') {
         if(!newProxies.includes(shape))continue;
         const source=live.layers.find(layer=>layer.id===shape.meta.image2LayerId);

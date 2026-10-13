@@ -2,7 +2,7 @@
 
 本脚本用于已探查的 Windows `AI / qrrwi`，采用手工 Docker 容器方式。原公网 Web 是 `weiai-studio-v3-web`，宿主 18194；网络 `weiai-studio-v3-production`；旧图片卷 `weiaidesign-web_weiaidesign-data`；视频账本卷 `weiai-studio-v3-production-data`。这些是探查事实，脚本执行时仍检查实际运行状态、挂载和配置一致性，不把旧时间点快照当作部署验收。
 
-当前交付是脚本与验证。Windows AI 实际PowerShell AST解析错误0，Prepare/Canary/Rollback dry-run与Cutover缺回执拒绝已通过。尚未执行真实构建、备份、canary或生产切换。每次修改脚本后仍应用下面的parse-only命令复验。
+当前交付是脚本与验证。上一版已在 Windows AI 实际 PowerShell 中验证 AST 解析错误 0、Prepare/Canary/Rollback dry-run、Cutover 缺回执拒绝。本版新增用户明确授权的“先部署生产再测试”顺序，尚未重新验证 Windows AST，也没有执行 Windows 真实构建、备份、canary 或生产切换。每次修改脚本后仍应用下面的 parse-only 命令复验。
 
 ```powershell
 $tokens = $null; $parseErrors = $null
@@ -14,7 +14,7 @@ if ($parseErrors.Count) { throw 'PowerShell parse failed; do not deploy.' }
 
 必填参数为 `ReleaseId`、`SourceArchive`、`ExpectedSha`、`Phase`。`Phase` 为 `Prepare | Canary | Cutover | Rollback`；可选 `GateReceipt` 和 `DryRun`。每个 release 使用新目录，不允许覆盖旧备份、已有来源不明的容器或数据卷。
 
-`DryRun` 只输出动作清单，不调用 Docker、不读取 runtime.env、不访问健康端点、不写状态。`Cutover -DryRun` 仍要求基础门禁回执为真布尔；成功的 dry-run 不表示实际配置、构建、备份或浏览器验收通过。
+`DryRun` 只输出动作清单，不调用 Docker、不读取 runtime.env、不访问健康端点、不写状态。`Cutover -DryRun` 仍要求正常验收回执或下述明确部署优先授权回执；成功的 dry-run 不表示实际配置、构建、备份或浏览器验收通过。
 
 ```powershell
 & 'C:\Users\qrrwi\studio-v3-production\tools\deploy-image2-b.ps1' `
@@ -28,14 +28,14 @@ if ($parseErrors.Count) { throw 'PowerShell parse failed; do not deploy.' }
 
 ## 源码冻结
 
-从 B 原首页验收对应的完整 `web/` commit 导出，不同步旧 Windows 工作目录。所有新 helper、服务、字体和部署文件必须包含在同一冻结源码中；源码包不包含私有环境、运行数据、node_modules、模型缓存或符号链接。模型权重不进入源码包。
+从本次完整 `web/` 候选 commit 导出，不同步旧 Windows 工作目录。通常使用 B 原首页验收对应的 commit；用户明确要求先部署再测试时使用已完成源码检查的候选，保留网页验收待办。所有新 helper、服务、字体和部署文件必须包含在同一冻结源码中；源码包不包含私有环境、运行数据、node_modules、模型缓存或符号链接。模型权重不进入源码包。
 
 ```sh
-git -C '/Users/qiuxuanmai/SynologyDrive/ai/Ai vedio/web' archive --format=tar.gz --output='<private-dir>/web-<release>.tgz' '<verified commit>'
+git -C '/Users/qiuxuanmai/SynologyDrive/ai/Ai vedio/web' archive --format=tar.gz --output='<private-dir>/web-<release>.tgz' '<verified release commit>' -- . ':!runtime'
 shasum -a 256 '<private-dir>/web-<release>.tgz'
 ```
 
-将源码包和同版部署脚本传到 Windows 私有位置。`ExpectedSha` 是源码包实际 SHA-256，脚本中没有硬编码当前代码 SHA。Windows `Prepare` 会重算 hash、拒绝越界路径/私有文件/链接，解压到新的 `releases/<release>/web` 后构建。不要使用旧 wrapper `deploy-sync.sh` 或 `deploy-long-video-production.sh`；它们针对旧部署路径，范围过宽。
+将源码包和同版部署脚本传到 Windows 私有位置。部署包排除仓库中的独立视频后台源码快照 `runtime/`，它不参与此次 Web 或图片服务构建；完整源码仍保留在 Git。`ExpectedSha` 是源码包实际 SHA-256，脚本中没有硬编码当前代码 SHA。Windows `Prepare` 会重算 hash、拒绝越界路径/私有文件/链接，解压到新的 `releases/<release>/web` 后构建。不要使用旧 wrapper `deploy-sync.sh` 或 `deploy-long-video-production.sh`；它们针对旧部署路径，范围过宽。
 
 ## 四个阶段
 
@@ -68,7 +68,7 @@ canary Web 绑定 `127.0.0.1:18196:18084`，使用旧图片的独立恢复副本
 
 ### Cutover
 
-必须提供人工根据真实验收结果填写的 JSON 回执。以下示例所有门禁默认 false；不要为了让脚本通过而提前改成 true。image ID / BUILD_ID 从本次 `release-state.json` 对齐；EvidencePaths 指向实际 B 和 canary 浏览器证据。
+通常必须提供人工根据真实验收结果填写的 JSON 回执。以下示例所有门禁默认 false；不要为了让脚本通过而提前改成 true。image ID / BUILD_ID 从本次 `release-state.json` 对齐；EvidencePaths 指向实际 B 和 canary 浏览器证据。
 
 ```json
 {
@@ -87,7 +87,33 @@ canary Web 绑定 `127.0.0.1:18196:18084`，使用旧图片的独立恢复副本
 }
 ```
 
-回执布尔必须是 JSON true；字符串 `"true"`、缺失字段、不同 release/source/image/build 或非零模型计数均拒绝。门禁在环境读取、锁和任何变更前检查；实际切换还要求 Prepare 恢复校验、canary运行回执、容器实际配置及 digest 一致、旧服务与 image2 账本没有活跃/未知任务。
+正常流程的验收布尔必须是 JSON true；字符串 `"true"`、缺失字段、不同 release/source/image/build 或非零模型计数均拒绝。
+
+用户在 2026-10-13 明确要求 **“先部署生产再测试”**，可改用下列回执。此模式只调整原首页功能验收顺序；必须保存三项验收状态为严格 JSON false，来源为直接用户指令，明确标记部署后测试待完成。未提供 `DeployBeforeUiTesting` 或设为 false 时，继续采用正常严格验收门禁。不能把这项授权当作 UI 已通过。
+
+```json
+{
+  "ReleaseId": "20261013-b-example",
+  "SourceSha256": "<lowercase archive SHA-256>",
+  "DeployBeforeUiTesting": true,
+  "AuthorizationSource": "user",
+  "AuthorizationInstruction": "先部署生产再测试",
+  "PostDeploymentTestingRequired": true,
+  "GateBPassed": false,
+  "OriginalPagePassed": false,
+  "CanaryPassed": false,
+  "GenerationCalls": 0,
+  "LlmCalls": 0,
+  "VisionCalls": 0,
+  "WebImageId": "sha256:<prepared web image>",
+  "CoreImageId": "sha256:<prepared core image>",
+  "CanaryBuildId": "<actual runtime BUILD_ID>"
+}
+```
+
+两种模式均在环境读取、锁和任何变更前检查回执；实际切换仍要求 Prepare 恢复校验、`CanaryRuntimeReady` 运行回执、容器实际配置及 digest 一致、签名访客身份不变、旧服务与 image2 账本没有活跃/未知任务、数字零模型调用。授权不会绕过这些基础运行检查。
+
+部署前后的 `release-state.json` 与脚本输出保存 `Acceptance`，其中包含实际三项验收值、用户授权及 `PostDeploymentTestingRequired`。`CutoverComplete=true` 仅表示生产路由切换成功；部署优先模式下仍须在生产原 `/` 测试全部非 AI 功能并独立记录结果，失败时使用保留的原 Web 回滚。
 
 仅在这个入口恢复已有 provider 配置到新私有文件，沿用同一内部 token和 image2 卷。不运行付费样例。新核心配置失败时恢复原 canary 核心；替换 Web 时保留原停止容器、配置和 digest，只把新 Web 放到原 18194。旧 18191、视频 18082/18084、V3 gateway、原生 worker 和 Cloudflare 路由不修改。
 

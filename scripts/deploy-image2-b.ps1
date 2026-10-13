@@ -67,6 +67,10 @@ function Require-True($Object, [string]$Name) {
     $value = Field $Object $Name
     Require (($value -is [bool]) -and $value) 'gate_rejected' "$Name must be the boolean true in the acceptance receipt."
 }
+function Require-False($Object, [string]$Name) {
+    $value = Field $Object $Name
+    Require (($value -is [bool]) -and !$value) 'gate_rejected' "$Name must remain the boolean false while acceptance is pending."
+}
 function Read-Json([string]$Path) {
     Require (Test-Path -LiteralPath $Path -PathType Leaf) 'receipt_missing' 'Required release receipt is missing.'
     try { return [IO.File]::ReadAllText($Path) | ConvertFrom-Json } catch { Fail 'receipt_invalid' 'Release receipt is not valid JSON.' }
@@ -74,7 +78,18 @@ function Read-Json([string]$Path) {
 function Assert-GateFlags {
     $script:Step = 'acceptance-gate'
     $gate = Read-Json $GateReceipt
-    foreach ($name in @('GateBPassed','OriginalPagePassed','CanaryPassed')) { Require-True $gate $name }
+    $deployFirst = Field $gate 'DeployBeforeUiTesting'
+    Require (($null -eq $deployFirst) -or ($deployFirst -is [bool])) 'gate_rejected' 'DeployBeforeUiTesting must be a JSON boolean when supplied.'
+    if ($deployFirst -eq $true) {
+        # The user changed the order, not the acceptance facts. Infrastructure gates remain below.
+        foreach ($name in @('GateBPassed','OriginalPagePassed','CanaryPassed')) { Require-False $gate $name }
+        Require ((Field $gate 'AuthorizationSource') -ceq 'user') 'deployment_authorization_missing' 'Deploy-first requires direct user authorization.'
+        $instruction = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('5YWI6YOo572y55Sf5Lqn5YaN5rWL6K+V'))
+        Require ((Field $gate 'AuthorizationInstruction') -ceq $instruction) 'deployment_authorization_missing' 'Deploy-first receipt must preserve the explicit user instruction.'
+        Require-True $gate 'PostDeploymentTestingRequired'
+    } else {
+        foreach ($name in @('GateBPassed','OriginalPagePassed','CanaryPassed')) { Require-True $gate $name }
+    }
     Require ((Field $gate 'ReleaseId') -ceq $ReleaseId) 'gate_release_mismatch' 'Gate receipt belongs to another release.'
     Require ((Field $gate 'SourceSha256') -ceq $ExpectedSha) 'gate_source_mismatch' 'Gate receipt does not bind the supplied source archive.'
     foreach ($name in @('GenerationCalls','LlmCalls','VisionCalls')) {
@@ -92,10 +107,10 @@ if ($DryRun) {
     $steps = @{
         Prepare = @('VerifyArchive','ComparePrivateConfigBoolean','ReadActivity','OnlineSQLiteBackup','PauseBothWebWriters','ArchiveLegacyVolume','UnpauseFinally','RestoreIntoIsolatedVolumes','VerifySQLiteAndAssets','BuildPinnedReleaseImages')
         Canary = @('RequirePrepareReceipt','CreatePrivateModelBlankConfig','StartCoreWithoutPublishedPorts','StartWebOn12700118196','ReadHealthBuildIdCapabilities','RecordRuntimeReadyOnly')
-        Cutover = @('RequireBoundGateBAndOriginalPageAndCanaryReceipt','RequireRestoreReceipt','RecheckImageDigestsConfigActivity','PromoteCoreWithSameLedger','ReplaceOnlyWeb18194','ReadbackOrRestoreOldWeb')
+        Cutover = @('RequireBoundAcceptanceOrExplicitDeployBeforeUiTestingReceipt','RequireRestoreReceipt','RequireCanaryRuntimeReady','RecheckImageDigestsConfigActivity','PromoteCoreWithSameLedger','ReplaceOnlyWeb18194','ReadbackOrRestoreOldWeb','RunPendingOriginalPageTestsAfterAuthorizedDeployFirst')
         Rollback = @('RequireMatchingReleaseAndOldContainerDigest','StopAndRetainCandidateWeb','StartOriginalWebOn18194','PreserveAllLedgersAndVolumes')
     }
-    [ordered]@{ DryRun=$true; DeploymentExecuted=$false; Phase=$Phase; ReleaseId=$ReleaseId; SourceSha256=$ExpectedSha; GateRequired=($Phase -eq 'Cutover'); Steps=$steps[$Phase]; CorePublishedPorts=@(); CanaryBinding='127.0.0.1:18196:18084'; CutoverBinding='18194:18084'; AppNetwork=$AppNetwork; RuntimeConfigRead=$false } | ConvertTo-Json -Depth 5 -Compress
+    [ordered]@{ DryRun=$true; DeploymentExecuted=$false; Phase=$Phase; ReleaseId=$ReleaseId; SourceSha256=$ExpectedSha; GateRequired=($Phase -eq 'Cutover'); DeployBeforeUiTesting=((Field $gate 'DeployBeforeUiTesting') -eq $true); PostDeploymentTestingRequired=((Field $gate 'DeployBeforeUiTesting') -eq $true); Steps=$steps[$Phase]; CorePublishedPorts=@(); CanaryBinding='127.0.0.1:18196:18084'; CutoverBinding='18194:18084'; AppNetwork=$AppNetwork; RuntimeConfigRead=$false } | ConvertTo-Json -Depth 5 -Compress
     return
 }
 
@@ -407,6 +422,10 @@ function Cutover-Release {
     Require-State
     Require-True $script:State.Backup 'RestoreVerified';Require-True $script:State 'CanaryRuntimeReady'
     Require ((Field $gate 'WebImageId') -ceq $script:State.NewWebImageId -and (Field $gate 'CoreImageId') -ceq $script:State.NewCoreImageId -and (Field $gate 'CanaryBuildId') -ceq $script:State.CanaryBuildId) 'gate_image_mismatch' 'Gate receipt does not bind the tested image digests and BUILD_ID.'
+    $deployFirst = (Field $gate 'DeployBeforeUiTesting') -eq $true
+    $acceptance = [ordered]@{ DeployBeforeUiTesting=$deployFirst; PostDeploymentTestingRequired=$deployFirst; GateBPassed=(Field $gate 'GateBPassed'); OriginalPagePassed=(Field $gate 'OriginalPagePassed'); CanaryPassed=(Field $gate 'CanaryPassed'); AuthorizationSource=(Field $gate 'AuthorizationSource'); AuthorizationInstruction=(Field $gate 'AuthorizationInstruction') }
+    $script:State | Add-Member -MemberType NoteProperty -Name Acceptance -Value $acceptance -Force
+    Save-State
     $null=Verify-Image $NewWebTag $script:State.NewWebImageId;$null=Verify-Image $NewCoreTag $script:State.NewCoreImageId
     $null=Assert-OriginalWeb;$null=Assert-PrivateConfig $WebName $OriginalWebEnv;$null=Assert-PrivateConfig $GatewayName $OriginalGatewayEnv;$null=Assert-NoActivity
     Assert-OwnedContainer $CanaryName $script:State.NewWebImageId $WebCanaryEnv;Assert-OwnedContainer $CoreName $script:State.NewCoreImageId $CoreCanaryEnv;Assert-CoreMountAndPorts;Assert-CanaryBinding;Assert-ModelBlank $CoreName;Assert-ModelBlank $CanaryName;$null=Assert-CoreIdle -ZeroModels
@@ -442,7 +461,7 @@ try {
     Protect-PrivateDirectory $PrivateBase;Protect-PrivateDirectory $PrivateRoot
     try{$script:Lock=[IO.File]::Open((Join-Path $PrivateBase 'deploy.lock'),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)}catch{Fail 'deployment_locked' 'Another Image2 deployment phase already owns the release lock.'}
     switch($Phase){Prepare{Prepare-Release};Canary{Start-Canary};Cutover{Cutover-Release};Rollback{Rollback-Release}}
-    [ordered]@{DeploymentExecuted=$true;Phase=$Phase;ReleaseId=$ReleaseId;SourceSha256=$ExpectedSha;Prepared=$script:State.Prepared;CanaryRuntimeReady=$script:State.CanaryRuntimeReady;CutoverComplete=$script:State.CutoverComplete;RollbackComplete=$script:State.RollbackComplete;NewWebImageId=$script:State.NewWebImageId;NewCoreImageId=$script:State.NewCoreImageId;CanaryBuildId=$script:State.CanaryBuildId;ReceiptPath=$StatePath} | ConvertTo-Json -Depth 5 -Compress
+    [ordered]@{DeploymentExecuted=$true;Phase=$Phase;ReleaseId=$ReleaseId;SourceSha256=$ExpectedSha;Prepared=$script:State.Prepared;CanaryRuntimeReady=$script:State.CanaryRuntimeReady;CutoverComplete=$script:State.CutoverComplete;RollbackComplete=$script:State.RollbackComplete;Acceptance=(Field $script:State 'Acceptance');NewWebImageId=$script:State.NewWebImageId;NewCoreImageId=$script:State.NewCoreImageId;CanaryBuildId=$script:State.CanaryBuildId;ReceiptPath=$StatePath} | ConvertTo-Json -Depth 5 -Compress
 } catch {
     if($null -ne $script:State){$script:State.LastFailure=@{Phase=$Phase;Step=$script:Step;Code=$script:FailureCode;At=(Get-Date).ToUniversalTime().ToString('o')};try{Save-State}catch{}}
     Write-Error "Image2 release $ReleaseId phase $Phase failed at $($script:Step): $($script:FailureCode). Raw command output and private values were suppressed."

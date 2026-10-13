@@ -46,6 +46,22 @@ test('Cutover gate is checked before dry-run, host/config reads and phase mutati
   const gate=body('Assert-GateFlags');assert.match(gate,/GateBPassed','OriginalPagePassed','CanaryPassed/);assert.match(body('Require-True'),/-is \[bool\]/);assert.match(gate,/ReleaseId.*-ceq \$ReleaseId/);assert.match(gate,/SourceSha256.*-ceq \$ExpectedSha/);assert.match(gate,/GenerationCalls','LlmCalls','VisionCalls/);
   const cut=body('Cutover-Release');assert.match(cut,/RestoreVerified/);assert.match(cut,/CanaryRuntimeReady/);for(const field of ['WebImageId','CoreImageId','CanaryBuildId'])assert.match(cut,new RegExp(field));assert.ok(cut.indexOf('Assert-NoActivity')<cut.indexOf("@('stop',$CoreName)"));assert.match(cut,/Assert-CoreIdle -ZeroModels/);
 });
+test('deploy-first requires the exact user instruction, typed pending acceptance and follow-up without weakening the default gate',()=>{
+  const gate=body('Assert-GateFlags');
+  assert.match(gate,/\$deployFirst = Field \$gate 'DeployBeforeUiTesting'/);
+  assert.match(gate,/\$null -eq \$deployFirst.*\$deployFirst -is \[bool\]/);
+  assert.match(gate,/if \(\$deployFirst -eq \$true\).*Require-False \$gate \$name/s);
+  assert.match(body('Require-False'),/-is \[bool\].*!\$value/);
+  assert.match(gate,/AuthorizationSource'\) -ceq 'user'/);
+  const encoded=/FromBase64String\('([^']+)'\)/.exec(gate);assert.ok(encoded);assert.equal(Buffer.from(encoded[1],'base64').toString('utf8'),'先部署生产再测试');
+  assert.match(gate,/AuthorizationInstruction'\) -ceq \$instruction/);
+  assert.match(gate,/Require-True \$gate 'PostDeploymentTestingRequired'/);
+  assert.match(gate,/else \{\s*foreach \(\$name in @\('GateBPassed','OriginalPagePassed','CanaryPassed'\)\) \{ Require-True \$gate \$name \}/);
+  const cut=body('Cutover-Release');assert.match(cut,/GateBPassed=\(Field \$gate 'GateBPassed'\)/);assert.match(cut,/OriginalPagePassed=\(Field \$gate 'OriginalPagePassed'\)/);assert.match(cut,/CanaryPassed=\(Field \$gate 'CanaryPassed'\)/);
+  assert.match(cut,/-Name Acceptance -Value \$acceptance -Force/);
+  assert.ok(cut.indexOf('-Name Acceptance')<cut.indexOf('Write-ProductionConfig'));
+  assert.match(readme,/先部署生产再测试/);assert.match(readme,/严格 JSON false/);assert.match(readme,/不能把这项授权当作 UI 已通过/);
+});
 test('DryRun returns a plan before Docker/config/filesystem operations, and real SSH-owned phases are refused',()=>{
   const chunk=script.slice(script.indexOf('if ($DryRun)'),script.indexOf('function Invoke-Docker'));
   assert.match(chunk,/DeploymentExecuted=\$false/);assert.match(chunk,/RuntimeConfigRead=\$false/);assert.match(chunk,/return\s*\}/);
@@ -102,4 +118,12 @@ test('real PowerShell refuses false/string true/nonzero model or wrong-source cu
     const code=`${setup}& ${quote(scriptPath)} -ReleaseId offline-test-b -SourceArchive missing.tgz -ExpectedSha ${'0'.repeat(64)} -Phase Cutover -GateReceipt ${quote(gatePath)} -DryRun`;
     const r=spawnSync(powershell!,['-NoProfile','-NonInteractive','-Command',code],{encoding:'utf8',timeout:15000});assert.notEqual(r.status,0);assert.deepEqual(readdirSync(drive),[]);
   }
+});
+test('real PowerShell permits only truthful explicitly authorized deploy-first dry-run and rejects malformed bypasses',{skip:!powershell?'PowerShell is not installed; deploy-first execution is not verified':false},t=>{
+  const dir=mkdtempSync(join(tmpdir(),'image2-release-deploy-first-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));const drive=join(dir,'drive');mkdirSync(drive);const gatePath=join(dir,'gate.json');
+  const gate={ReleaseId:'offline-test-b',SourceSha256:'0'.repeat(64),DeployBeforeUiTesting:true,AuthorizationSource:'user',AuthorizationInstruction:'先部署生产再测试',PostDeploymentTestingRequired:true,GateBPassed:false,OriginalPagePassed:false,CanaryPassed:false,GenerationCalls:0,LlmCalls:0,VisionCalls:0};
+  const setup=process.platform==='win32'?'':`New-PSDrive -Name C -PSProvider FileSystem -Root ${quote(drive)}|Out-Null;`;
+  const run=(patch:Record<string,unknown>)=>{writeFileSync(gatePath,JSON.stringify({...gate,...patch}));return spawnSync(powershell!,['-NoProfile','-NonInteractive','-Command',`${setup}& ${quote(scriptPath)} -ReleaseId offline-test-b -SourceArchive missing.tgz -ExpectedSha ${'0'.repeat(64)} -Phase Cutover -GateReceipt ${quote(gatePath)} -DryRun`],{encoding:'utf8',timeout:15000});};
+  const accepted=run({});assert.equal(accepted.status,0,`${accepted.stdout}\n${accepted.stderr}`);const receipt=JSON.parse(accepted.stdout.trim());assert.equal(receipt.DeployBeforeUiTesting,true);assert.equal(receipt.PostDeploymentTestingRequired,true);assert.equal(receipt.DeploymentExecuted,false);assert.equal(receipt.RuntimeConfigRead,false);assert.deepEqual(readdirSync(drive),[]);
+  for(const patch of [{DeployBeforeUiTesting:'true'},{DeployBeforeUiTesting:false},{AuthorizationSource:'agent'},{AuthorizationInstruction:'deploy'},{PostDeploymentTestingRequired:false},{GateBPassed:true},{OriginalPagePassed:'false'},{CanaryPassed:true},{GenerationCalls:1},{LlmCalls:'0'},{SourceSha256:'1'.repeat(64)}]){const rejected=run(patch);assert.notEqual(rejected.status,0,JSON.stringify(patch));assert.deepEqual(readdirSync(drive),[]);}
 });

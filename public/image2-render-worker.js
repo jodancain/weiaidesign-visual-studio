@@ -5,21 +5,71 @@ let sequence = 0;
 const resources = new Map();
 const pendingResources = new Map();
 const resourceCosts = new WeakMap();
+const rasterPoolKeys = new WeakMap();
+const rasterPool = new Map();
+const bufferReferences = new Map();
 const cacheLimit = 128 * 1024 * 1024;
 let cacheBytes = 0;
-function cost(resource) {
-  if (!resourceCosts.has(resource)) resourceCosts.set(resource, 256 + (resource.pixels?.byteLength || 0) + (resource.paths || []).reduce((bytes, path) => bytes + 128 + String(path.d || '').length * 2, 0));
+function metadataCost(resource) {
+  if (!resourceCosts.has(resource)) resourceCosts.set(resource, 256 + (resource.paths || []).reduce((bytes, path) => bytes + 128 + String(path.d || '').length * 2, 0));
   return resourceCosts.get(resource);
+}
+function cost(resource) { return metadataCost(resource) + (resource.pixels?.buffer.byteLength || 0); }
+function forget(key) {
+  const resource = resources.get(key);
+  if (!resource) return;
+  cacheBytes -= metadataCost(resource);
+  if (resource.pixels) {
+    const buffer = resource.pixels.buffer, reference = bufferReferences.get(buffer);
+    if (--reference.count === 0) {
+      cacheBytes -= buffer.byteLength;
+      bufferReferences.delete(buffer);
+      for (const poolKey of reference.poolKeys) if (rasterPool.get(poolKey)?.buffer === buffer) rasterPool.delete(poolKey);
+    }
+  }
+  resources.delete(key);
 }
 function remember(key, resource) {
   const bytes = cost(resource);
   if (bytes > cacheLimit) return;
-  if (resources.has(key)) cacheBytes -= cost(resources.get(key));
-  resources.delete(key); resources.set(key, resource); cacheBytes += bytes;
+  forget(key);
+  resources.set(key, resource); cacheBytes += metadataCost(resource);
+  if (resource.pixels) {
+    const buffer = resource.pixels.buffer, poolKey = rasterPoolKeys.get(resource);
+    if (!bufferReferences.has(buffer)) {
+      bufferReferences.set(buffer, { count: 0, poolKeys: new Set() });
+      cacheBytes += buffer.byteLength;
+    }
+    const reference = bufferReferences.get(buffer); reference.count++;
+    if (poolKey) { reference.poolKeys.add(poolKey); rasterPool.set(poolKey, resource.pixels); }
+  }
   while (cacheBytes > cacheLimit) {
     const oldest = resources.keys().next().value;
-    cacheBytes -= cost(resources.get(oldest)); resources.delete(oldest);
+    forget(oldest);
   }
+}
+function decodeRaster(resource, document, content) {
+  if (![resource.width, resource.height].every(n => Number.isSafeInteger(n) && n > 0 && n <= 32768)) throw new Error('画面资源像素尺寸不一致');
+  const binary = atob(resource.pixelsBase64 || resource.pixels);
+  if (resource.width * resource.height * 4 !== binary.length) throw new Error('画面资源像素尺寸不一致');
+  let pixels;
+  const source = resource.sourceAssetId || content.assetId;
+  // Bounds and roles belong to individual resources. Only owner-checked, immutable pixel payloads share storage.
+  if (typeof source === 'string' && source && typeof resource.hash === 'string' && /^[a-f0-9]{64}$/i.test(resource.hash)) {
+    const poolKey = JSON.stringify([document.id, source, resource.hash.toLowerCase(), resource.width, resource.height]);
+    const shared = rasterPool.get(poolKey);
+    if (shared) {
+      for (let i = 0; i < binary.length; i++) if (binary.charCodeAt(i) !== shared[i]) throw new Error('画面资源内容与不可变标识不一致');
+      pixels = shared;
+    }
+    rasterPoolKeys.set(resource, poolKey);
+  }
+  if (!pixels) {
+    pixels = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) pixels[i] = binary.charCodeAt(i);
+  }
+  resource.pixels = pixels;
+  delete resource.pixelsBase64;
 }
 function modules() {
   return modulesPromise ||= Promise.all([
@@ -50,10 +100,7 @@ async function resolve(content, context, document, requestId) {
       const resource = body.data || body.resource || body;
       if (!resource || !['raster', 'paths'].includes(resource.kind)) throw new Error('画面资源格式不可用');
       if (resource.kind === 'raster') {
-        const binary = atob(resource.pixelsBase64 || resource.pixels);
-        resource.pixels = Uint8Array.from(binary, char => char.charCodeAt(0));
-        delete resource.pixelsBase64;
-        if (![resource.width, resource.height].every(n => Number.isSafeInteger(n) && n > 0 && n <= 32768) || resource.width * resource.height * 4 !== resource.pixels.byteLength) throw new Error('画面资源像素尺寸不一致');
+        decodeRaster(resource, document, content);
       } else if (!Array.isArray(resource.paths)) throw new Error('画面路径资源不可用');
       // Accepted immutable data can warm the cache even when its requesting frame was superseded.
       remember(key, resource);

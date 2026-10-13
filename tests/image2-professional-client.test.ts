@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { Editor } from 'tldraw';
-import type { DocumentCommand, ImageDocument, LayerMask, Matrix2D } from '../lib/image2/types';
+import type { DocumentCommand, ImageDocument, ImageLayer, LayerMask, Matrix2D } from '../lib/image2/types';
 import type { QueuedBatch } from '../lib/image2/queue';
 import { applyProfessionalCommands, applyProfessionalDraft, asProfessional, clippingBase, copyOnWriteContent, deriveWorldDelta, duplicateProfessionalLayerCommands, groupProfessionalLayerCommands, inverseMatrix, maskWorldMatrix, multiplyMatrix, PROFESSIONAL_IDENTITY, transformBounds, transformPoint, ungroupProfessionalLayerCommands, worldBounds, worldMatrix, type RawProfessionalDocument, type RawProfessionalLayer } from '../lib/image2/professional-model';
 import { professionalLegacyView, professionalLayerShapeId, professionalProxyRecords, projectProfessionalDocument } from '../lib/image2/professional-projection';
+import { canvasParentLayerId, canvasShapesParentFirst } from '../lib/image2/native-shape-order';
 
 const cmd=(value:unknown)=>value as DocumentCommand;
 const layer=(id:string,patch:Partial<RawProfessionalLayer>={}):RawProfessionalLayer=>({id,type:'raster',name:id,contentId:'pixels',z:0,visible:true,locked:false,opacity:1,localBounds:{x:0,y:0,width:100,height:50},matrix:[1,0,0,1,0,0],blendMode:'normal',compositeMode:'isolated',masks:[],effects:[],...patch});
@@ -15,6 +16,59 @@ const raw=(d:ImageDocument)=>asProfessional(d);
 const close=(a:readonly number[],b:readonly number[])=>{assert.equal(a.length,b.length);a.forEach((n,i)=>assert.ok(Math.abs(n-b[i])<1e-8,`${a} != ${b}`));};
 const text=()=>({formatVersion:1,kind:'text',text:'中文',fontAssetId:'font-asset',fontFamily:'实际字体',fontSize:24,fontWeight:400,fill:'#000000',tracking:1,lineHeight:1.2});
 const batch=(d:ImageDocument,commands:DocumentCommand[],patch:Partial<QueuedBatch>={}):QueuedBatch=>({id:'request',documentId:d.id,createdAt:1,state:'queued',commands,...patch});
+
+test('native conversion resolves the parent before a lower-index child and preserves world coordinates',()=>{
+  const shapes=[
+    {id:'shape:child',parentId:'shape:parent',index:'a1',type:'raster' as const,matrix:[1,0,0,1,10,0] as Matrix2D},
+    {id:'shape:parent',parentId:'page:root',index:'b1',type:'group' as const,matrix:[1,0,0,1,100,0] as Matrix2D},
+  ];
+  let d=document();raw(d).layers=[];
+  const staged=new Map<string,ImageLayer>(),order=canvasShapesParentFirst(shapes,'page:root');
+  assert.deepEqual(order.map(shape=>shape.id),['shape:parent','shape:child']);
+  for(const shape of order){
+    const parentId=canvasParentLayerId(shape,'page:root',staged,d.layers,item=>String(item.metadata?.legacyShapeId));
+    const converted=layer(shape.id.replace('shape:','converted-'),{type:shape.type,parentId,matrix:shape.matrix,metadata:{legacyShapeId:shape.id}});
+    if(converted.type==='group')delete converted.contentId;
+    d=applyProfessionalCommands(d,[cmd({type:'layer.add',layer:converted})]);
+    staged.set(shape.id,converted as unknown as ImageLayer);
+  }
+  assert.equal(raw(d).layers.find(item=>item.id==='converted-child')!.parentId,'converted-parent');
+  assert.deepEqual(transformPoint(worldMatrix(d,'converted-child'),{x:0,y:0}),{x:110,y:0});
+});
+
+test('native nested groups keep sibling order and compose ancestor transforms',()=>{
+  const shapes=[
+    {id:'leaf',parentId:'nested',index:'a0',matrix:[1,0,0,1,5,0] as Matrix2D},
+    {id:'nested',parentId:'parent',index:'a0',matrix:[1,0,0,1,10,0] as Matrix2D},
+    {id:'sibling',parentId:'page:root',index:'a1',matrix:[1,0,0,1,-30,0] as Matrix2D},
+    {id:'parent',parentId:'page:root',index:'b1',matrix:[0,1,-1,0,100,30] as Matrix2D},
+  ];
+  const ordered=canvasShapesParentFirst(shapes,'page:root'),d=document();raw(d).layers=[];
+  assert.deepEqual(ordered.map(shape=>shape.id),['sibling','parent','nested','leaf']);
+  const staged=new Map<string,ImageLayer>();
+  for(const shape of ordered){
+    const converted=layer(shape.id,{type:shape.id==='parent'||shape.id==='nested'?'group':'raster',parentId:canvasParentLayerId(shape,'page:root',staged,[],item=>item.id),matrix:shape.matrix});
+    staged.set(shape.id,converted as unknown as ImageLayer);raw(d).layers.push(converted);
+  }
+  assert.deepEqual(transformPoint(worldMatrix(d,'leaf'),{x:0,y:0}),{x:100,y:45});
+});
+
+test('native graph validation rejects missing parents, foreign pages, cycles and duplicate identities',()=>{
+  assert.throws(()=>canvasShapesParentFirst([{id:'child',parentId:'missing',index:'a1'}],'page:root'),/父对象缺失/);
+  assert.throws(()=>canvasShapesParentFirst([{id:'child',parentId:'page:other',index:'a1'}],'page:root'),/父对象缺失/);
+  assert.throws(()=>canvasShapesParentFirst([{id:'a',parentId:'b',index:'a1'},{id:'b',parentId:'a',index:'b1'}],'page:root'),/循环/);
+  assert.throws(()=>canvasShapesParentFirst([{id:'a',parentId:'a',index:'a1'}],'page:root'),/循环/);
+  assert.throws(()=>canvasShapesParentFirst([{id:'a',parentId:'page:root',index:'a1'},{id:'a',parentId:'page:root',index:'b1'}],'page:root'),/编号重复/);
+});
+
+test('native parent resolution never silently drops an unresolved or non-group parent',()=>{
+  const parent=layer('canonical-parent',{type:'group',metadata:{legacyShapeId:'shape:parent'}}) as unknown as ImageLayer;
+  const shape={parentId:'shape:parent'},shapeId=(item:ImageLayer)=>String(item.metadata?.legacyShapeId);
+  assert.equal(canvasParentLayerId({parentId:'page:root'},'page:root',new Map(),[],shapeId),undefined);
+  assert.throws(()=>canvasParentLayerId(shape,'page:root',new Map(),[],shapeId),/尚未转换/);
+  assert.throws(()=>canvasParentLayerId(shape,'page:root',new Map([[shape.parentId,{...parent,type:'raster'}]]),[],shapeId),/无法作为图层组/);
+  assert.equal(canvasParentLayerId(shape,'page:root',new Map(),[parent],shapeId),'canonical-parent');
+});
 
 test('v3 draft is atomic, keeps server revision, and rejects compatibility coordinates and drawing metadata',()=>{
   const d=document(),snapshot=structuredClone(d);
