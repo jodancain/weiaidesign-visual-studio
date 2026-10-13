@@ -1,9 +1,0 @@
-{
-  "camera": "cam_medium",
-  "pose_id": "arms_crossed",
-  "character_anchor": "anchor_center",
-  "resolution": [
-    540,
-    960
-  ]
-}

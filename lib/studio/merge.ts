@@ -26,7 +26,6 @@ function merge(base: unknown, local: unknown, remote: unknown, path: string): un
 function authored(project: StudioProject): unknown {
   const value = structuredClone(project);
   value.assets = []; value.revision = 0; value.updatedAt = '';
-  delete value.access;
   for (const shot of value.shots) { delete shot.approval; shot.takes = []; }
   for (const scene of value.scenes) scene.revision = 0;
   return value;
@@ -37,13 +36,12 @@ export function mergeProject(base: StudioProject, local: StudioProject, remote: 
   if (base.id !== local.id || local.id !== remote.id) throw new Error('不能合并不同项目');
   const value = merge(authored(base), authored(local), authored(remote), 'project') as StudioProject;
   value.assets = structuredClone(remote.assets); value.revision = remote.revision; value.updatedAt = remote.updatedAt;
-  if (remote.access) value.access = structuredClone(remote.access);
   for (const shot of value.shots) {
     const saved = remote.shots.find(s => s.id === shot.id);
     shot.takes = structuredClone(saved?.takes || []);
     if (saved?.approval) shot.approval = structuredClone(saved.approval); else delete shot.approval;
   }
-  for (const scene of value.scenes) scene.revision = remote.scenes.find(s => s.id === scene.id)?.revision ?? 0;
+  for (const scene of value.scenes) scene.revision = remote.scenes.find(s => s.id === scene.id)?.revision || 1;
   return value;
 }
 export const authoringEqual = (a: StudioProject, b: StudioProject) => equal(authored(a), authored(b));

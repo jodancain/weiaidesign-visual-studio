@@ -1,4 +1,0 @@
-{
-  "_comment": "Registry of imported animation actions (e.g. Mixamo FBX imported into the scene .blend). Each entry maps an id the LLM can pick to a Blender action name plus the frames worth freezing. Empty until Mixamo assets are imported; procedural poses in library.json carry Story Mode until then.",
-  "actions": {}
-}

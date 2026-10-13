@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { Clapperboard, Loader2, Network, Palette } from "lucide-react";
 
 const API_BASE = "/api/v1";
@@ -58,7 +57,6 @@ export default function OntologyPage() {
   }
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- refresh awaits the remote list before updating state.
     void refresh();
     const timer = setInterval(() => void refresh(), 15000);
     return () => clearInterval(timer);
@@ -89,18 +87,18 @@ export default function OntologyPage() {
   return (
     <main className="videoPage">
       <header className="videoTop">
-        <Link className="logoBadge" href="/" title="回到图片工作台">
+        <a className="logoBadge" href="/" title="回到图片工作台">
           <span>Lō</span>
-        </Link>
+        </a>
         <h1>
           <Network size={18} /> 本体视频法 · C 线
         </h1>
-        <Link className="videoNavLink" href="/video">
+        <a className="videoNavLink" href="/video">
           <Clapperboard size={14} /> 图生视频
-        </Link>
-        <Link className="videoNavLink" href="/">
+        </a>
+        <a className="videoNavLink" href="/">
           <Palette size={14} /> 图片工作台
-        </Link>
+        </a>
       </header>
 
       <section className="videoComposer">

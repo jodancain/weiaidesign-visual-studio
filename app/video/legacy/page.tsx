@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import { Clapperboard, ImagePlus, Loader2, Palette, Sparkles, X } from "lucide-react";
 
 const API_BASE = "/api/v1";
@@ -41,7 +40,6 @@ export default function VideoPage() {
     try {
       const saved = JSON.parse(localStorage.getItem("videoJobs") || "[]");
       if (!Array.isArray(saved)) throw new Error('invalid history');
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- Hydrate browser-only history after SSR so the initial server/client trees match.
       setJobs(saved);
       setHistoryReady(true);
     } catch {
@@ -156,15 +154,15 @@ export default function VideoPage() {
   return (
     <main className="videoPage">
       <header className="videoTop">
-        <Link className="logoBadge" href="/" title="回到图片工作台">
+        <a className="logoBadge" href="/" title="回到图片工作台">
           <span>Lō</span>
-        </Link>
+        </a>
         <h1>
           <Clapperboard size={18} /> 图生视频
         </h1>
-        <Link className="videoNavLink" href="/">
+        <a className="videoNavLink" href="/">
           <Palette size={14} /> 图片工作台
-        </Link>
+        </a>
       </header>
 
       <section className="videoComposer">

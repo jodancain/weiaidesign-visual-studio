@@ -1,13 +1,12 @@
 'use client';
-import { useEffect, useLayoutEffect, useRef, useState, type InputHTMLAttributes } from 'react';
+import { useEffect, useRef, useState, type InputHTMLAttributes } from 'react';
 
 type Props = Omit<InputHTMLAttributes<HTMLInputElement>, 'value' | 'onChange' | 'onBlur' | 'onKeyDown'> & { value: string | number; onCommit: (value: string) => unknown | Promise<unknown> };
 
 /** Keep incomplete numbers and typed text local; a field confirmation is one undoable command. */
 export default function DraftInput({ value, onCommit, type = 'text', ...props }: Props) {
   const source = String(value), [draft, setDraft] = useState(source), [message, setMessage] = useState('');
-  const dirty = useRef(false), base = useRef(source), latest = useRef(source), pending = useRef(false), composing = useRef(false);
-  useLayoutEffect(() => { latest.current = source; }, [source]);
+  const dirty = useRef(false), base = useRef(source), latest = useRef(source), pending = useRef(false), composing = useRef(false); latest.current = source;
   useEffect(() => { if (!dirty.current) { setDraft(source); base.current = source; setMessage(''); } else if (!pending.current && source !== base.current) setMessage('值已更新；Enter 应用当前输入，Esc 采用新值'); }, [source]);
   const reset = () => { dirty.current = false; setDraft(latest.current); base.current = latest.current; setMessage(''); };
   const commit = async (explicit: boolean) => {

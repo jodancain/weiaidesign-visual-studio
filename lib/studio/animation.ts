@@ -3,13 +3,12 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { markGLBParts, readCompleteGLB } from './animation-parts';
-import { createCodeScene, type CodeSceneRuntime } from './code-scene';
 import type { AnimationTrack, AssetRevision, Keyframe, RigProfile, SceneObject, StudioScene, Vec3 } from './types';
 
 /** The evaluator is deliberately independent of React, playback history and wall-clock time. */
 export type BoneState = { position: THREE.Vector3; quaternion: THREE.Quaternion; scale: THREE.Vector3 };
 export type ActorRuntime = { id: string; root: THREE.Group; bones: Map<string, THREE.Bone>; rest: Map<THREE.Bone, BoneState>; clips: THREE.AnimationClip[]; mixer: THREE.AnimationMixer; meshes: THREE.Mesh[]; skin?: THREE.SkinnedMesh; targets: Map<string, THREE.Bone>; parts: Map<string, THREE.Object3D>; partRest: Map<THREE.Object3D, BoneState>; rig?: RigProfile; masked: Map<string, THREE.AnimationClip> };
-export type SceneRuntime = { root: THREE.Group; actors: Map<string, ActorRuntime>; cameras: Map<string, THREE.PerspectiveCamera>; codeScene?: CodeSceneRuntime; dispose: () => void };
+export type SceneRuntime = { root: THREE.Group; actors: Map<string, ActorRuntime>; cameras: Map<string, THREE.PerspectiveCamera>; dispose: () => void };
 export type Landmark = { frame: number; objectId: string; bone: string; partId?: string; position: number[]; rotation: number[] };
 
 export const BUILTIN_CLIPS = ['Idle', 'Walk', 'Punch', 'Kick', 'Wave'] as const;
@@ -100,11 +99,6 @@ function collectActor(id: string, root: THREE.Group, clips: THREE.AnimationClip[
 }
 
 export async function buildSceneRuntime(scene: StudioScene, assets: AssetRevision[]): Promise<SceneRuntime> {
-  if (scene.codeProgram) {
-    const codeScene = createCodeScene(scene.codeProgram), root = new THREE.Group(), actors = new Map<string, ActorRuntime>(); root.add(codeScene.scene);
-    for (const [id, group] of codeScene.world.entities) { const actor = collectActor(id, group, []); actor.rig = scene.objects.find(o => o.id === id)?.rig; for (const chain of actor.rig?.chains || []) { const target = new THREE.Bone(); target.name = `__IK_${chain.id}`; target.userData.studioIKTarget = true; target.position.fromArray(chain.target); group.add(target); actor.targets.set(chain.id, target); } actors.set(id, actor); }
-    const runtime: SceneRuntime = { root, actors, cameras: codeScene.cameras, codeScene, dispose: () => { for (const a of actors.values()) { a.mixer.stopAllAction(); a.mixer.uncacheRoot(a.root); } codeScene.dispose(); } }; evaluateScene(runtime, scene, 0); return runtime;
-  }
   const root = new THREE.Group(); root.name = 'StudioScene'; const actors = new Map<string, ActorRuntime>(), cameras = new Map<string, THREE.PerspectiveCamera>(); const loader = new GLTFLoader();
   try { for (const object of scene.objects) {
     let group: THREE.Group, clips: THREE.AnimationClip[] = [];
@@ -158,7 +152,6 @@ function solveConstrainedCCD(actor: ActorRuntime, rig: RigProfile, target: THREE
 }
 
 export function evaluateScene(runtime: SceneRuntime, scene: StudioScene, frame: number, mode: 'static' | 'dynamic' = 'dynamic'): void {
-  if (runtime.codeScene) { runtime.codeScene.evaluateFrame(mode === 'static' ? 0 : frame, { ...scene, tracks: mode === 'static' ? [] : scene.tracks }); for (const obj of scene.objects) for (const chain of obj.rig?.chains || []) { const track = mode === 'dynamic' ? scene.tracks.find(t => t.targetId === obj.id && t.bone === chain.id && t.property === 'ikTarget') : undefined, value = track ? sampleTrack(track, frame) : undefined; runtime.actors.get(obj.id)?.targets.get(chain.id)?.position.fromArray(Array.isArray(value) ? value : chain.target); } runtime.root.updateMatrixWorld(true); return; }
   const ikPasses: Array<{ actor: ActorRuntime; object: SceneObject; targets: Map<string, Vec3> }> = [];
   for (const object of scene.objects) { const actor = runtime.actors.get(object.id); if (!actor) continue; actor.mixer.stopAllAction(); for (const [b, rest] of actor.rest) { b.position.copy(rest.position); b.quaternion.copy(rest.quaternion); b.scale.copy(rest.scale); }
     actor.root.position.fromArray(object.transform.position); actor.root.quaternion.fromArray(object.transform.rotation).normalize(); actor.root.scale.fromArray(object.transform.scale); actor.root.visible = object.visible;
