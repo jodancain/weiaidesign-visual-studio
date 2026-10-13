@@ -33,8 +33,8 @@
     },
     {
       "path": "public/vendor/image2/core-1/color-names.LICENSE",
-      "sha256": "c064f7a3e353bc1bc977f3c897941c75ef763f44f41677e0a15370ca0853d6e2",
-      "bytes": 1085
+      "sha256": "7357445bac398c76c0aef75a587009fe406d40de6a79789eb5b7ecbbad317ef2",
+      "bytes": 1078
     },
     {
       "path": "public/vendor/image2/core-1/color-names.mjs",
