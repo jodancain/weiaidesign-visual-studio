@@ -13,7 +13,8 @@ import { ProfessionalMigrationManager, MIGRATION_PREFIX } from './professional-m
 import { asProfessional, applyProfessionalCommands, worldBounds, deriveWorldDelta, duplicateProfessionalLayerCommands, groupProfessionalLayerCommands, ungroupProfessionalLayerCommands, worldMatrix, multiplyMatrix } from './professional-model';
 import { professionalLegacyView, projectProfessionalDocument } from './professional-projection';
 import { canvasParentLayerId, canvasShapesParentFirst } from './native-shape-order';
-import { createImageFontLoader, imageFontIdentity } from './font-loader';
+import { createImageFontLoader, ImageFontLoadError } from './font-loader';
+import { createImageFontSession, type ImageFontSession, type ImageFontLoadState } from './font-session';
 import type { Capabilities, Conversation, ConversationMessage, DocumentCommand, ImageAsset, ImageDocument, ImageJob, ImageLayer } from './types';
 
 interface Options { editor: Editor | null; projectId: string; projectName: string; onError?: (text: string) => void }
@@ -41,10 +42,16 @@ export function useLegacyImage2({ editor, projectId, projectName, onError }: Opt
   const canonical = useRef<ImageDocument | null>(null), currentAssets = useRef<ImageAsset[]>([]), conversation = useRef<Conversation | null>(null), epoch = useRef(0), projecting = useRef(false), dirty = useRef(false);
   const fingerprints = useRef(new Map<string, string>()), aliases = useRef(new Map<string, string>()), fontCache = useRef(new Map<string, ImageAsset>()), syncPromise = useRef<Promise<ImageDocument> | null>(null);
   const creatingDocument = useRef<Promise<ImageDocument> | null>(null);
-  const loadedFonts = useRef(new Set<string>());
-  const fontFaces = useRef(new Set<FontFace>()), fontLoader = useRef<ReturnType<typeof createImageFontLoader> | null>(null);
-  if (!fontLoader.current) fontLoader.current = createImageFontLoader();
-  const clearFonts = () => { fontLoader.current!.clear(); loadedFonts.current.clear(); for (const face of fontFaces.current) window.document.fonts.delete(face); fontFaces.current.clear(); };
+  const [fontStates, setFontStates] = useState<Record<string, ImageFontLoadState>>({});
+  const fontSession = useRef<ImageFontSession<FontFace> | null>(null);
+  if (!fontSession.current) fontSession.current = createImageFontSession({
+    loader: createImageFontLoader(),
+    createFace: (asset, bytes) => new FontFace(`i2-${asset.id}`, bytes, { weight: String(asset.metadata?.weight || 400) }).load(),
+    addFace: face => { window.document.fonts.add(face); },
+    deleteFace: face => { window.document.fonts.delete(face); },
+    onStateChange: setFontStates,
+  });
+  const clearFonts = () => fontSession.current!.clear();
   const editGeneration = useRef(0), canvasDraft = useRef<LegacyCanvasDraft | undefined>(undefined), draftConflict = useRef(false);
   const [hasDraftConflict, setHasDraftConflict] = useState(false);
   const [professionalDocument, setProfessionalDocument] = useState<ImageDocument | null>(null);
@@ -97,15 +104,15 @@ export function useLegacyImage2({ editor, projectId, projectName, onError }: Opt
   }
   const updateAssets = (list: ImageAsset[]) => {
     currentAssets.current = list; setAssets(list);
+    const documentId = canonical.current?.id;
+    if (!documentId) return;
+    fontSession.current!.bind(documentId);
     for (const asset of list.filter(fontFile)) {
-      const name = `i2-${asset.id}`;
-      let key: string;
-      try { key = imageFontIdentity(asset); } catch (err) { report(err); continue; }
-      if (loadedFonts.current.has(key)) continue; loadedFonts.current.add(key);
       const captured = scope();
-      void fontLoader.current!.load(asset).then(bytes => { assertScope(captured); return new FontFace(name, bytes, { weight: String(asset.metadata?.weight || 400) }).load(); }).then(face => { assertScope(captured); window.document.fonts.add(face); fontFaces.current.add(face); }).catch(err => {
+      void fontSession.current!.load(asset).catch(err => {
+        if (err instanceof ImageFontLoadError && err.code === 'font_cancelled') return;
         if (epoch.current !== captured.generation || state.current.projectId !== captured.projectId || canonical.current?.id !== captured.documentId) return;
-        loadedFonts.current.delete(key); report(new Error(`字体 ${asset.name} 加载失败：${err instanceof Error ? err.message : '字体暂不可读取'}`));
+        report(new Error(`字体 ${asset.name} 加载失败：${err instanceof Error ? err.message : '字体暂不可读取'}`));
       });
     }
   };
@@ -128,7 +135,7 @@ export function useLegacyImage2({ editor, projectId, projectName, onError }: Opt
   }
   async function bind(next: ImageDocument) {
     const captured = scope(), projectId = state.current.projectId;
-    if (canonical.current && canonical.current.id !== next.id) clearFonts();
+    fontSession.current!.bind(next.id);
     canonical.current = next; dirty.current = false; aliases.current.clear(); fingerprints.current.clear(); fontCache.current.clear(); contentPayloads.current = {}; loadedContents.current.clear();
     localStorage.setItem(mapKey(projectId), next.id); setNeedsImport(false);
     let draft = await legacyDraftStorage.read(projectId); assertScope({ ...captured, documentId: undefined });
@@ -787,7 +794,7 @@ export function useLegacyImage2({ editor, projectId, projectName, onError }: Opt
     await sync(); assertScope(savedScope); await legacyDraftStorage.remove(captured.projectId, draft); assertScope(savedScope); localStorage.setItem(mapKey(captured.projectId), fresh.id); await refresh();
   }
   const effectiveCapabilities = document?.schemaVersion === 3 && Array.isArray(capabilities.operations) ? {...capabilities,operations:(capabilities.operations as Array<Record<string,unknown>>).map(item=>['generate','inpaint','restore_layers','remove_background','matting','refine_mask','segment','super_resolution'].includes(String(item.operation || item.name))?{...item,available:false,reason:'v3 模型链路尚未验收'}:item)} : capabilities;
-  return { document, rawDocument, professionalDocument, assets, jobs, branches, messages, capabilities:effectiveCapabilities, revisions, error, busy, needsImport, pendingCount, selectedLayer: document?.layers.find(l => l.id === selectedId),migrateProfessional,duplicateLayers,groupSelection,saveEditSelection,openOriginalDocument,newProfessionalDocument,
+  return { document, rawDocument, professionalDocument, assets, fontStates, jobs, branches, messages, capabilities:effectiveCapabilities, revisions, error, busy, needsImport, pendingCount, selectedLayer: document?.layers.find(l => l.id === selectedId),migrateProfessional,duplicateLayers,groupSelection,saveEditSelection,openOriginalDocument,newProfessionalDocument,
     ensureDocument, importCanvas, sync, refresh, getLayer, submitCommands, updateLayer: (id: string, patch: Partial<ImageLayer>) => submitCommands([{ type: 'layer.update', layerId: id, patch }]),
     submitOperation, waitJob, setMasks, uploadFile, resolveReference, defaultFont, applyFont, confirmText, startRun, acceptCandidate, export: exportDocument, importPackage, addFile, selectLayer,
     hasDraftConflict, useServerVersion, saveDraftAsProject,

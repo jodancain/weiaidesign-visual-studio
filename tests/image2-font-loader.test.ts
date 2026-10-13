@@ -38,6 +38,13 @@ test('concurrent polling loads share the exact pending promise and cached valida
   const first = loader.load(entry), second = loader.load({ ...entry }); assert.equal(first, second);
   const [a, b] = await Promise.all([first, second]); assert.equal(a, b); assert.equal(mock.calls.length, 3); assert.equal(await loader.load(entry), a); assert.equal(mock.calls.length, 3);
 });
+test('default request deadline matches the proven 45s production range transport while explicit timeouts stay capped', async t => {
+  const deadlines: Array<number | undefined> = [], original = globalThis.setTimeout;
+  t.mock.method(globalThis, 'setTimeout', (callback: () => void, ms?: number) => { deadlines.push(ms); return original(callback, ms); });
+  const data = new Uint8Array(17).fill(9), entry = asset(data), mock = network(data, entry);
+  await createImageFontLoader({ fetch: mock.fetcher }).load(entry); assert.equal(deadlines.filter(ms => ms === 45_000).length, 1); assert.equal(deadlines.includes(20_000), false);
+  assert.throws(() => createImageFontLoader({ timeoutMs: 60_001 }), /Invalid font loader bounds/); assert.throws(() => createImageFontLoader({ timeoutMs: 0 }), /Invalid font loader bounds/);
+});
 test('range metadata rejects changing totals, starts, ends, MIME and immutable ETag', async t => {
   const data = new Uint8Array(CHUNK + 17).fill(5), entry = asset(data);
   const cases: Array<{ name: string; error: string; header: (range: Range) => HeadersInit }> = [
@@ -101,5 +108,5 @@ test('invalid asset sizes/hash/MIME are refused without requests and original UI
   let calls = 0; const fetcher = (async () => { calls++; throw new Error('must not fetch'); }) as typeof fetch, loader = createImageFontLoader({ fetch: fetcher }), entry = asset(new Uint8Array(5));
   for (const patch of [{ bytes: 0 }, { bytes: 64 * CHUNK + 1 }, { hash: 'invalid' }, { mime: 'text/plain' }]) await assert.rejects(loader.load({ ...entry, ...patch }), code('font_asset_invalid'));
   assert.equal(calls, 0);
-  const source = readFileSync(new URL('../lib/image2/useLegacyImage2.ts', import.meta.url), 'utf8'); assert.match(source, /new FontFace\(name, bytes,/); assert.doesNotMatch(source, /new FontFace\(name, `url/); assert.match(source, /assertScope\(captured\); window\.document\.fonts\.add/); assert.match(source, /epoch\.current\+\+; clearFonts\(\)/); assert.match(source, /window\.document\.fonts\.delete\(face\)/);
+  const source = readFileSync(new URL('../lib/image2/useLegacyImage2.ts', import.meta.url), 'utf8'); assert.match(source, /new FontFace\(`i2-\$\{asset\.id\}`, bytes,/); assert.doesNotMatch(source, /new FontFace\([^\n]+`url/); assert.match(source, /fontSession\.current!\.bind\(next\.id\)/); assert.match(source, /fontSession\.current!\.bind\(documentId\)/); assert.match(source, /epoch\.current\+\+; clearFonts\(\)/); assert.match(source, /window\.document\.fonts\.delete\(face\)/);
 });
