@@ -303,7 +303,7 @@ test('candidate card and Versions dialog both reject the same stale preview and 
   const branch = { ...document(), id: 'branch', schemaVersion: 3 as const }, main = { ...document(), schemaVersion: 3 as const };
   const matched: ImageJob = { id: 'job', documentId: main.id, kind: 'agent', state: 'complete', createdAt: 0, updatedAt: 0, output: { branchDocumentId: branch.id, revision: branch.revision, previewRevision: branch.revision, previewAssetId: 'actual-png' } };
   const markup = (job: ImageJob) => {
-    const bridge = { document: main, rawDocument: main, capabilities: {}, branches: [branch], jobs: [job], revisions: [], busy: false, pendingCount: 0 } as unknown as Parameters<typeof LegacyImagePanels>[0]['bridge'];
+    const bridge = { document: main, rawDocument: main, capabilities: {}, branches: [branch], jobs: [job], revisions: [], savedProjectDocuments: [], busy: false, pendingCount: 0 } as unknown as Parameters<typeof LegacyImagePanels>[0]['bridge'];
     return [renderToStaticMarkup(createElement(CandidateResult, { bridge, job, onError: () => {} })), renderToStaticMarkup(createElement(LegacyImagePanels, { mode: 'versions', bridge, onError: () => {}, onClose: () => {} }))];
   };
   for (const html of markup({ ...matched, output: { ...matched.output, previewStale: true } })) {
