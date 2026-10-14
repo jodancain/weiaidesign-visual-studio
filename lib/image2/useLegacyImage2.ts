@@ -15,6 +15,7 @@ import { professionalLegacyView, projectProfessionalDocument, migratedProjection
 import { professionalSvgContent, svgPaintPatch } from './professional-svg-styles';
 import { imageCapabilitiesForDocument, requireImageAgent } from './agent-capabilities';
 import { candidatePreviewState } from './candidate-preview';
+import { parseLayerReference } from './layer-references';
 import { canvasParentLayerId, canvasShapesParentFirst } from './native-shape-order';
 import { createImageFontLoader, ImageFontLoadError } from './font-loader';
 import { createImageFontSession, type ImageFontSession, type ImageFontLoadState } from './font-session';
@@ -508,6 +509,8 @@ export function useLegacyImage2({ editor, projectId, projectName, onError }: Opt
     const raw = canonical.current; if (!raw) return; const doc = viewDocument(raw);
     const selected = state.current.editor?.getOnlySelectedShape();
     if (layerId) return doc.layers.find(layer => layer.id === layerId);
+    const reference = src ? parseLayerReference(src, window.location.origin) : undefined;
+    if (reference) return reference.documentId === doc.id ? doc.layers.find(layer => layer.id === reference.layerId) : undefined;
     const selectedLayer = selected ? doc.layers.find(layer => layerShapeId(layer) === selected.id) : undefined;
     if (!src) return selectedLayer;
     if (selectedLayer?.assetId && (src === assetUrl(selectedLayer.assetId) || src.endsWith(assetUrl(selectedLayer.assetId)))) return selectedLayer;
@@ -625,10 +628,12 @@ export function useLegacyImage2({ editor, projectId, projectName, onError }: Opt
   async function resolveReference(src: string, documentId: string) {
     const captured = scope();
     if (canonical.current?.id !== documentId) throw new Error('已切换工程，旧工程任务与草稿保留');
+    const reference = parseLayerReference(src, window.location.origin);
+    if (reference && reference.documentId !== documentId) throw new Error('选中图层来自其他工程，请重新选择；历史素材链接仍可作为原图引用');
     const immutable = immutableSourceId(src), existing = immutable ? currentAssets.current.find(a => a.id === immutable) : undefined;
     if (existing) return existing;
     const bytes = await sourceBlob(src); assertScope(captured);
-    return rawUpload(bytes, '参考图片', 'reference');
+    return rawUpload(bytes, reference ? `图层参考-r${reference.revision}.png` : '参考图片', 'reference', reference ? { referenceKind: 'rendered_layer_appearance', sourceDocumentId: reference.documentId, sourceLayerId: reference.layerId, sourceRevision: reference.revision } : undefined);
   }
   async function defaultFont() {
     const captured = scope(); await sync(); assertScope(captured); const id = canonical.current!.id;
@@ -760,14 +765,19 @@ export function useLegacyImage2({ editor, projectId, projectName, onError }: Opt
     if (!conversation.current) { const thread = await image2Api<Conversation>('/conversations', { documentId: live.id }); assertScope(captured); conversation.current = thread; }
     const references: Array<{ assetId?: string; layerId?: string; revision: number }> = [];
     for (const src of referenceSrcs) {
+      const appearance = parseLayerReference(src, window.location.origin);
+      if (appearance) {
+        if (appearance.documentId !== live.id) throw new Error('选中图层来自其他工程，请重新选择');
+        references.push({ layerId: appearance.layerId, revision: appearance.revision });
+        continue;
+      }
       const immutable = immutableSourceId(src);
-      const layer = getLayer(src);
       const existing = immutable ? currentAssets.current.find(a => a.id === immutable) : undefined;
       let asset = existing;
       if (!asset) { const bytes = await sourceBlob(src); assertScope(captured); asset = await rawUpload(bytes, '对话参考.png', 'reference'); assertScope(captured); }
-      references.push({ assetId: asset.id, ...(layer?.assetId === asset.id ? { layerId: layer.id } : {}), revision: live.revision });
+      references.push({ assetId: asset.id, revision: live.revision });
     }
-    const selected = getLayer(); if (selected && !referenceSrcs.length) references.push({ layerId: selected.id, assetId: selected.assetId, revision: live.revision });
+    const selected = getLayer(); if (selected && !referenceSrcs.length) references.push({ layerId: selected.id, revision: live.revision });
     const intent = { documentId: live.id, conversationId: conversation.current.id, text, references, model };
     const result = await submissions.current!.submit<{ job: ImageJob }>(`/conversations/${conversation.current.id}/messages`, intent, { text, references, model }); assertScope(captured); await refresh(); return result.job;
   }

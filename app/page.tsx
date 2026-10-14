@@ -68,6 +68,7 @@ import { elementPreviewSource } from '../lib/image2/element-preview';
 import { LegacyImagePanels, CandidateResult, type LegacyImagePanel } from '../components/image2/LegacyImagePanels';
 import { useLegacyImage2 } from '../lib/image2/useLegacyImage2';
 import { assetUrl, Image2ApiError } from '../lib/image2/client';
+import { selectedLayerReference } from '../lib/image2/layer-references';
 import type { ImageJob } from '../lib/image2/types';
 import { capability } from '../lib/image2/geometry';
 
@@ -878,8 +879,10 @@ export default function Home() {
   const [selection, setSelection] = useState<{
     ids: TLShapeId[];
     images: string[];
+    referenceImages: string[];
+    imageReferences: string[];
     box: { x: number; y: number; w: number; h: number } | null;
-  }>({ ids: [], images: [], box: null });
+  }>({ ids: [], images: [], referenceImages: [], imageReferences: [], box: null });
 
   const [quickEditDialog, setQuickEditDialog] = useState<{ open: boolean; src?: string; layerId?: string; mode?: "edit" | "erase" }>({ open: false });
   const [quickEditText, setQuickEditText] = useState("");
@@ -1140,7 +1143,7 @@ export default function Home() {
       // Session first, then project id — same turn, batched.
       bindSessionToProjectSwitch(leavingProjectId, id, pastSessions);
       setEditor(null);
-      setSelection({ ids: [], images: [], box: null });
+      setSelection({ ids: [], images: [], referenceImages: [], imageReferences: [], box: null });
       setShapeCount(0);
       setSyncStatus("local");
       setActiveProjectId(id);
@@ -1162,7 +1165,7 @@ export default function Home() {
     setProjects(next);
     bindSessionToProjectSwitch(leavingProjectId, id, pastSessions);
     setEditor(null);
-    setSelection({ ids: [], images: [], box: null });
+    setSelection({ ids: [], images: [], referenceImages: [], imageReferences: [], box: null });
     setShapeCount(0);
     setSyncStatus("local");
     setActiveProjectId(id);
@@ -1188,7 +1191,7 @@ export default function Home() {
     setProjects(next);
     bindSessionToProjectSwitch(leavingProjectId, fallback.id, pastSessions);
     setEditor(null);
-    setSelection({ ids: [], images: [], box: null });
+    setSelection({ ids: [], images: [], referenceImages: [], imageReferences: [], box: null });
     setShapeCount(0);
     setSyncStatus("local");
     setActiveProjectId(fallback.id);
@@ -1352,17 +1355,21 @@ export default function Home() {
       const shapes = editor.getSelectedShapes();
       const ids = shapes.map((s) => s.id);
       const images: string[] = [];
+      const referenceImages: string[] = [];
+      const imageReferences: string[] = [];
       for (const shape of shapes) {
+        const appearance = selectedLayerReference(image2.document, shape);
+        if (appearance) referenceImages.push(appearance);
         if (shape.type !== 'image') {
           const layer = (shape.props as unknown as {layer?: {assetId?: string; type?: string}}).layer;
-          if (layer?.assetId) images.push(assetUrl(layer.assetId));
+          if (layer?.assetId) { const src=assetUrl(layer.assetId); images.push(src); imageReferences.push(appearance || src); }
           continue;
         }
         const assetId = (shape.props as { assetId?: string }).assetId;
         if (!assetId) continue;
         const asset = editor.getAsset(assetId as TLAssetId);
         const src = (asset?.props as { src?: string } | undefined)?.src;
-        if (src) images.push(src);
+        if (src) { images.push(src); imageReferences.push(appearance || src); if (!appearance) referenceImages.push(src); }
       }
       let box: { x: number; y: number; w: number; h: number } | null = null;
       if (ids.length) {
@@ -1371,7 +1378,8 @@ export default function Home() {
         ).getSelectionRotatedScreenBounds?.();
         if (maybe) box = { x: maybe.x, y: maybe.y, w: maybe.w, h: maybe.h };
       }
-      setSelection({ ids, images, box });
+      // Pixel editing tools retain source coordinates; references use the frozen rendered layer.
+      setSelection({ ids, images, referenceImages, imageReferences, box });
     };
     update();
     const unlisten = editor.store.listen(
@@ -1384,7 +1392,7 @@ export default function Home() {
       unlisten();
       if (raf) cancelAnimationFrame(raf);
     };
-  }, [editor]);
+  }, [editor, image2.document]);
 
   /* ------------------------- keyboard: C to chat -------------------- */
 
@@ -1867,7 +1875,7 @@ export default function Home() {
   /* --------------------------- agent loop --------------------------- */
 
   const sendToAgent = useCallback(async () => {
-    const text = prompt.trim(), refs = [...attachmentsRef.current.map(item => item.src), ...selectionRef.current.images];
+    const text = prompt.trim(), refs = [...attachmentsRef.current.map(item => item.src), ...selectionRef.current.referenceImages];
     if ((!text && !refs.length) || agentBusy) return;
     setAgentBusy(true); setError('');
     try {
@@ -1907,12 +1915,12 @@ export default function Home() {
   );
 
   const generateVariation = useCallback(() => {
-    const refs = selection.images.length ? selection.images : references, text = prompt.trim() || '生成同主题变体，保持风格一致';
+    const refs = selection.referenceImages.length ? selection.referenceImages : references, text = prompt.trim() || '生成同主题变体，保持风格一致';
     void runAction('生成变体', async () => {
       const urls = await doGenerateImages({ prompt: text, refs, count: 1, kind: 'variation' });
       pushMessage({ role: 'assistant', kind: '变体候选', images: urls, text: '请在候选卡片接受后继续修改。' });
     });
-  }, [doGenerateImages, prompt, pushMessage, references, runAction, selection.images]);
+  }, [doGenerateImages, prompt, pushMessage, references, runAction, selection.referenceImages]);
 
   /* 打开改字：预览转 dataURL（修裂图）+ 视觉识别行字（Lovart Edit Text 式逐行编辑） */
   const initFontDialog = useCallback((src: string) => {
@@ -2006,8 +2014,8 @@ export default function Home() {
   /* Canvas selection rides along as extra numbered attachments (after explicit ones), minus duplicates. */
   const selectionAttachments = useMemo(() => {
     const attached = new Set(attachments.map((item) => item.src));
-    return selection.images.filter((src) => !attached.has(src));
-  }, [attachments, selection.images]);
+    return selection.referenceImages.filter((src) => !attached.has(src));
+  }, [attachments, selection.referenceImages]);
 
   const applySkill = (chip: { label: string; prompt: string }) => {
     if (!chip.prompt) {
@@ -2439,7 +2447,7 @@ export default function Home() {
                   void runAction("多角度", async () => {
                     pushMessage({ role: "user", text: "Multi-Angles 多角度视图" });
                     const urls = await doImageEdit({
-                      src: selection.images[0],
+                      src: selection.imageReferences[0],
                       instruction: "生成同一主体的不同视角版本（如侧面 45 度或俯视），主体、材质、风格保持一致",
                       kind: "multi-angle",
                       count: 2,
@@ -2465,7 +2473,7 @@ export default function Home() {
                   }
                   setMaterialSwap(false);
                   setMaterialNote("");
-                  setMaterialDialog({ open: true, a: selection.images[0], b: selection.images[1] });
+                  setMaterialDialog({ open: true, a: selection.imageReferences[0], b: selection.imageReferences[1] });
                 }}
               >
                 <Layers size={14} />

@@ -89,6 +89,13 @@ export function createImageRouter({ store, runner, craft, config = {}, assetInsp
         else if (parts[2] === 'history' && parts.length === 3 && method === 'POST') value = store.history(id, owner, await body(req, 2 * 1024 * 1024));
         else if (parts[2] === 'revisions' && parts[3] && parts.length === 4 && method === 'GET') value = store.getRevision(id, owner, Number(parts[3]));
         else if (parts[2] === 'revisions' && parts.length === 3 && method === 'GET') value = store.listRevisions(id, owner);
+        else if (parts[2] === 'layer-appearance' && parts[3] && parts.length === 4 && ['GET','HEAD'].includes(method)) {
+          fail(validId(parts[3]), 'invalid layer identity');
+          fail(url.searchParams.getAll('revision').length===1 && /^\d+$/.test(url.searchParams.get('revision')||''), 'frozen revision is required',400,'invalid_reference_revision');
+          const revision=Number(url.searchParams.get('revision'));
+          const document=store.getRevision(id,owner,revision);fail(document.layers.some(layer=>layer.id===parts[3]),'layer not found in this revision',404,'not_found');
+          content(req,res,await execute('layerAppearance',owner,id,parts[3],revision));return true;
+        }
         else if (parts[2] === 'render-resource' && parts[3] && parts.length === 4 && method === 'GET') {
           fail(validId(parts[3]), 'invalid content identity');
           const options = {};

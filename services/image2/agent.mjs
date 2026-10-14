@@ -42,11 +42,12 @@ export async function prepareAgentMessages(store,owner,earlier,options={}) {
     const ordered=[];
     for(const [index,ref] of (message.references||[]).entries()) {
       let assetId=ref.assetId,layer,source,renderedRecord;
-      if(ref.layerId){source=store.getRevision(message.documentId,owner,ref.revision??message.revision);layer=source.layers.find(item=>item.id===ref.layerId);assetId||=layer?.assetId;}
+      if(ref.layerId){source=store.getRevision(message.documentId,owner,ref.revision??message.revision);layer=source.layers.find(item=>item.id===ref.layerId);}
       const descriptor={number:index+1,assetId,layerId:ref.layerId,revision:ref.revision??message.revision};
-      if(source?.schemaVersion===3&&layer&&!ref.assetId&&options.renderLayer){
-        const renderKey=`${source.id}:${source.revision}:${layer.id}`;
+      if(ref.layerId&&!ref.assetId){
         try{
+          if(!layer||!options.renderLayer)throw Object.assign(new Error('Layer renderer unavailable'),{code:'reference_render_unavailable'});
+          const renderKey=`${source.id}:${source.revision}:${layer.id}`;
           renderedRecord=layerPreviews.get(renderKey);
           if(!renderedRecord&&layerRenders<MAX_PREVIEW_IMAGES&&images.length<MAX_PREVIEW_IMAGES&&totalBytes<MAX_TOTAL_PREVIEW_BYTES){layerRenders++;const bytes=await options.renderLayer(source,layer.id),hash=digest(bytes);renderedRecord={asset:{id:layer.id,hash,mime:'image/png'},bytes};layerPreviews.set(renderKey,renderedRecord);}
           if(!renderedRecord)throw Object.assign(new Error('Reference render budget reached'),{code:'reference_render_budget'});
@@ -105,7 +106,7 @@ export class ImageAgent {
     const earlier = store.listMessages(run.conversationId, record.owner).filter(m => ['user','assistant'].includes(m.role)&&(!historyIds||historyIds.includes(m.id))).slice(-20);
     let state = record.private.agentState;
     if(record.private.agentFinish)return this.finish(jobId,record,record.private.agentFinish.state,record.private.agentFinish.message);
-    if(!state){const prepared=await prepareAgentMessages(store,record.owner,earlier,{renderLayer:async(source,layerId)=>(await this.runner.exportArtifact('png',source,{layerIds:[layerId],getAsset:id=>store.getAsset(id,record.owner)})).bytes});state={round:0,tools:0,generations:0,chargedCalls:[],messages:[{role:'system',content:system},...prepared.messages],referencePlan:prepared.referencePlan,requestedModel:record.private.input.model,pending:[],callIndex:0};store.updateJob(jobId,{}, {agentState:state});}
+    if(!state){const prepared=await prepareAgentMessages(store,record.owner,earlier,{renderLayer:async(source,layerId)=>(await this.runner.layerAppearance(record.owner,source.id,layerId,source.revision)).bytes});state={round:0,tools:0,generations:0,chargedCalls:[],messages:[{role:'system',content:system},...prepared.messages],referencePlan:prepared.referencePlan,requestedModel:record.private.input.model,pending:[],callIndex:0};store.updateJob(jobId,{}, {agentState:state});}
     if (state.phase === 'llm_submitting') throw Object.assign(new ImageError('上一轮模型请求的回执未知，已停止重复提交', 409, 'unknown_agent_acceptance'), { uncertain: true });
     const save = patch => { state = { ...state, ...patch }; store.updateJob(jobId, {}, { agentState: state }); };
     const checkCancelled=()=>{if(this.runner.cancelled(jobId))throw new ImageError('任务已取消，已完成回执已保留',409,'CANCELLED');};

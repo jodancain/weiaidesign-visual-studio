@@ -9,6 +9,7 @@ import { imageAgentCapability, imageCapabilitiesForDocument, requireImageAgent }
 import { imageAdjustmentRequest, imageAdjustments } from '../lib/image2/adjustments';
 import { professionalSvgContent, professionalSvgStyles, svgPaintPatch, svgHexPaintChange, svgPaintChange } from '../lib/image2/professional-svg-styles';
 import { commonSvgPaint, svgPaintValue } from '../lib/image2/svg-paint-readback';
+import { layerReferenceUrl, parseLayerReference, selectedLayerReference } from '../lib/image2/layer-references';
 import { candidatePreviewAssets, candidatePreviewState } from '../lib/image2/candidate-preview';
 import { elementPreviewSource } from '../lib/image2/element-preview';
 import type { ImageJob } from '../lib/image2/types';
@@ -18,6 +19,18 @@ import { CandidateResult, LegacyImagePanels } from '../components/image2/LegacyI
 
 const layer = (patch: Partial<ImageLayer> = {}): ImageLayer => ({ id: 'a', type: 'raster', name: '原图', x: 0, y: 0, width: 100, height: 80, rotation: 0, opacity: 1, visible: true, locked: false, z: 0, ...patch });
 const document = (): ImageDocument => ({ id: 'doc', name: '设计', schemaVersion: 2, revision: 3, width: 100, height: 80, layers: [layer()], assetIds: [], createdAt: 0, updatedAt: 0 });
+test('selected references bind exact shape/layer/revision, distinguishing shared SVG assets from explicit historical URLs', () => {
+  const d={...document(),revision:0,layers:[layer({id:'left',assetId:'same',metadata:{legacyShapeId:'shape:left'}}),layer({id:'right',assetId:'same',metadata:{legacyShapeId:'shape:right'}})]};
+  const left=selectedLayerReference(d,{id:'shape:left'})!,right=selectedLayerReference(d,{id:'shape:right'})!;
+  assert.notEqual(left,right);assert.deepEqual(parseLayerReference(left,'http://local.test'),{documentId:'doc',layerId:'left',revision:0});
+  assert.notEqual(selectedLayerReference({...d,revision:1},{id:'shape:left'}),left);
+  assert.equal(selectedLayerReference(d,{id:'shape:missing'}),undefined);
+  assert.equal(parseLayerReference('/api/v3/image2/assets/same/content','http://local.test'),undefined);
+  assert.equal(parseLayerReference('https://other.test'+left,'http://local.test'),undefined);
+  assert.equal(parseLayerReference(left+'&revision=1','http://local.test'),undefined);
+  assert.equal(parseLayerReference(left.replace('revision=0','revision=-1'),'http://local.test'),undefined);
+  assert.equal(layerReferenceUrl({documentId:'doc',layerId:'left',revision:0}),left);
+});
 class MemoryStorage implements QueueStorage {
   records = new Map<string, QueuedBatch>(); document?: ImageDocument;
   async list(id: string) { return [...this.records.values()].filter(batch => batch.documentId === id).sort((a, b) => a.createdAt - b.createdAt); }

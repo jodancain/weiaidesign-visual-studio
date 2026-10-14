@@ -124,6 +124,25 @@ export class ImageRunner {
   async importProject(owner, body) { const bundle=readProjectArchive(body);return bundle.manifest.version===3?importV3Project(this.store,owner,body,bundle):importProjectBundle(this.store,owner,body,inspectAsset); }
   async process(request,ctx) { return ctx.document.schemaVersion===3?executeV3Operation(request,ctx,this.processor):this.processor(request,ctx); }
   async exportArtifact(format,document,ctx) { return document.schemaVersion===3?exportV3Document(format,document,ctx):exportDocument(format,document,ctx); }
+  /** Read-only, revision-addressed pixels shared by canvas references and Agent inputs. */
+  async layerAppearance(owner,documentId,layerId,revision) {
+    fail(Number.isSafeInteger(revision)&&revision>=0,'图层引用必须提供明确版本',400,'invalid_reference_revision');
+    const document=this.store.getRevision(documentId,owner,revision);
+    const layer=document.layers.find(item=>item.id===layerId);fail(layer,'图层不属于所选工程版本',404,'not_found');
+    const key=JSON.stringify([owner,documentId,revision,layerId]);
+    this.appearanceCache ||= new Map(); this.appearancePending ||= new Map();
+    if(this.appearanceCache.has(key))return this.appearanceCache.get(key);
+    if(this.appearancePending.has(key))return this.appearancePending.get(key);
+    const pending=(async()=>{
+      const exported=await this.exportArtifact('png',document,{layerIds:[layerId],...(document.schemaVersion===3?{}:{bounds:exportCanvasBounds(document,[layerId])}),getAsset:id=>{fail(document.assetIds.includes(id),'引用素材不属于该版本',422,'CONTENT_RESOURCE_UNREGISTERED');return this.store.getAsset(id,owner);}});
+      const result={bytes:exported.bytes,asset:{name:`${layer.name||'图层'}-r${revision}.png`,mime:'image/png',hash:digest(exported.bytes)}};
+      // Bounded in-memory cache only; reading an attachment creates no asset, job or document revision.
+      if(result.bytes.length<=32*1024*1024){this.appearanceCache.set(key,result);let size=[...this.appearanceCache.values()].reduce((sum,value)=>sum+value.bytes.length,0);while(this.appearanceCache.size>32||size>32*1024*1024){const oldest=this.appearanceCache.keys().next().value;size-=this.appearanceCache.get(oldest).bytes.length;this.appearanceCache.delete(oldest);}}
+      return result;
+    })();
+    this.appearancePending.set(key,pending);
+    try{return await pending;}finally{this.appearancePending.delete(key);}
+  }
   async renderResource(owner,documentId,contentId,options={}) {
     const document=options.revision===undefined?this.store.getDocument(documentId,owner):this.store.getRevision(documentId,owner,options.revision);
     fail(document.schemaVersion===3,'render resources require a v3 document',422,'unsupported_schema');
