@@ -8,7 +8,7 @@ mkdirSync(evidence, { recursive: true });
 const audit = { mode: 'local-real-service-cpu-only', startedAt: new Date().toISOString(), externalAttempts: [], operations: [] };
 function checkpoint() { const file = join(evidence, 'provider-audit.json'); writeFileSync(file + '.tmp', JSON.stringify(audit, null, 2)); renameSync(file + '.tmp', file); }
 const service = createImageService({
-  directory: join(evidence, 'data'), token: 'image2-local-browser-test-token-20261010',
+  directory: process.env.IMAGE2_CPU_DATA_DIR || join(evidence, 'data'), token: 'image2-local-browser-test-token-20261010',
   config: { imageBaseUrl: '', imageApiKey: '', comfyBaseUrl: '', comfyToken: '', ocrUrl: '', ocrToken: '',
     agent: { baseUrl: '', apiKey: '', models: ['disabled-local-test'], maxRounds: 6, maxTools: 24, maxGenerations: 0 } },
   fetchImpl: async url => { const parsed = new URL(url); audit.externalAttempts.push({ at: new Date().toISOString(), origin: parsed.origin, path: parsed.pathname }); checkpoint(); throw new Error('External model access is forbidden in the CPU browser test'); },

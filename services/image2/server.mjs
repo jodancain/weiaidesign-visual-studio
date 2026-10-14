@@ -2,21 +2,25 @@ import { createServer } from 'node:http';
 import { pathToFileURL } from 'node:url';
 import { ImageStore } from './store.mjs';
 import { createImageRouter } from './router.mjs';
+import { CraftService } from './craft-service.mjs';
 import { ImageRunner } from './jobs.mjs';
 import { inspectAsset } from './processors.mjs';
 
-export function createImageService({ directory, token, config = {}, fetchImpl = fetch, processor } = {}) {
+export function createImageService({ directory, token, config = {}, fetchImpl = fetch, processor, craftRuntime } = {}) {
   if (typeof token !== 'string' || token.length < 24) throw new Error('IMAGE2_API_TOKEN must contain at least 24 characters');
   const store = new ImageStore(directory || process.env.IMAGE2_DATA_DIR || '/data/image2');
   const runner = new ImageRunner({ store, config, fetchImpl, processor });
-  const handle = createImageRouter({ store, runner, config: { token }, assetInspector: inspectAsset });
+  const craft = new CraftService({ store, runtime: craftRuntime, config: config.craft });
+  runner.craft = craft;
+  const handle = createImageRouter({ store, runner, craft, config: { token }, assetInspector: inspectAsset });
   const server = createServer(async (req, res) => {
     if (req.url === '/health' && req.method === 'GET') { res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify({ status: 'ok', version: '2.0.0', persistent: true })); return; }
     try { if (await handle(req, res)) return; res.writeHead(404, { 'content-type': 'application/json' }); res.end(JSON.stringify({ detail: 'route not found' })); }
     catch { if (!res.headersSent) { res.writeHead(500, { 'content-type': 'application/json' }); res.end(JSON.stringify({ detail: '图片服务处理失败' })); } else res.destroy(); }
   });
+  craft.start();
   runner.start();
-  return { server, store, runner, async close() { await new Promise(resolve => server.listening ? server.close(resolve) : resolve()); await runner.stop(); store.close(); } };
+  return { server, store, runner, craft, async close() { await new Promise(resolve => server.listening ? server.close(resolve) : resolve()); await runner.stop(); await craft.stop(); store.close(); } };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

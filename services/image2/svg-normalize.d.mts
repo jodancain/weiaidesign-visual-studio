@@ -6,6 +6,7 @@ export interface SvgNormalizeOptions {
 export interface SvgNormalizeResult {
   svg: string; width: number; height: number; viewBox: [number, number, number, number];
   drawingNodes: SvgDrawingNode[]; legacyAliases: Record<string, string | null>; warnings: string[];
+  rasterSampling: 'linear' | 'nearest';
 }
 export function normalizeSvg(markup: string, options?: SvgNormalizeOptions): SvgNormalizeResult;
 export function inspectDrawingNodes(markup: string, options?: SvgNormalizeOptions): SvgDrawingNode[];

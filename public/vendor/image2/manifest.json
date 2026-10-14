@@ -53,13 +53,13 @@
     },
     {
       "path": "public/vendor/image2/core-1/render-graph.mjs",
-      "sha256": "5c5e6002e821825eddb07714a5e04d35fafaf318393bf75f58d18c2b6ed98ebc",
-      "bytes": 9176
+      "sha256": "0330bfb4df4813a7ca4b7ee1fa21edf091535de4b558eb6cf92fafcb33b468a9",
+      "bytes": 9651
     },
     {
       "path": "public/vendor/image2/core-1/render-software.mjs",
-      "sha256": "7b499f84ad9e1fd5226a88dbda2fb78ff113884a405dcdbd25240727eb45eed2",
-      "bytes": 9336
+      "sha256": "cc75db1f0234a680bfc823c9549c19cf67ae247508e68c7eca69964f1e903527",
+      "bytes": 9381
     }
   ]
 }

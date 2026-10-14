@@ -1,0 +1,128 @@
+{
+  "version": 1,
+  "minimumRust": "1.95",
+  "engines": [
+    {
+      "name": "PhotoCraft",
+      "id": "photocraft",
+      "commit": "706638b2842a330cfc5c305c7860d0b7c9921960",
+      "repository": "https://github.com/storytold/photocraft.git",
+      "category": "image",
+      "package": "photocraft-cli",
+      "features": []
+    },
+    {
+      "name": "VectorCraft",
+      "id": "vectorcraft",
+      "commit": "a06717777828867557d759c674283304f63c04ae",
+      "repository": "https://github.com/storytold/vectorcraft.git",
+      "category": "vector",
+      "package": "vectorcraft-cli",
+      "features": []
+    },
+    {
+      "name": "FilmCraft",
+      "id": "filmcraft",
+      "commit": "cee1feb185e675a108f78067f71ad86a640ace3d",
+      "repository": "https://github.com/storytold/filmcraft.git",
+      "category": "video",
+      "package": "filmcraft-cli",
+      "features": []
+    },
+    {
+      "name": "LightCraft",
+      "id": "lightcraft",
+      "commit": "a4b53b28cc52b68d9f5bdca09fa5666cdad5ad5f",
+      "repository": "https://github.com/storytold/lightcraft.git",
+      "category": "photography",
+      "package": "lightcraft-cli",
+      "features": []
+    },
+    {
+      "name": "PdfCraft",
+      "id": "pdfcraft",
+      "commit": "c1a41cc5c7c2460fb60af880af69ee28a0c71bd5",
+      "repository": "https://github.com/storytold/pdfcraft.git",
+      "category": "pdf",
+      "package": "pdfcraft-cli",
+      "features": []
+    },
+    {
+      "name": "EffectCraft",
+      "id": "effectcraft",
+      "commit": "549e9d825132986d6167c1432cd3328efcbb0278",
+      "repository": "https://github.com/storytold/effectcraft.git",
+      "category": "motion",
+      "package": "effectcraft-cli",
+      "features": []
+    },
+    {
+      "name": "DesignCraft",
+      "id": "designcraft",
+      "commit": "43a46c04bf8cd8c8a48a347f6deaa9613223aa54",
+      "repository": "https://github.com/storytold/designcraft.git",
+      "category": "layout",
+      "package": "designcraft-cli",
+      "features": []
+    },
+    {
+      "name": "FigCraft",
+      "id": "figcraft",
+      "commit": "bcedfeba1079829fd96c3b38077cfcc76e03bb09",
+      "repository": "https://github.com/storytold/figcraft.git",
+      "category": "interface",
+      "package": "figcraft-cli",
+      "features": []
+    },
+    {
+      "name": "WordCraft",
+      "id": "wordcraft",
+      "commit": "04f6f53b8a4d8140c7bb62f949b0a6099a473da1",
+      "repository": "https://github.com/storytold/wordcraft.git",
+      "category": "document",
+      "package": "wordcraft-cli",
+      "features": []
+    },
+    {
+      "name": "SoundCraft",
+      "id": "soundcraft",
+      "commit": "c0cb99340891d306e216582db465f3594b89dc1d",
+      "repository": "https://github.com/storytold/soundcraft.git",
+      "category": "audio",
+      "package": "soundcraft-cli",
+      "features": []
+    },
+    {
+      "name": "DeckCraft",
+      "id": "deckcraft",
+      "commit": "457406a7a5b62425e915926c8ccb0984e61a198c",
+      "repository": "https://github.com/storytold/deckcraft.git",
+      "category": "presentation",
+      "package": "deckcraft-cli",
+      "features": []
+    },
+    {
+      "name": "CADCraft",
+      "id": "cadcraft",
+      "commit": "e707ab4d7cc10102e550ad4c5bcecef1084a9baa",
+      "repository": "https://github.com/storytold/cadcraft.git",
+      "category": "cad",
+      "package": "cadcraft-cli",
+      "features": []
+    },
+    {
+      "name": "GridCraft",
+      "id": "gridcraft",
+      "commit": "84acf6293b1dc1fc09837524e035d674eb4d6741",
+      "repository": "https://github.com/storytold/gridcraft.git",
+      "category": "spreadsheet",
+      "package": "gridcraft-cli",
+      "features": []
+    }
+  ],
+  "rustToolchain": "1.98.1",
+  "fonts": {
+    "repository": "https://github.com/storytold/craft-fonts.git",
+    "commit": "3d9ab3a132ed0eff457e424226a435a901da30d3"
+  }
+}

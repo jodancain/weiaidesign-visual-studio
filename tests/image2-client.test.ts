@@ -5,6 +5,15 @@ import { localToDocument, documentToLocal, layerPixelPoint, capability } from '.
 import type { ImageDocument, ImageLayer } from '../lib/image2/types';
 import { groupLayerCommands, ungroupLayerCommands } from '../lib/image2/grouping';
 import { orderedLayers, reorderSiblingCommands } from '../lib/image2/stacking';
+import { imageAgentCapability, imageCapabilitiesForDocument, requireImageAgent } from '../lib/image2/agent-capabilities';
+import { imageAdjustmentRequest, imageAdjustments } from '../lib/image2/adjustments';
+import { professionalSvgContent, professionalSvgStyles, svgPaintPatch, svgHexPaintChange } from '../lib/image2/professional-svg-styles';
+import { candidatePreviewAssets, candidatePreviewState } from '../lib/image2/candidate-preview';
+import { elementPreviewSource } from '../lib/image2/element-preview';
+import type { ImageJob } from '../lib/image2/types';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { CandidateResult, LegacyImagePanels } from '../components/image2/LegacyImagePanels';
 
 const layer = (patch: Partial<ImageLayer> = {}): ImageLayer => ({ id: 'a', type: 'raster', name: '原图', x: 0, y: 0, width: 100, height: 80, rotation: 0, opacity: 1, visible: true, locked: false, z: 0, ...patch });
 const document = (): ImageDocument => ({ id: 'doc', name: '设计', schemaVersion: 2, revision: 3, width: 100, height: 80, layers: [layer()], assetIds: [], createdAt: 0, updatedAt: 0 });
@@ -98,4 +107,181 @@ test('unsafe grouping rejects nonadjacent/cross-parent layers and splitting a co
   assert.throws(() => groupLayerCommands(doc, ['a', 'c']), /相邻/);
   assert.throws(() => groupLayerCommands(doc, ['a', 'child']), /同一个组合/);
   assert.throws(() => ungroupLayerCommands(doc, 'group'), /整体透明度/);
+});
+
+test('professional chat requires an explicit CPU-only Agent contract, never legacy model readiness', () => {
+  const legacy = { agent: { available: true, model: 'chat-a', models: ['chat-a'] } };
+  assert.equal(imageAgentCapability(legacy, 2).available, true);
+  assert.equal(imageAgentCapability(legacy, 3).available, false);
+  assert.throws(() => requireImageAgent(legacy, 3), /算法设计助手尚未配置/);
+  const available = { ...legacy, professional: { agent: { available: true, executionClasses: ['cpu'], model: 'chat-b', models: ['chat-b'], allowedOperations: ['resize', 'adjust', 'filter'], tools: ['image_operation', 'apply_commands'] } } };
+  assert.equal(requireImageAgent(available, 3, 'chat-b').available, true);
+  assert.throws(() => requireImageAgent(available, 3, 'chat-a'), /未配置/);
+  assert.equal(imageAgentCapability({ professional: { agent: { ...available.professional.agent, executionClasses: ['cpu', 'generation'] } } }, 3).available, false);
+  assert.equal(imageAgentCapability({ professional: { agent: { available: 'true', executionClasses: ['cpu'], allowedOperations: [] } } }, 3).available, false);
+  assert.equal(imageAgentCapability({ professional: { agent: { available: false, reason: '对话服务离线', executionClasses: ['cpu'], allowedOperations: [] } } }, 3).reason, '对话服务离线');
+});
+
+test('homepage capability projection exposes professional chat models and only implemented CPU operations', () => {
+  const caps = { agent: { available: true, models: ['legacy'] }, operations: [
+    { operation: 'resize', available: true, executionClass: 'cpu' }, { operation: 'adjust', available: true, executionClass: 'cpu' },
+    { operation: 'filter', available: true, executionClass: 'cpu' }, { operation: 'refine_mask', available: true, executionClass: 'cpu' },
+    { operation: 'generate', available: true, executionClass: 'generation' }, { operation: 'segment', available: true, executionClass: 'vision' },
+  ], professional: { agent: { available: true, executionClasses: ['cpu'], models: ['professional'], allowedOperations: ['resize', 'adjust', 'filter'] }, operations: [
+    { operation: 'resize', available: true, executionClass: 'cpu' }, { operation: 'adjust', available: true, executionClass: 'cpu' }, { operation: 'filter', available: true, executionClass: 'cpu' },
+    { operation: 'generate', available: true, executionClass: 'generation' }, { operation: 'segment', available: true, executionClass: 'vision' },
+  ] } };
+  assert.equal(imageCapabilitiesForDocument(caps, 2), caps);
+  const effective = imageCapabilitiesForDocument(caps, 3);
+  assert.deepEqual((effective.agent as { models: string[] }).models, ['professional']);
+  for (const operation of ['resize', 'adjust', 'filter']) assert.equal(capability(effective, operation).available, true);
+  for (const operation of ['refine_mask', 'generate', 'segment']) assert.equal(capability(effective, operation).available, false);
+  assert.equal(capability(imageCapabilitiesForDocument({ operations: caps.operations }, 3), 'resize').available, false);
+  assert.equal(caps.operations[4].available, true, 'capability projection must not mutate other documents');
+});
+
+test('all folded adjustment choices create explicit CPU operation requests without generated prompts', () => {
+  for (const choice of imageAdjustments) {
+    const request = imageAdjustmentRequest(choice.id, {});
+    assert.equal(request.operation, choice.operation); assert.equal(request.params.kind, choice.id);
+    assert.equal('prompt' in request.params, false);
+  }
+  assert.deepEqual(imageAdjustmentRequest('brightness', { value: '-30' }), { operation: 'adjust', params: { kind: 'brightness', value: -30 } });
+  assert.deepEqual(imageAdjustmentRequest('invert', { value: 999 }), { operation: 'adjust', params: { kind: 'invert' } });
+  assert.deepEqual(imageAdjustmentRequest('levels', { black: 15, white: 240, gamma: 1.4 }), { operation: 'adjust', params: { kind: 'levels', black: 15, white: 240, gamma: 1.4 } });
+  assert.deepEqual(imageAdjustmentRequest('gaussian_blur', { radius: 1.5 }), { operation: 'filter', params: { kind: 'gaussian_blur', radius: 1.5 } });
+  assert.deepEqual(imageAdjustmentRequest('median', { size: 7 }), { operation: 'filter', params: { kind: 'median', size: 7 } });
+  assert.deepEqual(imageAdjustmentRequest('invert', { feather: '2' }), { operation: 'adjust', params: { kind: 'invert', feather: 2 } });
+  for (const [kind, values] of [['brightness', { value: 101 }], ['exposure', { value: '' }], ['gamma', { value: 0 }], ['threshold', { value: 256 }], ['levels', { black: 100, white: 100 }], ['median', { size: 4 }]] as const) assert.throws(() => imageAdjustmentRequest(kind, values));
+  assert.throws(() => imageAdjustmentRequest('generate', {}), /未注册/);
+  assert.throws(() => imageAdjustmentRequest('brightness', { feather: -1 }), /羽化/);
+});
+
+test('legacy Logo stroke controls produce valid immutable v3 SVG paint content', async () => {
+  const original = { '*': { fill: '#ff0000', 'stroke-width': 2 }, path1: { stroke: '#0000ff', strokeWidth: 1, 'stroke-width': 3 } };
+  const styles = professionalSvgStyles(original);
+  assert.deepEqual(styles, { '*': { fill: '#ff0000', strokeWidth: 2 }, path1: { stroke: '#0000ff', strokeWidth: 3 } });
+  assert.equal(original.path1.strokeWidth, 1);
+  const { validateContentJSON } = await import(new URL('../services/image2/domain-v3.mjs', import.meta.url).href);
+  assert.doesNotThrow(() => validateContentJSON({ formatVersion: 1, kind: 'svg', sourceAssetId: 'source', fontAssetIds: [], pathStyles: styles }));
+  assert.throws(() => validateContentJSON({ formatVersion: 1, kind: 'svg', sourceAssetId: 'source', fontAssetIds: [], pathStyles: original }), /unsupported path style/);
+  assert.throws(() => professionalSvgStyles({ path1: null }), /无效/);
+});
+
+test('consecutive SVG paint edits retain registered source and font identities when the compact view lacks asset fields', async () => {
+  const { validateContentJSON } = await import(new URL('../services/image2/domain-v3.mjs', import.meta.url).href);
+  const original = { formatVersion: 1, kind: 'svg', sourceAssetId: 'original-svg', fontAssetIds: ['actual-font'] };
+  const registered = ['original-svg', 'actual-font'];
+  const width = professionalSvgContent(layer({ type: 'vector', contentId: 'before', metadata: { pathStyles: { path1: { 'stroke-width': 2 } } } }), original, registered);
+  const color = professionalSvgContent(layer({ type: 'vector', contentId: 'width', metadata: { pathStyles: { path1: { strokeWidth: 2, stroke: '#ff0000' } } } }), width, registered);
+  for (const content of [width, color]) {
+    assert.equal(content.sourceAssetId, 'original-svg'); assert.deepEqual(content.fontAssetIds, ['actual-font']);
+    assert.doesNotThrow(() => validateContentJSON(content));
+  }
+  assert.deepEqual(color.pathStyles, { path1: { strokeWidth: 2, stroke: '#ff0000' } });
+  assert.deepEqual(width.pathStyles, { path1: { strokeWidth: 2 } });
+  assert.equal('pathStyles' in original, false);
+  assert.throws(() => professionalSvgContent(layer({ type: 'vector' }), undefined, registered), /原始素材尚未就绪/);
+  assert.throws(() => professionalSvgContent(layer({ type: 'vector' }), original, ['actual-font']), /原始素材尚未就绪/);
+  assert.throws(() => professionalSvgContent(layer({ type: 'vector' }), original, ['original-svg']), /实际字体引用尚未就绪/);
+});
+
+test('preserved SVG appearance cannot hide a successful-looking paint edit', () => {
+  const original = { formatVersion: 1, kind: 'svg', sourceAssetId: 'original-svg', fontAssetIds: [], appearanceAssetId: 'preserved-pixels', pathStyles: { path1: { strokeWidth: 2 } } };
+  const registered = ['original-svg', 'preserved-pixels'];
+  const same = professionalSvgContent(layer({ type: 'vector' }), original, registered);
+  assert.equal(same.appearanceAssetId, 'preserved-pixels');
+  for (const patch of [{ fill: '#ff0000' }, { metadata: { pathStyles: { path1: { strokeWidth: 2, stroke: '#ff0000' } } } }]) {
+    assert.throws(() => professionalSvgContent(layer({ type: 'vector', ...patch }), original, registered), /保留原始外观像素/);
+  }
+  assert.deepEqual(original.pathStyles, { path1: { strokeWidth: 2 } });
+});
+
+test('queued SVG paint deltas merge into the latest content without restoring earlier UI styles', () => {
+  const initial = layer({ type: 'vector', metadata: { pathStyles: { path1: { fill: '#000000', strokeWidth: 1 }, path2: { fill: '#00ff00' } } } });
+  // Both event handlers were created from the same original UI render. Only changed fields cross the queue.
+  const first = { target: 'path1', paint: { fill: '#ff0000' } }, second = { target: 'path1', paint: { 'stroke-width': 2 } };
+  const afterFill = { ...initial, ...svgPaintPatch(initial, first.target, first.paint) };
+  const afterWidth = { ...afterFill, ...svgPaintPatch(afterFill, second.target, second.paint) };
+  assert.deepEqual(afterWidth.metadata?.pathStyles, { path1: { fill: '#ff0000', strokeWidth: 2 }, path2: { fill: '#00ff00' } });
+  const afterStroke = { ...afterWidth, ...svgPaintPatch(afterWidth, 'path1', { stroke: '#0000ff' }) };
+  assert.deepEqual(afterStroke.metadata?.pathStyles, { path1: { fill: '#ff0000', strokeWidth: 2, stroke: '#0000ff' }, path2: { fill: '#00ff00' } });
+  assert.deepEqual(initial.metadata?.pathStyles, { path1: { fill: '#000000', strokeWidth: 1 }, path2: { fill: '#00ff00' } });
+  assert.deepEqual(svgPaintPatch(afterWidth, 'path1', { stroke: '#0000ff' }, 'css').metadata?.pathStyles, { path1: { fill: '#ff0000', 'stroke-width': 2, stroke: '#0000ff' }, path2: { fill: '#00ff00' } });
+});
+
+test('precise SVG color entry accepts only six-digit HEX and leaves unchanged values unsubmitted', () => {
+  assert.equal(svgHexPaintChange(' #FF00aA ', '#20232b'), '#ff00aa');
+  assert.equal(svgHexPaintChange('ff0000', '#20232b'), '#ff0000');
+  assert.equal(svgHexPaintChange('#FF0000', '#ff0000'), undefined);
+  for (const value of ['', '#fff', '#12345678', 'red', '#xyzxyz', 'url(data:)']) assert.throws(() => svgHexPaintChange(value, '#20232b'), /六位/);
+});
+
+test('professional candidates display the actual version-matched PNG preview and never immutable JSON content assets', () => {
+  const job: ImageJob = { id: 'job', documentId: 'doc', kind: 'agent', state: 'complete', createdAt: 0, updatedAt: 0, output: { branchDocumentId: 'branch', revision: 3, previewRevision: 3, previewAssetId: 'actual-png', assetIds: ['content-json'] } };
+  const branch = { ...document(), id: 'branch', schemaVersion: 3 as const };
+  assert.deepEqual(candidatePreviewAssets(job, branch), ['actual-png']);
+  assert.deepEqual(candidatePreviewAssets({ ...job, output: { assetIds: ['content-json'], previewUnavailable: 'RENDER_BUDGET' } }, branch), []);
+  assert.deepEqual(candidatePreviewAssets({ ...job, output: { assetIds: ['content-json'] } }, branch), []);
+  assert.deepEqual(candidatePreviewAssets({ ...job, kind: 'operation', output: { assetIds: ['png-a', 'png-a', null, 'png-b'] } }, document()), ['png-a', 'png-b']);
+});
+
+test('stale or unversioned preview images cannot be displayed or accepted through either surface', () => {
+  const branch = { ...document(), id: 'branch', schemaVersion: 3 as const };
+  const job: ImageJob = { id: 'job', documentId: 'doc', kind: 'agent', state: 'complete', createdAt: 0, updatedAt: 0, output: { branchDocumentId: branch.id, revision: 3, previewRevision: 3, previewAssetId: 'png' } };
+  assert.deepEqual(candidatePreviewState(job, branch), { status: 'ready', assets: ['png'], canAccept: true });
+  for (const patch of [{ previewStale: true }, { previewRevision: 2 }, { revision: 4 }, { branchDocumentId: 'foreign' }]) {
+    const state = candidatePreviewState({ ...job, output: { ...job.output, ...patch } }, branch);
+    assert.equal(state.status, 'stale'); assert.deepEqual(state.assets, []); assert.equal(state.canAccept, false);
+  }
+  assert.equal(candidatePreviewState(job, { ...branch, revision: 4 }).status, 'stale');
+  for (const output of [{ previewAssetId: 'png' }, { ...job.output, previewRevision: undefined }, { ...job.output, previewUnavailable: 'failed' }]) {
+    const state = candidatePreviewState({ ...job, output }, branch);
+    assert.equal(state.status, 'unavailable'); assert.deepEqual(state.assets, []); assert.equal(state.canAccept, false);
+  }
+  assert.equal(candidatePreviewState(job).status, 'unavailable');
+  assert.equal(candidatePreviewState({ ...job, state: 'running' }, branch).canAccept, false);
+});
+
+test('a missing preview is empty only when the loaded branch proves there are no visible drawing layers', () => {
+  const branch = { ...document(), id: 'branch', schemaVersion: 3 as const }, job: ImageJob = { id: 'job', documentId: 'doc', kind: 'agent', state: 'complete', createdAt: 0, updatedAt: 0, output: { branchDocumentId: 'branch', revision: 3 } };
+  assert.equal(candidatePreviewState(job, branch).status, 'unavailable');
+  assert.equal(candidatePreviewState(job).status, 'unavailable');
+  const empty = candidatePreviewState(job, { ...branch, layers: [] });
+  assert.equal(empty.status, 'empty'); assert.equal(empty.canAccept, false); assert.match(empty.message!, /版本 3/); assert.match(empty.message!, /透明 PNG/);
+  assert.equal(candidatePreviewState({ ...job, output: { ...job.output, previewRevision: 3, previewAssetId: 'transparent-png' } }, { ...branch, layers: [] }).canAccept, true);
+  assert.equal(candidatePreviewState(job, { ...branch, schemaVersion: 2, layers: [] }).canAccept, true, 'legacy manually created empty branches remain compatible');
+  const hidden = { ...branch, layers: [layer({ id: 'parent', type: 'group', visible: false }), layer({ id: 'child', parentId: 'parent', visible: true })] };
+  assert.equal(candidatePreviewState(job, hidden).status, 'empty');
+  assert.equal(candidatePreviewState(job, { ...branch, layers: [layer({ id: 'child', parentId: 'missing' })] }).status, 'unavailable');
+  assert.equal(candidatePreviewState({ ...job, output: { ...job.output, previewStale: true } }, { ...branch, layers: [] }).canAccept, false);
+});
+
+test('candidate card and Versions dialog both reject the same stale preview and allow a matched preview', () => {
+  const branch = { ...document(), id: 'branch', schemaVersion: 3 as const }, main = { ...document(), schemaVersion: 3 as const };
+  const matched: ImageJob = { id: 'job', documentId: main.id, kind: 'agent', state: 'complete', createdAt: 0, updatedAt: 0, output: { branchDocumentId: branch.id, revision: branch.revision, previewRevision: branch.revision, previewAssetId: 'actual-png' } };
+  const markup = (job: ImageJob) => {
+    const bridge = { document: main, rawDocument: main, capabilities: {}, branches: [branch], jobs: [job], revisions: [], busy: false, pendingCount: 0 } as unknown as Parameters<typeof LegacyImagePanels>[0]['bridge'];
+    return [renderToStaticMarkup(createElement(CandidateResult, { bridge, job, onError: () => {} })), renderToStaticMarkup(createElement(LegacyImagePanels, { mode: 'versions', bridge, onError: () => {}, onClose: () => {} }))];
+  };
+  for (const html of markup({ ...matched, output: { ...matched.output, previewStale: true } })) {
+    assert.match(html, /旧图已隐藏/); assert.match(html, /<button[^>]*disabled=""[^>]*>接受候选<\/button>/); assert.doesNotMatch(html, /src="[^"]*actual-png/);
+  }
+  for (const html of markup(matched)) assert.doesNotMatch(html, /<button[^>]*disabled=""[^>]*>接受候选<\/button>/);
+});
+
+test('Elements preview follows the fixed target through consecutive edits and undo without reusing its original URL', () => {
+  const target = { layerId: 'a', src: 'data:image/png;base64,original' }, doc = document();
+  doc.layers[0].assetId = 'original';
+  const before = elementPreviewSource(doc, target);
+  doc.layers[0].assetId = 'inverted'; doc.revision++;
+  assert.equal(elementPreviewSource(doc, target), '/api/v3/image2/assets/inverted/content');
+  doc.layers[0].assetId = 'adjusted'; doc.revision++;
+  assert.equal(elementPreviewSource(doc, target), '/api/v3/image2/assets/adjusted/content');
+  doc.layers[0].assetId = 'original'; doc.revision++;
+  assert.equal(elementPreviewSource(doc, target), before);
+  assert.equal(target.src, 'data:image/png;base64,original');
+  doc.layers = [layer({ id: 'other', assetId: 'original' })];
+  assert.equal(elementPreviewSource(doc, target), undefined, 'a removed target must not display a different layer or stale original');
+  assert.equal(elementPreviewSource(null, { src: target.src }), target.src, 'unimported legacy canvas still has its original preview');
 });

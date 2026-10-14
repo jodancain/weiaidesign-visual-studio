@@ -9,6 +9,7 @@ const rasterPoolKeys = new WeakMap();
 const rasterPool = new Map();
 const bufferReferences = new Map();
 const cacheLimit = 128 * 1024 * 1024;
+const samplingVersion = 'pixel-boundary-sampling-1';
 let cacheBytes = 0;
 function metadataCost(resource) {
   if (!resourceCosts.has(resource)) resourceCosts.set(resource, 256 + (resource.paths || []).reduce((bytes, path) => bytes + 128 + String(path.d || '').length * 2, 0));
@@ -49,6 +50,7 @@ function remember(key, resource) {
   }
 }
 function decodeRaster(resource, document, content) {
+  if (resource.sampling !== undefined && !['linear', 'nearest'].includes(resource.sampling)) throw new Error('不支持的画面采样规则');
   if (![resource.width, resource.height].every(n => Number.isSafeInteger(n) && n > 0 && n <= 32768)) throw new Error('画面资源像素尺寸不一致');
   const binary = atob(resource.pixelsBase64 || resource.pixels);
   if (resource.width * resource.height * 4 !== binary.length) throw new Error('画面资源像素尺寸不一致');
@@ -73,8 +75,8 @@ function decodeRaster(resource, document, content) {
 }
 function modules() {
   return modulesPromise ||= Promise.all([
-    import('/vendor/image2/core-1/render-graph.mjs'),
-    import('/vendor/image2/core-1/render-software.mjs'),
+    import('/vendor/image2/core-1/render-graph.mjs?sampling=pixel-boundary-sampling-1'),
+    import('/vendor/image2/core-1/render-software.mjs?sampling=pixel-boundary-sampling-1'),
   ]);
 }
 function engine() {
@@ -85,7 +87,7 @@ function engine() {
   return enginePromise;
 }
 async function resolve(content, context, document, requestId) {
-  const key = JSON.stringify([document.id, content.id, content.kind, content.assetId, context.role, context.layer.id, context.layer.localBounds]);
+  const key = JSON.stringify([samplingVersion, document.id, content.id, content.kind, content.assetId, context.role, context.layer.id, context.layer.localBounds]);
   if (sequence !== requestId) throw new Error('cancelled');
   if (resources.has(key)) {
     const resource = resources.get(key); resources.delete(key); resources.set(key, resource);

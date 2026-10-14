@@ -16,7 +16,7 @@
     "test:studio:ui": "playwright test --config=playwright.studio.config.ts",
     "test:studio:loop": "playwright test --config=playwright.studio-loop.config.ts",
     "test:image2": "npm test --prefix services/image2",
-    "test:image2:client": "tsx --test tests/image2-client.test.ts tests/image2-templates.test.ts tests/image2-submissions.test.ts tests/image2-submissions-http.test.ts tests/image2-masks.test.ts tests/image2-legacy-drafts.test.ts tests/image2-legacy-mutations.test.ts tests/image2-bff-retry.test.ts tests/image2-professional-client.test.ts tests/image2-professional-migration.test.ts tests/image2-professional-properties.test.ts",
+    "test:image2:client": "tsx --test tests/image2-client.test.ts tests/image2-templates.test.ts tests/image2-submissions.test.ts tests/image2-submissions-http.test.ts tests/image2-masks.test.ts tests/image2-legacy-drafts.test.ts tests/image2-legacy-mutations.test.ts tests/image2-bff-retry.test.ts tests/image2-professional-client.test.ts tests/image2-professional-migration.test.ts tests/image2-professional-properties.test.ts tests/image2-craft-client.test.ts",
     "test:image2:browser": "playwright test --config=tests/image2-integration.config.ts",
     "test:image2:ui": "playwright test --config=tests/image2.playwright.config.ts",
     "test:image2:original-ui": "playwright test --config=tests/image2-legacy-browser.config.ts",

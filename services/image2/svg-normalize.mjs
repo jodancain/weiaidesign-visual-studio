@@ -202,7 +202,30 @@ export function normalizeSvg(markup,options={}){
   if(options.preserveAspectRatio!==undefined)attrs['@_preserveAspectRatio']=String(options.preserveAspectRatio);
   if(options.responsive){const ast=cssAst(attrs['@_style']||'','declarationList');ast.children=ast.children.filter(node=>node.type!=='Declaration'||!['width','height'].includes(node.property));attrs['@_style']=[cssTree.generate(ast),'width:100% !important','height:100% !important'].filter(Boolean).join(';');}
   const svg=new XMLBuilder({ignoreAttributes:false,preserveOrder:true,suppressEmptyNode:true,cdataPropName:'#cdata'}).build([root]);
-  return {svg,width,height,viewBox,drawingNodes,legacyAliases,warnings};
+  // Only the exact pixel tracer's integer rectangle geometry can safely retain
+  // its crisp-edge sampling after the SVG is rendered at its native size.
+  // Mixed SVGs, CSS rendering overrides, curves and transformed paths continue
+  // to use the ordinary interpolated appearance proxy.
+  const rasterSampling=attrs['@_shape-rendering']==='crispEdges'
+    && Number.isSafeInteger(width)&&Number.isSafeInteger(height)
+    && viewBox[0]===0&&viewBox[1]===0&&viewBox[2]===width&&viewBox[3]===height
+    && drawingNodes.length>0
+    && records.every(record=>{
+      if(record!==rootRecord&&record.tag!=='path')return false;
+      if(record.sourceAttrs['@_transform']!==undefined)return false;
+      if(record!==rootRecord&&record.sourceAttrs['@_shape-rendering']!==undefined)return false;
+      let renderingOverride=false;
+      if(record.sourceAttrs['@_style'])cssAst(record.sourceAttrs['@_style'],'declarationList').children.forEach(node=>{if(node.type==='Declaration'&&node.property.toLowerCase()==='shape-rendering')renderingOverride=true;});
+      if(renderingOverride)return false;
+      if(record===rootRecord)return true;
+      const d=String(record.sourceAttrs['@_d']||'');
+      if(!/^(?:M\d+ \d+h\d+v\d+h-\d+Z)+$/.test(d))return false;
+      return [...d.matchAll(/M(\d+) (\d+)h(\d+)v(\d+)h-(\d+)Z/g)].every(match=>{
+        const [x,y,w,h,back]=match.slice(1).map(Number);
+        return [x,y,w,h,back].every(Number.isSafeInteger)&&w>0&&h>0&&back===w&&x+w<=width&&y+h<=height;
+      });
+    })?'nearest':'linear';
+  return {svg,width,height,viewBox,drawingNodes,legacyAliases,warnings,rasterSampling};
 }
 
 export function inspectDrawingNodes(markup,options={}){return normalizeSvg(markup,options).drawingNodes;}

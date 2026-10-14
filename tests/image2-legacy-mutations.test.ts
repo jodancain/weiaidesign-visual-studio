@@ -32,6 +32,15 @@ test('malformed/wrong-document/stale acknowledgements retain the frozen accept r
   result={document:document(8)};assert.equal((await submit()).revision,8);assert.equal((await storage.list()).length,0);
 });
 
+test('a lost candidate accept receipt freezes the reviewed branch revision before any newer preview check',async()=>{
+  const storage=getMutationsStorage(new MemorySubmissions()),seen:Record<string,unknown>[]=[],acceptPath='/documents/original-doc/accept',acceptIntent={documentId:'original-doc',branchId:'candidate'};
+  const transport=async(_path:string,body:Record<string,unknown>)=>{seen.push(structuredClone(body));if(seen.length===1)throw new Error('lost accepted receipt');return document(8);};
+  await assert.rejects(new LegacyDocumentMutationManager(storage,transport).submit(acceptPath,acceptIntent,{baseRevision:7,branchDocumentId:'candidate',branchRevision:2,commandId:'reviewed-once'}),/lost/);
+  const recovered:ImageDocument[]=[];
+  await new LegacyDocumentMutationManager(storage,transport).recover('original-doc',next=>recovered.push(next));
+  assert.equal(recovered[0].revision,8);assert.equal(seen[1].branchRevision,2);assert.deepEqual(seen[0],seen[1]);assert.equal((await storage.list()).length,0);
+});
+
 test('duplicate clicks share one in-flight mutation while a later successful user action is distinct',async()=>{
   const storage=getMutationsStorage(new MemorySubmissions());let resolve!:(value:unknown)=>void,calls=0;
   const manager=new LegacyDocumentMutationManager(storage,async()=>{calls++;return new Promise(done=>{resolve=done;});});

@@ -10,7 +10,7 @@ import * as fontkit from 'fontkit';
 import {Resvg} from '@resvg/resvg-js';
 import {normalizeSvg} from './svg-normalize.mjs';
 import {pdfFontBytes} from './fonts.mjs';
-import {prepareRenderGraph,renderError} from './core/render-graph.mjs';
+import {prepareRenderGraph,renderError,SAMPLING_VERSION} from './core/render-graph.mjs';
 import {rectArray} from './core/matrix.mjs';
 import {renderSoftware} from './core/render-software.mjs';
 const require=createRequire(import.meta.url),hash=b=>createHash('sha256').update(b).digest('hex');let kitPromise;
@@ -36,7 +36,7 @@ export function createNodeResolver(getAsset,{maxPixels=40000000}={}){
    const normalized=normalizeSvg(sourceText,{scope:`v3_${layer.id}`,fill:p?.fill,styles:p?.pathStyles?Object.fromEntries(Object.entries(p.pathStyles).map(([id,style])=>{if(style.opacity!==undefined&&style.opacity!==1)throw renderError('Per-path opacity is not installed','RENDER_PATH_OPACITY_UNAVAILABLE');return[id,{...style,...(style.strokeWidth===undefined?{}:{'stroke-width':style.strokeWidth})}];})):undefined,fallbackWidth:source.asset.width,fallbackHeight:source.asset.height,preserveAspectRatio:'none'}),fontFiles=[],refs=[source.bytes],hasText=/<(?:[\w-]+:)?(?:text|tspan)\b/i.test(sourceText);let directory;
    if(hasText&&!fontIds.length)throw renderError('SVG text requires explicit actual fonts','SVG_FONT_REQUIRED');
    try{if(fontIds.length){directory=await mkdtemp(join(tmpdir(),'image2-v3-fonts-'));for(const id of fontIds){if(!document.assetIds.includes(id))throw renderError('Font source not registered');const font=await ownedGet(id);if(font.bytes.toString('ascii',0,4)==='wOFF')throw renderError('WOFF1 SVG rendering is unavailable','SVG_FONT_CONTAINER_UNAVAILABLE');const bytes=await pdfFontBytes(font.bytes),file=join(directory,`${fontFiles.length}.ttf`);await writeFile(file,bytes);fontFiles.push(file);refs.push(font.bytes);}}
-    const renderer=new Resvg(normalized.svg,{font:{loadSystemFonts:false,fontFiles}});if(renderer.width*renderer.height>maxPixels)throw renderError('SVG proxy exceeds pixel budget');const proxy=await raster({asset:{id:source.asset.id},bytes:Buffer.from(renderer.render().asPng())},role==='content'?layer.localBounds:normalized.viewBox);return{...proxy,hash:hash(Buffer.concat([r.bytes,...refs])),sourceAssetId:source.asset.id,appearanceProxy:true};
+    const renderer=new Resvg(normalized.svg,{font:{loadSystemFonts:false,fontFiles}});if(renderer.width*renderer.height>maxPixels)throw renderError('SVG proxy exceeds pixel budget');const proxy=await raster({asset:{id:source.asset.id},bytes:Buffer.from(renderer.render().asPng())},role==='content'?layer.localBounds:normalized.viewBox);return{...proxy,sampling:normalized.rasterSampling,hash:hash(Buffer.concat([r.bytes,...refs,Buffer.from(`${SAMPLING_VERSION}:${normalized.rasterSampling}`)])),sourceAssetId:source.asset.id,appearanceProxy:true};
    }finally{if(directory)await rm(directory,{recursive:true,force:true});}
   }
   throw renderError('Content format has no installed renderer','RENDER_CONTENT_UNAVAILABLE');

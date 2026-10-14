@@ -47,6 +47,20 @@ export function matchesLegacyDraft(draft: LegacyCanvasDraft, expected: LegacyDra
   return draft.documentId === expected.documentId && draft.baseRevision === expected.baseRevision && draft.savedAt === expected.savedAt;
 }
 
+const recoveryKey = (projectId: string, documentId: string) => `${projectId}:image2-document-draft:${documentId}`;
+/** A copied v3 document shares the original UI project; preserve the other document before its single legacy slot is reused. */
+export async function readLegacyDocumentDraft(storage: LegacyDraftStorage, projectId: string, documentId: string) {
+  const current = await storage.read(projectId);
+  if (current?.documentId === documentId) return current;
+  if (current) await storage.put({ ...current, projectId: recoveryKey(projectId, current.documentId) });
+  return storage.read(recoveryKey(projectId, documentId));
+}
+export async function removeLegacyDocumentDraft(storage: LegacyDraftStorage, projectId: string, draft: LegacyCanvasDraft) {
+  await storage.remove(draft.projectId, draft);
+  const key = recoveryKey(projectId, draft.documentId), archived = await storage.read(key);
+  if (archived && archived.documentId === draft.documentId && archived.savedAt <= draft.savedAt) await storage.remove(key, archived);
+}
+
 let database: Promise<IDBDatabase> | undefined;
 function openDatabase(): Promise<IDBDatabase> {
   if (typeof indexedDB === 'undefined') return Promise.reject(new Error('本机浏览器不支持保存原画布草稿'));

@@ -5,7 +5,11 @@ import { normalizeSvg } from './svg-normalize.mjs';
 
 const safeMetadata = source => {
   const out = clone(source || {});
-  for (const key of ['legacySnapshot','legacyProps','paths','paragraphs','runs','tiles','pixels','shader','script','pathStyles','frameClip']) delete out[key];
+  // Legacy UI records are opaque snapshots, not image2 resource descriptors.
+  // In particular their props.assetId is a tldraw identity ("asset:..."),
+  // which must never become an operational v3 asset reference. The complete
+  // record remains available in the untouched source ledger/professionalSource.
+  for (const key of ['legacySnapshot','legacyRecord','legacyProps','paths','paragraphs','runs','tiles','pixels','shader','script','pathStyles','frameClip']) delete out[key];
   return out;
 };
 const translation = (x,y) => [1,0,0,1,x,y];

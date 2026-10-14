@@ -5,6 +5,7 @@ import { renderNode } from './render-node.mjs';
 import { CONTENT_MIME, validateContentJSON, contentAssetReferences } from './domain-v3.mjs';
 import { validateDocument, validId, clone } from './domain.mjs';
 import { inspectAsset } from './processors.mjs';
+import { craftPackageAssetIds, prepareCraftPackage, installCraftPackage, isCraftOpaqueAsset, craftImportMetadataRef } from './craft-package.mjs';
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const fail = (ok, message) => {
     if (!ok)
@@ -21,7 +22,7 @@ export async function exportV3Document(format, document, ctx) {
     validateV3Export(document, ctx);
     const name = (document.name || '设计工程').replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').slice(0, 100);
     if (format === 'project') {
-        const docs = [document, ...(ctx.revisions || []).map(revision => revision.document || revision.snapshot || revision)], ids = new Set(docs.flatMap(d => d.assetIds)), direct = new Set(), files = {}, assets = [];
+        const docs = [document, ...(ctx.revisions || []).map(revision => revision.document || revision.snapshot || revision)], ids = new Set([...docs.flatMap(d => d.assetIds),...craftPackageAssetIds(ctx.craft)]), direct = new Set(craftPackageAssetIds(ctx.craft)), files = {}, assets = [];
         let size = 0;
         // Automatically saved exports do not recursively enlarge the next package.
         const references = value => {
@@ -81,7 +82,7 @@ export async function exportV3Document(format, document, ctx) {
             delete value.baseRevision;
             return value;
         };
-        files['manifest.json'] = strToU8(JSON.stringify({ format: 'weiai-image2-project', version: 3, document: clean(document), revisions: docs.slice(1).map(clean), assets }));
+        files['manifest.json'] = strToU8(JSON.stringify({ format: 'weiai-image2-project', version: 3, document: clean(document), revisions: docs.slice(1).map(clean), assets,...(ctx.craft?{craft:ctx.craft}:{}) }));
         fail(size + files['manifest.json'].length <= MAX_EXPANDED, '工程包清单及素材超过128MB。');
         const bytes = Buffer.from(zipSync(files, { level: 6, mtime: new Date('2000-01-01T00:00:00Z') }));
         fail(bytes.length <= MAX_ARCHIVE, '工程包超过64MB。');
@@ -143,6 +144,7 @@ export function readProjectArchive(input) {
 export async function importV3Project(store, owner, input, bundle = readProjectArchive(input)) {
     const { manifest, files } = bundle;
     fail(manifest.version === 3 && manifest.document?.schemaVersion === 3 && Array.isArray(manifest.assets) && manifest.assets.length <= 2000 && Array.isArray(manifest.revisions) && manifest.revisions.length > 0 && manifest.revisions.length <= 10000, 'v3工程清单无效或缺少历史。');
+    const craft=await prepareCraftPackage(store,manifest,files);
     const docs = [manifest.document, ...manifest.revisions], ids = new Map(), assets = new Map(), fileNames = new Set(), categories = { layers: new Map(), contentAssets: new Map(), artboards: new Map(), guides: new Map(), savedSelections: new Map(), masks: new Map() }, documentIds = new Map();
     for (const asset of manifest.assets) {
         fail(asset && validId(asset.id) && !assets.has(asset.id) && asset.file === `assets/${asset.id}` && !fileNames.has(asset.file) && /^[a-f0-9]{64}$/.test(asset.hash), '素材身份、路径或hash无效。');
@@ -166,6 +168,7 @@ export async function importV3Project(store, owner, input, bundle = readProjectA
                     categories.masks.set(mask.id, randomUUID());
     }
     const mapRef = (key, value) => {
+        const native=craftImportMetadataRef(craft,key,value);if(native!==undefined)return native;
         let map;
         if (/^(?:assetId|[a-zA-Z]+AssetId)s?$/.test(key))
             map = ids;
@@ -216,6 +219,7 @@ export async function importV3Project(store, owner, input, bundle = readProjectA
             data = Buffer.from(JSON.stringify(remap(value)));
             info = { mime: CONTENT_MIME };
         }
+        else if(isCraftOpaqueAsset(craft,asset))info={mime:asset.mime,craftOpaque:true};
         else
             info = await inspectAsset(bytes, asset.mime);
         prepared.push({ asset, bytes: data, info, dependencies });
@@ -230,10 +234,12 @@ export async function importV3Project(store, owner, input, bundle = readProjectA
             const record = remaining.splice(index, 1)[0], asset = record.asset;
             // JSON resource IDs change its bytes/hash. Recompute every authoritative
             // provenance hash from the imported immutable source, not the old manifest.
-            store.addAsset(fresh.id, owner, { name: asset.name, ...record.info, assignedId: ids.get(asset.id), inputs: (asset.inputs || []).map(ref => ({ role: ref.role, assetId: ids.get(ref.assetId) })), metadata: { ...remap(asset.metadata), ...record.info.metadata, importedAssetId: asset.id } }, record.bytes);
+            const descriptor={ name: asset.name, ...record.info, assignedId: ids.get(asset.id), inputs: (asset.inputs || []).map(ref => ({ role: ref.role, assetId: ids.get(ref.assetId) })), metadata: { ...remap(asset.metadata), ...record.info.metadata, importedAssetId: asset.id } };
+            if(record.info.craftOpaque)store.craftService.addAsset(fresh.id,owner,descriptor,record.bytes);else store.addAsset(fresh.id,owner,descriptor,record.bytes);
             done.add(asset.id);
         }
         const current = { ...remapDocument(manifest.document), id: fresh.id, createdAt: fresh.createdAt }, revisions = manifest.revisions.map(revision => ({ ...remapDocument(revision), id: fresh.id }));
+        const importedCraft=installCraftPackage(store,fresh.id,owner,craft,ids);if(importedCraft)current.metadata={...current.metadata,craftImport:importedCraft};
         for (const document of [current, ...revisions]) {
             delete document.parentDocumentId;
             delete document.baseRevision;

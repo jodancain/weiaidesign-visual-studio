@@ -11,6 +11,9 @@ import { capability } from '../../lib/image2/geometry';
 import { buildTemplate, templateNames, type TemplateKind } from '../../lib/image2/templates';
 import { groupProfessionalLayerCommands, ungroupProfessionalLayerCommands } from '../../lib/image2/professional-model';
 import { ProfessionalProperties } from './ProfessionalProperties';
+import { candidatePreviewState } from '../../lib/image2/candidate-preview';
+import { craftAgentProjects, craftNativeEvidenceKey } from '../../lib/image2/craft-client';
+import { CraftCandidateSummary } from './CraftToolsDialog';
 
 export type LegacyImagePanel = 'layers' | 'versions' | 'import' | 'upscale' | 'vector' | null;
 type Bridge = ReturnType<typeof useLegacyImage2>;
@@ -18,12 +21,13 @@ const layerLabels = { raster: '图片', text: '文字', vector: 'SVG', group: '�
 const fieldLabels = { x: '横向位置', y: '纵向位置', width: '宽度', height: '高度', rotation: '角度', opacity: '不透明度', fontSize: '字号', tracking: '字距', lineHeight: '行距', strokeWidth: '描边宽度' };
 
 /** These dialogs reuse the original workbench styles and do not occupy canvas space when closed. */
-export function LegacyImagePanels({ mode, onClose, bridge, onError, onResult }: {
+export function LegacyImagePanels({ mode, onClose, bridge, onError, onResult, onViewNativeCandidate }: {
   mode: LegacyImagePanel; onClose: () => void; bridge: Bridge; onError: (message: string) => void;
   onResult?: (jobId: string) => void;
+  onViewNativeCandidate?: (branchId: string, projectId?: string) => void;
 }) {
   const [working, setWorking] = useState(false), [picked, setPicked] = useState<string[]>([]);
-  const [upscaleKind, setUpscaleKind] = useState('resize'), [scale, setScale] = useState(2), [traceMode, setTraceMode] = useState('detail');
+  const [upscaleKind, setUpscaleKind] = useState('resize'), [scale, setScale] = useState(2), [traceMode, setTraceMode] = useState('exact');
   const [pixelOperation, setPixelOperation] = useState('resize');
   const [pixelParams, setPixelParams] = useState({ width: 512, height: 512, x: 0, y: 0, degrees: 90, color: '#ffffff', tolerance: 32, axis: 'horizontal' });
   const [templateKind, setTemplateKind] = useState<TemplateKind>('poster');
@@ -89,7 +93,7 @@ export function LegacyImagePanels({ mode, onClose, bridge, onError, onResult }: 
             <p>字重由实际字体文件决定。</p><label>描边颜色<input aria-label="描边颜色" type="color" value={selected.stroke?.startsWith('#') ? selected.stroke : '#000000'} onChange={event => patch({ stroke: event.target.value, strokeWidth: selected.strokeWidth || 1 })} /></label>
           </>}
           {(selected.type === 'text' || selected.type === 'vector') && <label>填色<input aria-label="图层填色" type="color" value={selected.fill?.startsWith('#') ? selected.fill : '#20232b'} onChange={event => patch({ fill: event.target.value })} /></label>}
-          {selected.type === 'vector' && <><VectorProperties key={selected.id} layer={selected} onPatch={patch} /><p>保留原始 SVG 路径身份，缩放与导出沿用原文件。</p></>}
+          {selected.type === 'vector' && <><VectorProperties key={selected.id} layer={selected} disabled={busy} onPatch={patch} onPaint={(target, paint) => void act(() => bridge.updateVectorPaint(selected.id, target, paint))} /><p>保留原始 SVG 路径身份，缩放与导出沿用原文件。</p></>}
           {selected.assetId && !['group', 'vector'].includes(selected.type) && !(selected.type === 'text' && selected.metadata?.fontConfirmed === true) && <>
             <label>像素处理<select aria-label="像素处理" value={pixelOperation} onChange={event => setPixelOperation(event.target.value)}><option value="resize">插值调整尺寸</option><option value="crop">裁切</option><option value="pad">填边</option><option value="rotate">旋转像素</option><option value="flip">翻转像素</option><option value="color_key">纯色去底</option><option value="prepare_text">清理原字背景</option></select></label>
             {['resize', 'crop', 'pad'].includes(pixelOperation) && <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8}}>{(['width','height', ...(pixelOperation === 'crop' ? ['x','y'] : [])] as const).map(field => <label key={field}>{field}<input aria-label={`处理 ${field}`} type="number" value={pixelParams[field as 'width'|'height'|'x'|'y']} onChange={event => setPixelParams(current => ({...current, [field]: Number(event.target.value)}))} /></label>)}</div>}
@@ -106,12 +110,12 @@ export function LegacyImagePanels({ mode, onClose, bridge, onError, onResult }: 
       </> : mode === 'versions' ? <>
         <div className="inlineOptions"><button disabled={busy || !doc} onClick={() => void act(() => bridge.undo())}>撤销</button><button disabled={busy || !doc} onClick={() => void act(() => bridge.redo())}>重做</button><button disabled={busy} onClick={() => void act(() => bridge.refresh())}>刷新状态</button></div>
         <p>当前版本 {doc?.revision ?? '—'}。候选接受前不会覆盖主工程。</p>
-        {doc?.schemaVersion===2 && <><p>精确编辑工程支持完整矩阵、独立蒙版、画板和选区。升级会创建副本，保留原快照和历史；生成与聊天继续在原工程使用。</p><button className="ghostButton" disabled={busy} onClick={()=>void act(()=>bridge.migrateProfessional())}>复制为精确编辑工程</button>{!doc.layers.length && <button className="ghostButton" disabled={busy} onClick={()=>void act(()=>bridge.newProfessionalDocument())}>新建空白精确编辑工程</button>}</>}
-        {doc?.schemaVersion===3 && <><p>SVG / PDF 导出保留当前画面外观，允许含位图。原路径、字体和素材保留在原生工程中。</p>{bridge.rawDocument?.metadata?.professionalSource && <button className="ghostButton" disabled={busy} onClick={()=>void act(()=>bridge.openOriginalDocument())}>打开保留的原工程</button>}</>}
+        {doc?.schemaVersion===2 && <><p>精确编辑工程支持完整矩阵、独立蒙版、画板和选区。升级会创建副本，保留原快照和历史；生成与专用模型继续在原工程使用，算法设计助手按服务能力启用。</p><button className="ghostButton" disabled={busy} onClick={()=>void act(()=>bridge.migrateProfessional())}>复制为精确编辑工程</button>{!doc.layers.length && <button className="ghostButton" disabled={busy} onClick={()=>void act(()=>bridge.newProfessionalDocument())}>新建空白精确编辑工程</button>}</>}
+        {doc?.schemaVersion===3 && <><p>SVG / PDF 导出保留当前画面外观，允许含位图。原路径、字体和素材保留在原生工程中。</p><p>{(bridge.capabilities.agent as {available?:boolean;reason?:string}|undefined)?.available ? '算法设计助手已启用：对话模型调用编辑工具，结果先进入候选，接受后应用；不调用图片生成或专用视觉模型。' : (bridge.capabilities.agent as {reason?:string}|undefined)?.reason || '算法设计助手尚未配置，现有工具可直接使用。'}</p>{bridge.rawDocument?.metadata?.professionalSource && <button className="ghostButton" disabled={busy} onClick={()=>void act(()=>bridge.openOriginalDocument())}>打开保留的原工程</button>}</>}
         {bridge.hasDraftConflict && <div role="alert"><p>主工程已有新版本。本地画布草稿已保留，请选择保留方式。</p><div className="inlineOptions"><button disabled={busy} onClick={() => void act(() => bridge.saveDraftAsProject())}>另存本地草稿</button><button disabled={busy} onClick={() => void act(() => bridge.useServerVersion())}>采用服务器版本</button></div></div>}
         {bridge.branches.map(branch => {
-          const job = bridge.jobs.find(job => job.output?.branchDocumentId === branch.id), running = job && ['queued','running'].includes(job.state), partial = job && ['uncertain','failed','cancelled','awaiting_user'].includes(job.state);
-          return <div key={branch.id} style={{ padding: '10px 0', borderTop: '1px solid #e8e8ec' }}><strong>{branch.name}</strong><p>基于版本 {branch.baseRevision} · {branch.layers.length} 图层{running ? ' · 任务仍在执行' : partial ? ' · 任务未完成，已有产物保留' : ''}</p><button className="darkButton" disabled={busy || !!running} onClick={() => void act(() => bridge.acceptCandidate(branch.id))}>{partial ? '接受已有产物' : '接受候选'}</button></div>;
+          const job = bridge.jobs.find(job => job.output?.branchDocumentId === branch.id || job.output?.candidateDocumentId === branch.id), running = job && ['queued','running'].includes(job.state), partial = job && ['uncertain','failed','cancelled','awaiting_user'].includes(job.state), preview = candidatePreviewState(job, branch);
+          return <div key={branch.id} style={{ padding: '10px 0', borderTop: '1px solid #e8e8ec' }}><strong>{branch.name}</strong><p>基于版本 {branch.baseRevision} · {branch.layers.length} 图层{running ? ' · 任务仍在执行' : partial ? ' · 任务未完成，已有产物保留' : ''}</p>{job && craftAgentProjects(job.output).length ? <CandidateResult bridge={bridge} job={job} onError={onError} onViewNativeCandidate={onViewNativeCandidate} /> : <>{preview.message && <p role="status">{preview.message}</p>}<button className="darkButton" disabled={busy || !preview.canAccept} onClick={() => void act(() => bridge.acceptCandidate(branch.id))}>{partial ? '接受已有产物' : '接受候选'}</button></>}</div>;
         })}
         {bridge.jobs.map(job => <div key={job.id} style={{ padding: '8px 0', borderTop: '1px solid #e8e8ec' }}><strong>{job.operation || job.kind}</strong> · {job.state}<p>{job.error || job.stage || '结果已记录'}</p>{job.state === 'uncertain' && <p>提交状态未知，已停止自动重投。</p>}{['queued','running'].includes(job.state) && <button className="ghostButton" disabled={busy} onClick={() => void act(() => bridge.cancelJob(job.id))}>取消任务</button>}</div>)}
         {bridge.revisions.map((revision, index) => <p key={String(revision.revision ?? index)}>版本 {String(revision.revision ?? index)} · {String(revision.createdAt || '')}</p>)}
@@ -130,27 +134,32 @@ export function LegacyImagePanels({ mode, onClose, bridge, onError, onResult }: 
           const job = await bridge.submitOperation(upscaleKind, params, undefined, { layerId: layer.id, mode: upscaleKind === 'generate' ? 'candidate' : 'apply' }); onResult?.(job.id); onClose();
         })}>执行</button></div>
       </> : <>
-        <div className="inlineOptions"><button className={traceMode === 'detail' ? 'on' : ''} onClick={() => setTraceMode('detail')}>保网点 / 线稿</button><button className={traceMode === 'color' ? 'on' : ''} onClick={() => setTraceMode('color')}>彩色描摹</button></div>
-        <p>直接描摹原像素，不预先生成平涂图。保网点模式按亮度描摹黑白线稿，保留小路径、细孔和网点；彩色素材请选择彩色描摹。</p>
-        <div className="dialogFooter"><span>结果是可编辑 SVG 图层</span><button className="darkButton" disabled={busy} onClick={() => void act(async () => { const job = await bridge.submitOperation('trace', traceMode === 'detail' ? { preset: 'monochrome', pathomit: 0, blurradius: 0, ltres: .1, qtres: .1 } : { preset: 'color', pathomit: 0, blurradius: 0 }); onResult?.(job.id); onClose(); })}>执行</button></div>
+        <div className="inlineOptions"><button className={traceMode === 'exact' ? 'on' : ''} onClick={() => setTraceMode('exact')}>原色网点 / 保真</button><button className={traceMode === 'detail' ? 'on' : ''} onClick={() => setTraceMode('detail')}>黑白轮廓</button><button className={traceMode === 'color' ? 'on' : ''} onClick={() => setTraceMode('color')}>彩色描摹</button></div>
+        <p>{traceMode === 'exact' ? '保留原色、透明度与像素边界，不删小点或细孔；放大后保留像素的阶梯边界。颜色复杂的照片会产生较大文件。' : traceMode === 'detail' ? '按亮度转换黑白轮廓并拟合曲线，保留小路径和细孔；会改变原始颜色。' : '彩色描摹会进行颜色与曲线近似；需要保留网点原色与透明度时请选择保真模式。'}直接处理原像素，不预先生成平涂图。</p>
+        <div className="dialogFooter"><span>结果是 SVG 图层，可在图层窗口改色</span><button className="darkButton" disabled={busy} onClick={() => void act(async () => { const job = await bridge.submitOperation('trace', traceMode === 'exact' ? { preset: 'exact' } : traceMode === 'detail' ? { preset: 'monochrome', pathomit: 0, blurradius: 0, ltres: .1, qtres: .1 } : { preset: 'color', pathomit: 0, blurradius: 0 }); onResult?.(job.id); onClose(); })}>执行</button></div>
       </>}
       {busy && <p role="status"><Loader2 size={13} className="spin" /> 保存中…</p>}
     </div>
   </div>;
 }
 
-export function CandidateResult({ bridge, job, onError }: { bridge: Bridge; job: Bridge['jobs'][number]; onError: (message: string) => void }) {
+export function CandidateResult({ bridge, job, onError, onViewVersions, onViewNativeCandidate }: { bridge: Bridge; job: Bridge['jobs'][number]; onError: (message: string) => void; onViewVersions?: () => void; onViewNativeCandidate?: (branchId: string, projectId?: string) => void }) {
+  const [nativeEvidence, setNativeEvidence] = useState('');
   const branchId = String(job.output?.branchDocumentId || job.output?.candidateDocumentId || '');
   const branch = bridge.branches.find(branch => branch.id === branchId);
-  const assets = (Array.isArray(job.output?.assetIds) ? job.output.assetIds : job.output?.assetId ? [job.output.assetId] : branch?.layers.filter(layer => layer.visible && layer.assetId && layer.type !== 'mask').map(layer => layer.assetId).slice(-4) || []) as string[];
+  const preview = candidatePreviewState(job, branch), nativeProjects = craftAgentProjects(job.output);
+  const assets = nativeProjects.length && branch?.layers.length === 0 ? [] : preview.assets;
+  const nativeReady = !nativeProjects.length || nativeEvidence === craftNativeEvidenceKey(nativeProjects);
   return <div className="msgAssistant"><div className="msgKind">{job.kind === 'agent' ? 'Agent 任务' : '图片结果'} · {job.state === 'complete' ? branchId ? '候选预览' : '完成' : job.state}</div>
     {job.error && <p className="msgError">{job.error}</p>}
+    {preview.message && <p role="status">{preview.message}{onViewVersions && preview.status !== 'empty' && <button type="button" className="ghostButton" onClick={onViewVersions}>查看版本</button>}</p>}
     {assets.length > 0 && <div className="msgImages">{assets.map(id => <span className="msgImageWrap" key={id}>
       {/* eslint-disable-next-line @next/next/no-img-element -- Show immutable source pixels without image resampling. */}
       <img src={assetUrl(id)} alt="候选结果" /><button type="button" aria-label="download" onClick={() => void (async () => {
         try { const response = await fetch(assetUrl(id)); if (!response.ok) throw new Error('候选文件暂不可读取'); const blob = await response.blob(), link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = `图片候选.${blob.type === 'image/svg+xml' ? 'svg' : 'png'}`; link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 1000); }
         catch (error) { onError((error as Error).message); }
       })()}><Download size={12} /></button></span>)}</div>}
-    {branchId && job.state === 'complete' && bridge.branches.some(branch => branch.id === branchId) && <button className="darkButton" onClick={() => void bridge.acceptCandidate(branchId).catch(error => onError(error.message))}>接受候选</button>}
+    {nativeProjects.length > 0 && branchId && <CraftCandidateSummary branchId={branchId} projects={nativeProjects} onOpen={onViewNativeCandidate} onReady={setNativeEvidence} />}
+    {branchId && job.state === 'complete' && branch && <button className="darkButton" disabled={!preview.canAccept || !nativeReady} onClick={() => void bridge.acceptCandidate(branchId).catch(error => onError(error.message))}>接受候选</button>}
   </div>;
 }

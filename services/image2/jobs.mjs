@@ -2,14 +2,16 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as fontkit from 'fontkit';
-import { fail, ImageError, digest, clone } from './domain.mjs';
+import { fail, ImageError, digest, clone,applyCommands } from './domain.mjs';
 import { registry, executeOperation, inspectAsset, capabilities as processorCapabilities } from './processors.mjs';
 import { executeV3Operation, validateV3Operation, V3_CPU_OPERATIONS } from './processors-v3.mjs';
 import { exportV3Document, importV3Project, validateV3Export, readProjectArchive } from './exports-v3.mjs';
 import { resolveNodeResource, createNodeResolver } from './render-node.mjs';
 import { configFromEnv } from './providers.mjs';
 import { ImageAgent, agentConfig } from './agent.mjs';
+import {allowedAgentOperations,buildAgentTools,assertAgentProtectedLayers} from './agent-control.mjs';
 import { exportDocument, importProjectBundle, scopedExportDocument, exportCanvasBounds } from './exports.mjs';
+import { freezeCraftPackage } from './craft-package.mjs';
 
 export class ImageRunner {
   constructor({ store, config = {}, fetchImpl = fetch, processor = executeOperation }) {
@@ -22,7 +24,8 @@ export class ImageRunner {
     if (this.capabilityCache && Date.now() - this.capabilityCache.at < 15000) return this.capabilityCache.value;
     const c = await processorCapabilities(this.config, this.fetchImpl);
     const value = { ...c, operations: c.operations.map(op => ({ ...op, name: op.operation, available: op.available })), agent: { available: Boolean(this.config.agent.baseUrl && this.config.agent.apiKey), model: this.config.agent.models[0],models:[...new Set((this.config.agent.upstreams||[{models:this.config.agent.models}]).flatMap(upstream=>upstream.models||[]))], maxRounds: 6, maxGenerations: this.config.agent.maxGenerations }, ocr: c.providers.ocr, defaultFont: { available: existsSync(this.defaultFontPath()), family: 'Noto Sans CJK SC' }, limits: { bodyBytes: 96 * 1024 * 1024, inputPixels: 40000000, restorePixels: 16000000, imageCount: 4 } };
-    value.professional = {schemaVersion:3,operations:V3_CPU_OPERATIONS.map(operation=>({operation,executionClass:'cpu',available:true})),agent:{available:false},models:{available:false},maskedPixelOperations:{available:false,requiresExplicitBake:true},exports:['png','pdf','svg','project'],svgExportMode:'appearance-proxy'};
+    const professionalOperations=allowedAgentOperations({schemaVersion:3}),agentAvailable=Boolean(this.config.agent.baseUrl&&this.config.agent.apiKey);
+    value.professional = {schemaVersion:3,operations:professionalOperations.map(operation=>({operation,executionClass:'cpu',available:true})),agent:{available:agentAvailable,reason:agentAvailable?'configured_cpu_control_only':'agent_unavailable',executionClasses:['cpu'],model:value.agent.model,models:value.agent.models,allowedOperations:professionalOperations,tools:buildAgentTools({schemaVersion:3}).map(tool=>tool.function.name)},models:{available:false},maskedPixelOperations:{available:false,requiresExplicitBake:true},exports:['png','pdf','svg','project'],svgExportMode:'appearance-proxy'};
     this.capabilityCache = { at: Date.now(), value }; return value;
   }
   defaultFontPath() { return this.config.defaultFontPath || fileURLToPath(new URL('./fonts/NotoSansCJKsc-Regular.otf', import.meta.url)); }
@@ -88,7 +91,7 @@ export class ImageRunner {
   }
   async submitRun(owner, conversationId, body) {
     const conversation = this.store.getConversation(conversationId, owner);
-    fail(this.store.getDocument(conversation.documentId,owner).schemaVersion!==3,'专业工程的后台Agent尚未接通；未提交聊天模型任务',422,'V3_OPERATION_UNAVAILABLE');
+    if(this.store.getDocument(conversation.documentId,owner).schemaVersion===3)fail(this.config.agent.baseUrl&&this.config.agent.apiKey,'专业工程聊天模型尚未配置；未提交模型任务',422,'V3_OPERATION_UNAVAILABLE');
     const result = this.store.transaction(() => {
     const run = this.store.createRun(conversationId, owner, { text: body.text, references: body.references || [], idempotencyKey: body.idempotencyKey, ...(body.model===undefined?{}:{model:body.model}) });
     if (run.jobId) return { run, job: this.store.getJob(run.jobId, owner) };
@@ -96,6 +99,7 @@ export class ImageRunner {
     const doc = this.store.getDocument(conversation.documentId, owner);
     this.store.addMessage(conversationId, owner, { role: 'user', text: body.text, references: body.references || [], idempotencyKey: `run-user:${run.id}` });
     const branch = this.store.createBranch(doc.id, owner, { baseRevision: doc.revision, metadata: { runId: run.id } });
+    this.store.craftService?.ensureAgentSnapshot(branch.id,owner);
     const job = this.store.createJob(doc.id, owner, { kind: 'agent', idempotencyKey: `run:${run.id}`, input: { runId: run.id, text: body.text, references: body.references || [],...(body.model===undefined?{}:{model:body.model}) } });
     this.store.updateJob(job.id, { output: { branchDocumentId: branch.id } }, { snapshot: clone(doc), branchDocumentId: branch.id,conversationMessageIds:this.store.listMessages(conversationId,owner).map(message=>message.id) });
     const saved = this.store.updateRun(run.id, { jobId: job.id, branchDocumentId: branch.id });
@@ -111,7 +115,7 @@ export class ImageRunner {
     if (!this.store.jobRecord(job.id).private.snapshot) {
       fail(body.baseRevision === doc.revision, '工程已修改，请刷新后导出', 409, 'revision_conflict');
       if (body.format !== 'project') { if(doc.schemaVersion===3)validateV3Export(doc,body);else scopedExportDocument(doc, body); }
-      this.store.updateJob(job.id, {}, { snapshot: clone(doc), exportRevisions: this.store.listRevisions(doc.id, owner).filter(revision => revision.revision <= doc.revision) });
+      this.store.updateJob(job.id, {}, { snapshot: clone(doc), exportRevisions: this.store.listRevisions(doc.id, owner).filter(revision => revision.revision <= doc.revision),exportCraft:body.format==='project'?freezeCraftPackage(this.store,doc.id,owner)||null:null });
     }
     return this.store.getJob(job.id, owner);
     });
@@ -136,7 +140,7 @@ export class ImageRunner {
   cancel(owner, id) {
     const job = this.store.getJob(id, owner);
     if (['complete','failed','uncertain','cancelled'].includes(job.state)) return job;
-    const cancelled = this.store.updateJob(id, { ...(job.state === 'queued' ? { state: 'cancelled' } : {}), stage: 'cancel_requested' }, { cancelRequested: true });
+    const cancelled = this.store.updateJob(id, { ...(['queued','awaiting_user'].includes(job.state) ? { state: 'cancelled' } : {}), stage: 'cancel_requested' }, { cancelRequested: true });
     const runId = this.store.jobRecord(id).private.input.runId;
     if (runId) this.store.updateRun(runId, { state: 'cancelled' });
     return cancelled;
@@ -195,6 +199,7 @@ export class ImageRunner {
     return ctx;
   }
   async executeInline(id, branchId, owner, request, namespace) {
+    if(this.cancelled(id))throw new ImageError('任务已取消',409,'CANCELLED');
     const state = this.store.jobRecord(id).private, prior = state.toolStates?.[namespace];
     const current = this.store.getDocument(branchId, owner);
     const doc = prior?.sourceRevision === undefined ? current : this.store.getRevision(branchId, owner, prior.sourceRevision);
@@ -208,6 +213,8 @@ export class ImageRunner {
     const result = await this.process(request, ctx);
     if (this.cancelled(id)) throw new ImageError('任务已取消', 409, 'CANCELLED');
     const latest = this.store.getDocument(branchId, owner);
+    if(result.commands?.length){const proposal=applyCommands({...doc,assetIds:latest.assetIds},result.commands);assertAgentProtectedLayers(doc,proposal);}
+    if(this.cancelled(id))throw new ImageError('任务已取消',409,'CANCELLED');
     const applied = result.commands?.length ? this.store.command(branchId, owner, { baseRevision: doc.revision, commandId: `${id}:${namespace}`, commands: result.commands }) : latest;
     return { ...result.output, branchDocumentId: branchId, revision: applied.revision, needsReview: result.needsReview };
   }
@@ -216,9 +223,9 @@ export class ImageRunner {
     if (checkpoint) { const { asset } = this.store.getAsset(checkpoint, owner); return { assetId: asset.id, url: asset.url, mime: asset.mime, filename: asset.name }; }
     const prior=this.store.jobRecord(id).private.toolStates?.[namespace],current=this.store.getDocument(documentId,owner),doc=prior?.exportSourceRevision===undefined?current:this.store.getRevision(documentId,owner,prior.exportSourceRevision);
     const scope=prior?.exportScope||{layerIds:options.layerIds,bounds:options.bounds||(doc.schemaVersion===3?undefined:exportCanvasBounds(doc,options.layerIds))};
-    if(prior?.exportSourceRevision===undefined){const live=this.store.jobRecord(id).private;this.store.updateJob(id,{}, {toolStates:{...live.toolStates,[namespace]:{...prior,exportSourceRevision:doc.revision,exportScope:scope}}});}
+    if(prior?.exportSourceRevision===undefined){this.store.transaction(()=>{const live=this.store.jobRecord(id).private;this.store.updateJob(id,{}, {toolStates:{...live.toolStates,[namespace]:{...prior,exportSourceRevision:doc.revision,exportScope:scope,exportCraft:format==='project'?freezeCraftPackage(this.store,documentId,owner)||null:null}}});});}
     const ctx = this.context(id, doc, owner, namespace);
-    const exported = await this.exportArtifact(format, doc, { ...scope,getAsset: ctx.getAsset, revisions: this.store.listRevisions(documentId, owner).filter(revision=>revision.revision<=doc.revision) });
+    const exported = await this.exportArtifact(format, doc, { ...scope,getAsset: ctx.getAsset, revisions: this.store.listRevisions(documentId, owner).filter(revision=>revision.revision<=doc.revision),craft:this.store.jobRecord(id).private.toolStates?.[namespace]?.exportCraft||undefined });
     const asset = await ctx.saveAsset('export', { name: exported.name, mime: exported.mime, metadata: { role: 'export', format, sourceDocumentId: doc.id, sourceRevision: doc.revision,...(format==='project'?{}:scope) } }, exported.bytes);
     return { assetId: asset.id, url: asset.url, mime: asset.mime, filename: asset.name };
   }
@@ -228,7 +235,7 @@ export class ImageRunner {
     try {
       if (this.cancelled(id)) throw new ImageError('任务已取消', 409, 'CANCELLED');
       if (record.job.kind === 'agent') {
-        fail(record.private.snapshot?.schemaVersion!==3,'专业工程的后台Agent尚未接通；未提交聊天模型任务',422,'V3_OPERATION_UNAVAILABLE');
+        if(record.private.snapshot?.schemaVersion===3)fail(this.config.agent.baseUrl&&this.config.agent.apiKey,'专业工程聊天模型尚未配置；未提交模型任务',422,'V3_OPERATION_UNAVAILABLE');
         const result = await this.agent.execute(id, record);
         this.store.updateJob(id, { state: result.state, progress: 1, stage: 'agent_complete', output: result.output }); return;
       }
@@ -237,7 +244,7 @@ export class ImageRunner {
         let asset;
         if (cached) asset = this.store.getAsset(cached, record.owner).asset;
         else {
-          const ctx = this.context(id, record.private.snapshot, record.owner), scope = { layerIds: record.private.input.layerIds, bounds: record.private.input.bounds }, exported = await this.exportArtifact(record.private.input.format, record.private.snapshot, { ...scope, getAsset: ctx.getAsset, revisions: record.private.exportRevisions || this.store.listRevisions(record.job.documentId, record.owner).filter(revision => revision.revision <= record.private.snapshot.revision) });
+          const ctx = this.context(id, record.private.snapshot, record.owner), scope = { layerIds: record.private.input.layerIds, bounds: record.private.input.bounds }, exported = await this.exportArtifact(record.private.input.format, record.private.snapshot, { ...scope, getAsset: ctx.getAsset, revisions: record.private.exportRevisions || this.store.listRevisions(record.job.documentId, record.owner).filter(revision => revision.revision <= record.private.snapshot.revision),craft:record.private.exportCraft||undefined });
           asset = await ctx.saveAsset('export', { name: exported.name, mime: exported.mime, metadata: { role: 'export', format: record.private.input.format, sourceDocumentId: record.private.snapshot.id, sourceRevision: record.private.snapshot.revision, ...(record.private.input.format !== 'project' ? scope : {}) } }, exported.bytes);
         }
         if (this.cancelled(id)) throw new ImageError('任务已取消，已生成文件仍保留', 409, 'CANCELLED');

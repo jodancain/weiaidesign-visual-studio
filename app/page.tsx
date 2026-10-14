@@ -61,6 +61,9 @@ import {
 import "tldraw/tldraw.css";
 import { designShapeUtils } from '../components/image2/DesignShapes';
 import { professionalCanvasComponents, ProfessionalCanvasContext } from '../components/image2/ProfessionalCanvas';
+import { LegacyImageAdjustments } from '../components/image2/LegacyImageAdjustments';
+import { CraftToolsDialog } from '../components/image2/CraftToolsDialog';
+import { elementPreviewSource } from '../lib/image2/element-preview';
 import { LegacyImagePanels, CandidateResult, type LegacyImagePanel } from '../components/image2/LegacyImagePanels';
 import { useLegacyImage2 } from '../lib/image2/useLegacyImage2';
 import { assetUrl, Image2ApiError } from '../lib/image2/client';
@@ -951,6 +954,9 @@ export default function Home() {
   const [materialSwap, setMaterialSwap] = useState(false);
   const [materialNote, setMaterialNote] = useState("");
   const [exportMenu, setExportMenu] = useState(false);
+  const [craftToolsOpen, setCraftToolsOpen] = useState(false);
+  const [craftReview, setCraftReview] = useState<{ branchId: string; projectId?: string } | null>(null);
+  const viewNativeCandidate = useCallback((branchId: string, projectId?: string) => { setImagePanel(null); setCraftReview({ branchId, projectId }); setCraftToolsOpen(true); }, [setImagePanel]);
   const [projects, setProjects] = useState<ProjectMeta[]>(() => defaultProjectList());
   const [activeProjectId, setActiveProjectId] = useState(DEFAULT_PROJECT_ID);
   const [projectName, setProjectName] = useState("Untitled");
@@ -980,6 +986,7 @@ export default function Home() {
   const editorRef = useRef<Editor | null>(null);
   const historyQueueRef = useRef(Promise.resolve());
   const image2 = useLegacyImage2({ editor, projectId: activeProjectId, projectName, onError: setError });
+  const elementPreviewSrc = elementPreviewSource(image2.document, elementDialog);
   const image2Running = image2.jobs.some(job => job.state === 'queued' || job.state === 'running');
   const currentSyncStatus = image2.document
     ? image2.error || image2.hasDraftConflict ? 'error' : image2.busy || image2.pendingCount ? 'saving' : 'synced'
@@ -1755,8 +1762,8 @@ export default function Home() {
     const job = await image2.waitJob(await image2.submitOperation('matting', {}, src));
     return { urls: resultUrls(job), degraded: false as const };
   }, [image2, resultUrls]);
-  const doGpuSegment = useCallback(async (src: string) => {
-    const job = await image2.waitJob(await image2.submitOperation('segment', {}, src));
+  const doGpuSegment = useCallback(async (src: string, layerId?: string) => {
+    const job = await image2.waitJob(await image2.submitOperation('segment', {}, src, { layerId }));
     const ids = Array.isArray(job.output?.maskAssetIds) ? job.output.maskAssetIds : [];
     const urls = ids.map(id => assetUrl(String(id)));
     return { urls, count: urls.length, degraded: false as const };
@@ -1844,8 +1851,8 @@ export default function Home() {
     return resultUrls(job)[0] || src;
   }, [image2, maskColor, maskDialog.layerId, maskDialog.src, maskOperation, resultUrls]);
   /* ---------- 可视化拆层：矢量化按颜色分组 → 每层独立可拖拽 shape ---------- */
-  const splitSelectedToLayers = useCallback(async (src: string) => {
-    const job = await image2.waitJob(await image2.submitOperation('restore_layers', {}, src, { mode: 'candidate' }));
+  const splitSelectedToLayers = useCallback(async (src: string, layerId?: string) => {
+    const job = await image2.waitJob(await image2.submitOperation('restore_layers', {}, src, { layerId, mode: 'candidate' }));
     return Number(job.output?.layerCount || 0);
   }, [image2]);
   const exportSvgFile = useCallback(async () => { try { const value = await image2.export('svg'); saveBlob(value.blob, value.name); return true; } catch (error) { setError((error as Error).message); return false; } }, [image2]);
@@ -2249,6 +2256,9 @@ export default function Home() {
                   </button>
                   <button type="button" className="exportMenuItem danger" onClick={deleteActiveProject}>
                     <X size={14} /> 删除当前项目
+                  </button>
+                  <button type="button" className="exportMenuItem" onClick={() => { setExportMenu(false); setCraftReview(null); setCraftToolsOpen(true); }}>
+                    <LayoutGrid size={14} /> 专业工具
                   </button>
                   <div className="exportMenuDivider" />
                   <div className="exportMenuSection">云同步</div>
@@ -2683,7 +2693,7 @@ export default function Home() {
                 );
               })}
               {image2.messages.map(message => <div key={message.id} className={message.role === 'user' ? 'msgUser' : 'msgAssistant'}>{message.role !== 'user' && <div className="msgKind"><Sparkles size={12} /> Agent</div>}{renderAssistantText(String(message.text || message.content || ''))}</div>)}
-              {image2.jobs.filter(job => job.output?.branchDocumentId || job.state === 'uncertain' || job.state === 'failed').map(job => <CandidateResult key={job.id} job={job} bridge={image2} onError={setError} />)}
+              {image2.jobs.filter(job => job.output?.branchDocumentId || job.state === 'uncertain' || job.state === 'failed').map(job => <CandidateResult key={job.id} job={job} bridge={image2} onError={setError} onViewVersions={() => setImagePanel('versions')} onViewNativeCandidate={viewNativeCandidate} />)}
               {agentBusy || image2Running ? (
                 <div className="msgAssistant msgAction">
                   <div className="msgKind">
@@ -3429,10 +3439,10 @@ export default function Home() {
                 <X size={16} />
               </button>
             </div>
-            {elementDialog.src ? (
+            {elementPreviewSrc ? (
               <div className="dialogPreview">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={elementDialog.src} alt="selected" />
+                <img src={elementPreviewSrc} alt="selected" />
               </div>
             ) : null}
             {elementOp !== "layers" && elementOp !== "smart-split" ? (
@@ -3475,14 +3485,16 @@ export default function Home() {
                 />
               </label>
             ) : null}
-            {elementOp !== 'layers' && elementOp !== 'smart-split' && <button className="ghostButton" type="button" onClick={() => {
-              const src = elementDialog.src; if (!src) return;
+            {elementOp !== 'layers' && elementOp !== 'smart-split' && <button className="ghostButton" type="button" disabled={!elementPreviewSrc} onClick={() => {
+              const src = elementPreviewSrc; if (!src) return;
               setElementDialog({open: false}); setMaskMode('edit'); setMaskOperation(elementOp === 'recolor' ? 'recolor' : elementOp === 'remove' ? 'erase' : 'inpaint');
               const colour = elementColours[elementValue.trim()] || elementValue.trim();
               if (/^#[0-9a-f]{6}$/i.test(colour)) setMaskColor(colour);
               setMaskInstruction(elementValue); setMaskDialog({open: true, src, layerId: elementDialog.layerId});
               setTimeout(() => void initMaskEditor(src).catch(error => setError(error.message)), 60);
             }}>涂抹修改 / 保护范围</button>}
+            {!elementPreviewSrc && <p role="status">当前目标图层或素材暂不可用，请重新选择当前图层。</p>}
+            {elementPreviewSrc && <LegacyImageAdjustments bridge={image2} src={elementPreviewSrc} layerId={elementDialog.layerId} onError={setError} />}
             <div className="dialogFooter">
               <span>
                 {elementOp === "layers"
@@ -3495,19 +3507,19 @@ export default function Home() {
                 className="darkButton"
                 type="button"
                 disabled={
-                  elementOp === "layers" || elementOp === "smart-split"
+                  !elementPreviewSrc || (elementOp === "layers" || elementOp === "smart-split"
                     ? false
-                    : elementOp !== "remove" && !elementValue.trim()
+                    : elementOp !== "remove" && !elementValue.trim())
                 }
                 onClick={() => {
-                  const src = elementDialog.src;
+                  const src = elementPreviewSrc;
                   if (!src) return;
                   setElementDialog({ open: false });
                   if (elementOp === "smart-split") {
                     void runAction("智能拆层", async () => {
                       pushMessage({ role: "user", text: "智能拆层 / 语义分割" });
                       try {
-                        const result = await doGpuSegment(src);
+                        const result = await doGpuSegment(src, elementDialog.layerId);
                         pushMessage({
                           role: "assistant",
                           kind: "智能拆层",
@@ -3532,7 +3544,7 @@ export default function Home() {
                   if (elementOp === "layers") {
                     void runAction("拆分图层", async () => {
                       pushMessage({ role: "user", text: "拆分图层" });
-                      const layerCount = await splitSelectedToLayers(src);
+                      const layerCount = await splitSelectedToLayers(src, elementDialog.layerId);
                       pushMessage({
                         role: "assistant",
                         kind: "拆分图层",
@@ -3675,7 +3687,8 @@ export default function Home() {
         </div>
       ) : null}
 
-      <LegacyImagePanels mode={imagePanel} onClose={() => { if (imagePanelEpoch.current === renderedPanelEpoch) setImagePanel(null); }} bridge={image2} onError={setError} />
+      <LegacyImagePanels mode={imagePanel} onClose={() => { if (imagePanelEpoch.current === renderedPanelEpoch) setImagePanel(null); }} bridge={image2} onError={setError} onViewNativeCandidate={viewNativeCandidate} />
+      <CraftToolsDialog key={`${activeProjectId}:${craftReview?.branchId || image2.rawDocument?.id || 'new'}:${craftReview?.projectId || ''}`} open={craftToolsOpen} onClose={() => setCraftToolsOpen(false)} bridge={image2} documentIdOverride={craftReview?.branchId} initialProjectId={craftReview?.projectId} reviewOnly={!!craftReview} />
       {/* toasts */}
       {error ? (
         <div className="errorToast" role="alert">

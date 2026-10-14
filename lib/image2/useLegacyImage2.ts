@@ -6,12 +6,15 @@ import { ImageCommandQueue, applyDraft } from './queue';
 import { ImageSubmissionManager } from './submissions';
 import { image2Storage, submissionStorage, cachedDocument } from './storage';
 import { capability } from './geometry';
-import { legacyDraftStorage, createLegacyCanvasDraft, classifyLegacyDraft, type LegacyCanvasDraft } from './legacy-drafts';
+import { legacyDraftStorage, createLegacyCanvasDraft, classifyLegacyDraft, readLegacyDocumentDraft, removeLegacyDocumentDraft, type LegacyCanvasDraft } from './legacy-drafts';
 import { LegacyDocumentMutationManager, getMutationsStorage, LEGACY_MUTATION_PREFIX } from './legacy-mutations';
 import { legacyColors, legacyFontSizes, legacyFontUrls, legacyFontVersion, layerShapeId, plainRichText, projectLegacyDocument, shapeFingerprint } from './legacy-projection';
 import { ProfessionalMigrationManager, MIGRATION_PREFIX } from './professional-migration';
 import { asProfessional, applyProfessionalCommands, worldBounds, deriveWorldDelta, duplicateProfessionalLayerCommands, groupProfessionalLayerCommands, ungroupProfessionalLayerCommands, worldMatrix, multiplyMatrix } from './professional-model';
-import { professionalLegacyView, projectProfessionalDocument } from './professional-projection';
+import { professionalLegacyView, projectProfessionalDocument, migratedProjectionResidueIds } from './professional-projection';
+import { professionalSvgContent, svgPaintPatch } from './professional-svg-styles';
+import { imageCapabilitiesForDocument, requireImageAgent } from './agent-capabilities';
+import { candidatePreviewState } from './candidate-preview';
 import { canvasParentLayerId, canvasShapesParentFirst } from './native-shape-order';
 import { createImageFontLoader, ImageFontLoadError } from './font-loader';
 import { createImageFontSession, type ImageFontSession, type ImageFontLoadState } from './font-session';
@@ -42,6 +45,7 @@ export function useLegacyImage2({ editor, projectId, projectName, onError }: Opt
   const canonical = useRef<ImageDocument | null>(null), currentAssets = useRef<ImageAsset[]>([]), conversation = useRef<Conversation | null>(null), epoch = useRef(0), projecting = useRef(false), dirty = useRef(false);
   const fingerprints = useRef(new Map<string, string>()), aliases = useRef(new Map<string, string>()), fontCache = useRef(new Map<string, ImageAsset>()), syncPromise = useRef<Promise<ImageDocument> | null>(null);
   const creatingDocument = useRef<Promise<ImageDocument> | null>(null);
+  const commandEdits = useRef<Promise<void>>(Promise.resolve());
   const [fontStates, setFontStates] = useState<Record<string, ImageFontLoadState>>({});
   const fontSession = useRef<ImageFontSession<FontFace> | null>(null);
   if (!fontSession.current) fontSession.current = createImageFontSession({
@@ -67,10 +71,10 @@ export function useLegacyImage2({ editor, projectId, projectName, onError }: Opt
   if (!submissions.current) submissions.current = new ImageSubmissionManager({ ...submissionStorage, list: async () => (await submissionStorage.list()).filter(attempt => !attempt.intent.startsWith(LEGACY_MUTATION_PREFIX) && !attempt.intent.startsWith(MIGRATION_PREFIX)) }, (path, body) => image2Api(path, body));
   if (!mutations.current) mutations.current = new LegacyDocumentMutationManager(getMutationsStorage(), (path, body) => image2Api(path, body));
   const report = (err: unknown) => { const text = err instanceof Error ? err.message : String(err); setError(text); state.current.onError?.(text); };
-  const project = (next: ImageDocument) => {
+  const project = (next: ImageDocument, reconcileLegacyProjection = false) => {
     if (!state.current.editor) return;
     projecting.current = true;
-    try { state.current.editor.store.mergeRemoteChanges(() => next.schemaVersion === 3 ? projectProfessionalDocument(state.current.editor!, next, fingerprints.current, contentPayloads.current) : projectLegacyDocument(state.current.editor!, next, fingerprints.current)); }
+    try { state.current.editor.store.mergeRemoteChanges(() => next.schemaVersion === 3 ? projectProfessionalDocument(state.current.editor!, next, fingerprints.current, contentPayloads.current, { reconcileLegacyProjection: reconcileLegacyProjection && !dirty.current && !canvasDraft.current }) : projectLegacyDocument(state.current.editor!, next, fingerprints.current)); }
     finally { projecting.current = false; }
     for (const layer of viewDocument(next).layers) if (layer.assetId) {
       aliases.current.set(assetUrl(layer.assetId), layer.id);
@@ -81,12 +85,12 @@ export function useLegacyImage2({ editor, projectId, projectName, onError }: Opt
     }
     setSelectedId(state.current.editor.getOnlySelectedShape()?.meta.image2LayerId as string | undefined);
   };
-  const accept = (next: ImageDocument, render = true) => {
+  const accept = (next: ImageDocument, render = true, reconcileLegacyProjection = false) => {
     if (canonical.current && canonical.current.id !== next.id) return;
     if (canonical.current && canonical.current.revision > next.revision) return;
     canonical.current = next; setRawDocument(next); setDocument(viewDocument(next)); setProfessionalDocument(next.schemaVersion === 3 ? next : null); void image2Storage.saveDocument(next);
     if (next.schemaVersion === 3) void loadContents(next).catch(report);
-    if (render) project(next);
+    if (render) project(next, reconcileLegacyProjection);
   };
   async function loadContents(next: ImageDocument) {
     const captured = scope(); let changed = false;
@@ -138,7 +142,8 @@ export function useLegacyImage2({ editor, projectId, projectName, onError }: Opt
     fontSession.current!.bind(next.id);
     canonical.current = next; dirty.current = false; aliases.current.clear(); fingerprints.current.clear(); fontCache.current.clear(); contentPayloads.current = {}; loadedContents.current.clear();
     localStorage.setItem(mapKey(projectId), next.id); setNeedsImport(false);
-    let draft = await legacyDraftStorage.read(projectId); assertScope({ ...captured, documentId: undefined });
+    let draft = await readLegacyDocumentDraft(legacyDraftStorage, projectId, next.id); assertScope({ ...captured, documentId: undefined });
+    canvasDraft.current = draft;
     const waiting = await queue.current!.pending(next.id);
     assertScope({ ...captured, documentId: next.id });
     let queueConflict = waiting.some(batch => batch.state === 'blocked');
@@ -147,7 +152,7 @@ export function useLegacyImage2({ editor, projectId, projectName, onError }: Opt
     assertScope({ ...captured, documentId: next.id });
     const live = canonical.current!;
     if (live.schemaVersion === 3) await loadContents(live);
-    accept(live);
+    accept(live, true, !draft && !queueConflict && !waiting.length);
     dirty.current = state.current.editor!.getCurrentPageShapes().some(shape => !live.layers.some(layer => layerShapeId(layer) === shape.id));
     canvasDraft.current = draft; draftConflict.current = false; setHasDraftConflict(false);
     if (!draft && queueConflict) {
@@ -163,7 +168,8 @@ export function useLegacyImage2({ editor, projectId, projectName, onError }: Opt
       projecting.current = true; try { loadSnapshot(state.current.editor!.store, { document: draft.snapshot } as Parameters<typeof loadSnapshot>[1]); } finally { projecting.current = false; }
       dirty.current = true;
       const disposition = classifyLegacyDraft(draft, live);
-      if (queueConflict || (disposition === 'revision_conflict' && !waiting.length)) { draftConflict.current = true; setHasDraftConflict(true); report(new Error('服务器已有新版本；原画布草稿已保留，请在版本窗口另存草稿或采用服务器版本')); }
+      const migratedResidue = live.schemaVersion === 3 && migratedProjectionResidueIds(live, state.current.editor!.getCurrentPageShapes()).length > 0;
+      if (queueConflict || migratedResidue || (disposition === 'revision_conflict' && !waiting.length)) { draftConflict.current = true; setHasDraftConflict(true); report(new Error(migratedResidue ? '本地草稿包含升级前对象，已完整保留；请在版本窗口另存草稿或采用服务器版本，避免覆盖当前修改' : '服务器已有新版本；原画布草稿已保留，请在版本窗口另存草稿或采用服务器版本')); }
     }
     await submissions.current!.recover(next.id, value => { assertScope({ ...captured, documentId: next.id }); const job = (value as { job?: ImageJob }).job; if (job) setJobs(prev => [job, ...prev.filter(item => item.id !== job.id)]); });
     assertScope({ ...captured, documentId: next.id });
@@ -176,7 +182,7 @@ export function useLegacyImage2({ editor, projectId, projectName, onError }: Opt
   useEffect(() => {
     if (!editor) return;
     clearFonts();
-    const generation = ++epoch.current; canonical.current = null; conversation.current = null; syncPromise.current = null; creatingDocument.current = null;
+    const generation = ++epoch.current; canonical.current = null; conversation.current = null; syncPromise.current = null; creatingDocument.current = null; commandEdits.current = Promise.resolve();
     queueMicrotask(() => { if (generation === epoch.current) { setDocument(null); setRawDocument(null); setProfessionalDocument(null); setAssets([]); setJobs([]); setBranches([]); setMessages([]); setRevisions([]); setNeedsImport(false); setHasDraftConflict(false); } });
     dirty.current = false; canvasDraft.current = undefined; draftConflict.current = false; fingerprints.current.clear(); aliases.current.clear();
     void (async () => {
@@ -344,13 +350,35 @@ export function useLegacyImage2({ editor, projectId, projectName, onError }: Opt
     }
     return commands;
   }
-  async function contentForLegacyLayer(layer: ImageLayer) {
+  async function contentForLegacyLayer(layer: ImageLayer, canvasSource?: { shapeId: string; shapeType: string; documentId: unknown; layerId: unknown }) {
     if (layer.type === 'group') return { commands: [] as DocumentCommand[], contentId: undefined, bounds: {x:0,y:0,width:layer.width,height:layer.height} };
-    const source = currentAssets.current.find(asset => asset.id === layer.assetId);
+    const captured = scope(), live = canonical.current!;
+    if (layer.contentId && live.contentAssets?.some(content => content.id === layer.contentId && !['raster','tiles'].includes(content.kind)) && !contentPayloads.current[layer.contentId]) { await loadContents(live); assertScope(captured); }
+    const active = layer.contentId ? contentPayloads.current[layer.contentId] : undefined;
+    let svg: ReturnType<typeof professionalSvgContent> | undefined;
+    try { svg = layer.type === 'vector' ? professionalSvgContent(layer, active, canonical.current!.assetIds) : undefined; }
+    catch (err) {
+      if (process.env.NODE_ENV !== 'production') {
+        const descriptor = live.contentAssets?.find(content => content.id === layer.contentId);
+        console.error('[image2:svg-reference]', JSON.stringify({ documentId: live.id, revision: live.revision, canvasSource, layerId: layer.id, contentId: layer.contentId,
+          layerAssetId: layer.assetId, layerAssetRegistered: Boolean(layer.assetId && live.assetIds.includes(layer.assetId)), descriptor,
+          descriptorUsedBy: live.layers.filter(item => item.contentId === layer.contentId).map(item => item.id), activeKind: active?.kind, activeSourceAssetId: active?.sourceAssetId,
+          activeSourceRegistered: typeof active?.sourceAssetId === 'string' && live.assetIds.includes(active.sourceAssetId) }));
+      }
+      throw err;
+    }
+    const sourceId = svg?.sourceAssetId || layer.assetId || (active?.kind === 'preservedText' && typeof active.assetId === 'string' ? active.assetId : undefined);
+    let source = currentAssets.current.find(asset => asset.id === sourceId);
+    if (sourceId && !source) {
+      const owned = listValue(await image2Api<ImageAsset[]>(`/documents/${live.id}/assets`), 'assets'); assertScope(captured);
+      updateAssets(owned); source = owned.find(asset => asset.id === sourceId);
+    }
+    if (sourceId && (!source || !canonical.current!.assetIds.includes(sourceId))) throw new Error('图层原始素材尚未就绪，请刷新后重试；原内容保留。');
+    if (svg && source?.mime !== 'image/svg+xml') throw new Error('SVG 来源必须是原始 SVG 文件，不能使用内容 JSON 或旧位图替代。');
     const descriptorId = crypto.randomUUID(); let asset = source;
     let kind: 'raster' | 'svg' | 'text' | 'preservedText' = layer.type === 'vector' ? 'svg' : layer.type === 'text' ? layer.metadata?.fontConfirmed === true || layer.fontAssetId && !layer.assetId ? 'text' : 'preservedText' : 'raster';
     let payload: Record<string, unknown> | undefined;
-    if (kind === 'svg') payload = {formatVersion:1,kind,sourceAssetId:source?.id,fontAssetIds:typeof layer.metadata?.svgFontAssetIds === 'object' ? layer.metadata.svgFontAssetIds : [],...(layer.fill?{fill:layer.fill}:{}),...(layer.metadata?.pathStyles?{pathStyles:layer.metadata.pathStyles}:{})};
+    if (kind === 'svg') payload = svg;
     if (kind === 'text') {
       if (!layer.fontAssetId) throw new Error('真实文字需要实际字体文件');
       payload = {formatVersion:1,kind,mode:'legacy-lines',text:layer.text || '',fontAssetId:layer.fontAssetId,fontSize:layer.fontSize || 24,fill:layer.fill || '#20232b',tracking:layer.tracking || 0,lineHeight:layer.lineHeight || 1.2,stroke:layer.stroke || 'none',strokeWidth:layer.strokeWidth || 0};
@@ -366,9 +394,9 @@ export function useLegacyImage2({ editor, projectId, projectName, onError }: Opt
     const bounds = {x:0,y:0,width:kind === 'text' ? layer.width : source?.width || layer.width,height:kind === 'text' ? layer.height : source?.height || layer.height};
     return {commands:[{type:'content.add',content} as DocumentCommand],contentId:content.id,bounds};
   }
-  async function convertLegacyLayer(layer: ImageLayer) {
+  async function convertLegacyLayer(layer: ImageLayer, canvasSource?: { shapeId: string; shapeType: string; documentId: unknown; layerId: unknown }) {
     if(layer.matrix&&(layer.masks?.some(mask=>mask.enabled)||layer.effects?.some(effect=>effect.enabled)||layer.clipToLayerId))throw new Error('此对象含有独立蒙版、效果或剪贴，请通过图层复制和矩阵排版保留外观；原图层未改');
-    const content = await contentForLegacyLayer(layer), theta = layer.rotation * Math.PI / 180;
+    const content = await contentForLegacyLayer(layer, canvasSource), theta = layer.rotation * Math.PI / 180;
     const sx = layer.width / Math.max(1,content.bounds.width), sy = layer.height / Math.max(1,content.bounds.height);
     const metadata = {...layer.metadata}; delete metadata.pathStyles; delete metadata.svgFontAssetIds;
     const raw = {id:layer.id,type:layer.type,name:layer.name,parentId:layer.parentId || undefined,z:layer.z,visible:layer.visible,locked:layer.locked,opacity:layer.opacity,localBounds:content.bounds,
@@ -395,7 +423,7 @@ export function useLegacyImage2({ editor, projectId, projectName, onError }: Opt
       const previous = viewDocument(live).layers.find(layer=>layerShapeId(layer)===shape.id);
       const legacy = await layerForShape(shape,previous,staged); staged.set(shape.id,legacy);
       if (previous) commands.push({type:'layer.remove',layerId:previous.id});
-      const converted = await convertLegacyLayer({...legacy,z:all.findIndex(item=>item.id===shape.id)}); commands.push(...converted.commands);
+      const converted = await convertLegacyLayer({...legacy,z:all.findIndex(item=>item.id===shape.id)}, { shapeId: shape.id, shapeType: shape.type, documentId: shape.meta.image2DocumentId, layerId: shape.meta.image2LayerId }); commands.push(...converted.commands);
     }
     return commands;
   }
@@ -447,7 +475,7 @@ export function useLegacyImage2({ editor, projectId, projectName, onError }: Opt
         }
         project(saved);
         setError('');
-        if (capturedDraft) { await legacyDraftStorage.remove(captured.projectId, capturedDraft); assertScope(captured); if (canvasDraft.current?.savedAt === capturedDraft.savedAt) canvasDraft.current = undefined; }
+        if (capturedDraft) { await removeLegacyDocumentDraft(legacyDraftStorage, captured.projectId, capturedDraft); assertScope(captured); if (canvasDraft.current?.savedAt === capturedDraft.savedAt) canvasDraft.current = undefined; }
       }
       return saved;
     })();
@@ -492,12 +520,21 @@ export function useLegacyImage2({ editor, projectId, projectName, onError }: Opt
     if (src && selected) { const id = (selected.props as { assetId?: TLAssetId }).assetId; const a = id ? state.current.editor?.getAsset(id) : undefined; if ((a?.props as { src?: string })?.src === src) return doc.layers.find(layer => layerShapeId(layer) === selected.id); }
     return undefined;
   }
-  async function submitCommands(commands: DocumentCommand[]) {
-    if (!commands.length) return; const captured = scope(); await sync(); assertScope(captured); const live = canonical.current!;
-    if (live.schemaVersion === 3) commands = await adaptProfessionalCommands(commands);
-    await queue.current!.enqueue(live.id, commands);
-    try { await queue.current!.flush(live, next => { assertScope(captured); accept(next); }); }
-    finally { setPendingCount((await queue.current!.pending(live.id)).length); }
+  async function submitCommands(commands: DocumentCommand[] | (() => DocumentCommand[])) {
+    if (Array.isArray(commands) && !commands.length) return;
+    const captured = scope(), frozen = Array.isArray(commands) ? structuredClone(commands) : commands;
+    const task = commandEdits.current.catch(() => {}).then(async () => {
+      assertScope(captured); await sync(); assertScope(captured);
+      const live = canonical.current!;
+      if (live.schemaVersion === 3) { await loadContents(live); assertScope(captured); }
+      const requested = typeof frozen === 'function' ? frozen() : frozen;
+      const acceptedCommands = live.schemaVersion === 3 ? await adaptProfessionalCommands(requested) : requested;
+      assertScope(captured); await queue.current!.enqueue(live.id, acceptedCommands);
+      try { await queue.current!.flush(live, next => { assertScope(captured); accept(next); }); }
+      finally { setPendingCount((await queue.current!.pending(live.id)).length); }
+    });
+    commandEdits.current = task.then(() => {}, () => {});
+    return task;
   }
   async function adaptProfessionalCommands(commands: DocumentCommand[]) {
     const result: DocumentCommand[] = [];
@@ -608,7 +645,7 @@ export function useLegacyImage2({ editor, projectId, projectName, onError }: Opt
     if (options.documentId && canonical.current?.id !== options.documentId) throw new Error('已切换工程，旧工程任务与草稿保留');
     const captured = scope(); await sync(); assertScope(captured); let target = operation === 'generate' && !options.layerId ? undefined : getLayer(src, options.layerId);
     if (!target && operation !== 'generate') throw new Error('请选择要处理的图层');
-    const status = capability(capabilities, operation);
+    const status = capability(imageCapabilitiesForDocument(capabilities, canonical.current!.schemaVersion), operation);
     if (!status.available) throw new Error(status.reason || '功能尚未配置');
     const pending = await submissions.current!.pending(canonical.current!.id);
     for (const attempt of pending) {
@@ -620,7 +657,7 @@ export function useLegacyImage2({ editor, projectId, projectName, onError }: Opt
     if (pending.length) { await refresh(); throw new Error('已恢复上一次提交，本次参数尚未执行；请在版本窗口查看原任务后重新操作'); }
     if (canonical.current!.schemaVersion===3 && ['generate','inpaint','restore_layers','remove_background','matting','refine_mask','segment','super_resolution'].includes(operation)) throw new Error('v3 专用模型与生成链路尚未验收；保留原工程可继续原有任务，不会回退重绘');
     if (options.editMask && target) { await setMasks(assetUrl(target.assetId!), options.editMask, options.protectMask, target.id); assertScope(captured); target = getLayer(undefined,target.id); }
-    const live = canonical.current!, regional = ['recolor', 'erase', 'fill', 'repair', 'inpaint', 'refine_mask'].includes(operation);
+    const live = canonical.current!, regional = ['recolor', 'erase', 'fill', 'repair', 'adjust', 'filter', 'inpaint', 'refine_mask'].includes(operation);
     const inputs = [...(target?.assetId ? [{ role: 'base', assetId: target.assetId }] : []), ...(options.inputs || [])];
     const edit = target?.metadata?.editMaskAssetId, protect = target?.metadata?.protectMaskAssetId;
     if (regional && typeof edit === 'string') inputs.push({ role: 'edit_mask', assetId: edit });
@@ -714,12 +751,12 @@ export function useLegacyImage2({ editor, projectId, projectName, onError }: Opt
   }
   async function startRun(text: string, referenceSrcs: string[] = [], model?: string) {
     const captured = scope(); await sync(); assertScope(captured); const live = canonical.current!;
-    if(live.schemaVersion===3)throw new Error('v3 后台 Agent 尚未验收；请在保留的原工程继续原有聊天任务');
     const pending = await submissions.current!.pending(live.id);
     if (pending.length) {
       await submissions.current!.recover(live.id, value => { assertScope(captured); const job = (value as { job?: ImageJob }).job; if (job) setJobs(prev => [job, ...prev.filter(item => item.id !== job.id)]); }); assertScope(captured);
       await refresh(); throw new Error('已恢复上一次提交，本次消息与参考尚未发送；请在版本窗口查看原任务后重新发送');
     }
+    requireImageAgent(capabilities, live.schemaVersion, model);
     if (!conversation.current) { const thread = await image2Api<Conversation>('/conversations', { documentId: live.id }); assertScope(captured); conversation.current = thread; }
     const references: Array<{ assetId?: string; layerId?: string; revision: number }> = [];
     for (const src of referenceSrcs) {
@@ -735,7 +772,31 @@ export function useLegacyImage2({ editor, projectId, projectName, onError }: Opt
     const result = await submissions.current!.submit<{ job: ImageJob }>(`/conversations/${conversation.current.id}/messages`, intent, { text, references, model }); assertScope(captured); await refresh(); return result.job;
   }
   async function acceptCandidate(branchId: string) {
-    const captured = scope(); await sync(); assertScope(captured); const live = canonical.current!; const next = await mutations.current!.submit(`/documents/${live.id}/accept`, { documentId: live.id, branchId }, { baseRevision: live.revision, branchDocumentId: branchId }); assertScope(captured); accept(next); await refresh();
+    const captured = scope(); await sync(); assertScope(captured); const live = canonical.current!;
+    // Unknown accepted submissions must recover their frozen body before checking a new preview.
+    const pending = await mutations.current!.pending(live.id); assertScope(captured);
+    if (pending.length) {
+      const sameAccept = pending.some(attempt => attempt.path.endsWith('/accept') && attempt.body.branchDocumentId === branchId);
+      await mutations.current!.recover(live.id, next => { assertScope(captured); accept(next); });
+      assertScope(captured); await refresh();
+      if (sameAccept) return;
+      throw new Error('已恢复上一次工程修改，本次候选尚未接受；请核对当前版本后重新操作。');
+    }
+    const [branchValue, jobsValue] = await Promise.all([
+      image2Api<ImageDocument>(`/documents/${branchId}`), image2Api<ImageJob[]>(`/documents/${live.id}/jobs`),
+    ]); assertScope(captured);
+    const latestBranch = unwrapDocument(branchValue), latestJobs = listValue(jobsValue, 'jobs');
+    if (latestBranch.parentDocumentId !== live.id) throw new Error('候选不属于当前工程，原图层与任务保留。');
+    setJobs(latestJobs); setBranches(current => current.map(branch => branch.id === latestBranch.id ? latestBranch : branch));
+    const job = latestJobs.find(item => item.output?.branchDocumentId === branchId || item.output?.candidateDocumentId === branchId);
+    const preview = candidatePreviewState(job, latestBranch);
+    if (!preview.canAccept) throw new Image2ApiError(preview.message || '候选仍在执行或等待当前版本预览，请完成核对后再接受。', 409, 'candidate_preview_not_ready');
+    try {
+      const next = await mutations.current!.submit(`/documents/${live.id}/accept`, { documentId: live.id, branchId }, { baseRevision: live.revision, branchDocumentId: branchId, branchRevision: latestBranch.revision }); assertScope(captured); accept(next); await refresh();
+    } catch (error) {
+      if (error instanceof Image2ApiError && ['candidate_revision_required','candidate_revision_conflict','candidate_preview_required','candidate_preview_stale'].includes(error.code || '')) { assertScope(captured); await refresh().catch(report); }
+      throw error;
+    }
   }
   async function history(direction: 'undo' | 'redo') {
     const captured = scope(); await sync(); assertScope(captured); const live = canonical.current!; const next = await mutations.current!.submit(`/documents/${live.id}/history`, { documentId: live.id, direction }, { baseRevision: live.revision, direction }); assertScope(captured); accept(next); await refresh();
@@ -779,7 +840,7 @@ export function useLegacyImage2({ editor, projectId, projectName, onError }: Opt
     const fresh = unwrapDocument(await image2Api<ImageDocument>(`/documents/${live.id}`)); assertScope(captured);
     const assertUnchanged = () => { assertScope(captured); if (editGeneration.current !== version) throw new Error('操作期间画布新增编辑，草稿已保留，请重新选择版本'); };
     assertUnchanged();
-    if (draft) await legacyDraftStorage.remove(captured.projectId, draft); assertUnchanged();
+    if (draft) await removeLegacyDocumentDraft(legacyDraftStorage, captured.projectId, draft); assertUnchanged();
     await queue.current!.discard(live.id); assertUnchanged(); canvasDraft.current = undefined; dirty.current = false; draftConflict.current = false; setHasDraftConflict(false);
     accept(fresh); await refresh();
   }
@@ -791,11 +852,15 @@ export function useLegacyImage2({ editor, projectId, projectName, onError }: Opt
       metadata: { ...live.metadata, legacyProjectId: captured.projectId, recoveredDraftOf: live.id } })); assertScope(captured);
     canonical.current = fresh; dirty.current = true; draftConflict.current = false; setHasDraftConflict(false); canvasDraft.current = undefined;
     const savedScope = { ...captured, documentId: fresh.id };
-    await sync(); assertScope(savedScope); await legacyDraftStorage.remove(captured.projectId, draft); assertScope(savedScope); localStorage.setItem(mapKey(captured.projectId), fresh.id); await refresh();
+    await sync(); assertScope(savedScope); await removeLegacyDocumentDraft(legacyDraftStorage, captured.projectId, draft); assertScope(savedScope); localStorage.setItem(mapKey(captured.projectId), fresh.id); await refresh();
   }
-  const effectiveCapabilities = document?.schemaVersion === 3 && Array.isArray(capabilities.operations) ? {...capabilities,operations:(capabilities.operations as Array<Record<string,unknown>>).map(item=>['generate','inpaint','restore_layers','remove_background','matting','refine_mask','segment','super_resolution'].includes(String(item.operation || item.name))?{...item,available:false,reason:'v3 模型链路尚未验收'}:item)} : capabilities;
+  const effectiveCapabilities = imageCapabilitiesForDocument(capabilities, document?.schemaVersion);
   return { document, rawDocument, professionalDocument, assets, fontStates, jobs, branches, messages, capabilities:effectiveCapabilities, revisions, error, busy, needsImport, pendingCount, selectedLayer: document?.layers.find(l => l.id === selectedId),migrateProfessional,duplicateLayers,groupSelection,saveEditSelection,openOriginalDocument,newProfessionalDocument,
     ensureDocument, importCanvas, sync, refresh, getLayer, submitCommands, updateLayer: (id: string, patch: Partial<ImageLayer>) => submitCommands([{ type: 'layer.update', layerId: id, patch }]),
+    updateVectorPaint: (id: string, target: string, paint: Record<string, unknown>) => {
+      const changed = structuredClone(paint);
+      return submitCommands(() => { const current = getLayer(undefined, id); if (!current || current.type !== 'vector') throw new Error('SVG 图层已不存在，请重新选择'); return [{ type: 'layer.update', layerId: id, patch: svgPaintPatch(current, target, changed, canonical.current!.schemaVersion === 3 ? 'typed' : 'css') }]; });
+    },
     submitOperation, waitJob, setMasks, uploadFile, resolveReference, defaultFont, applyFont, confirmText, startRun, acceptCandidate, export: exportDocument, importPackage, addFile, selectLayer,
     hasDraftConflict, useServerVersion, saveDraftAsProject,
     undo: () => history('undo'), redo: () => history('redo'), cancelJob: async (id: string) => { await image2Api(`/jobs/${id}/cancel`, {}); await refresh(); } };

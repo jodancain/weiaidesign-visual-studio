@@ -514,13 +514,29 @@ export class ImageStore {
       fail(current.revision === body.baseRevision, 'document changed; reload and retry', 409, 'revision_conflict');
       const branch = this.getDocument(body.branchDocumentId, owner),base=parse(row,'base_json'); let merged;
       const producers=this.db.prepare("SELECT id FROM jobs WHERE document_id=? AND json_extract(private_json,'$.branchDocumentId')=?").all(documentId,branch.id).map(item=>this.getJob(item.id,owner));
+      const agentProducers=branch.schemaVersion===3?producers.filter(job=>job.kind==='agent'):[];
+      // This check shares BEGIN IMMEDIATE with merge/commit; a later branch edit cannot
+      // slip between the version the user accepted and the version actually merged.
+      if(body.branchRevision!==undefined||agentProducers.length){
+        fail(Number.isSafeInteger(body.branchRevision)&&body.branchRevision>=0,'接受候选需提供明确分支版本，请刷新预览后重试',409,'candidate_revision_required');
+        fail(body.branchRevision===branch.revision,'候选版本已修改，请重新预览后再接受',409,'candidate_revision_conflict');
+      }
       fail(!producers.some(job=>['queued','running'].includes(job.state)),'候选任务仍在执行，请完成或取消后接受',409,'candidate_not_ready');
+      for(const job of agentProducers){
+        const output=job.output||{};
+        fail(!output.previewUnavailable&&validId(output.previewAssetId)&&Number.isSafeInteger(output.previewRevision)&&output.previewRevision>=0,'候选没有可用的真实预览，请先刷新或重新生成预览',409,'candidate_preview_required');
+        fail(!output.previewStale&&output.branchDocumentId===branch.id&&output.previewRevision===branch.revision&&output.revision===branch.revision,'候选预览与当前分支不一致，请重新预览后再接受',409,'candidate_preview_stale');
+        fail(branch.assetIds.includes(output.previewAssetId),'候选预览素材不在当前分支',409,'candidate_preview_required');
+        const preview=this.getAsset(output.previewAssetId,owner).asset;
+        fail(preview.mime==='image/png'&&preview.documentId===branch.id&&preview.metadata?.role==='export'&&preview.metadata?.format==='png'&&preview.metadata?.sourceDocumentId===branch.id&&preview.metadata?.sourceRevision===branch.revision,'候选预览缺少当前分支版本的真实PNG来源',409,'candidate_preview_required');
+      }
       fail(!producers.some(job=>job.state!=='complete')||branch.revision>0||canonical(branch.layers)!==canonical(base.layers),'候选分支尚无已完成编辑，请保留任务回执等待处理',409,'candidate_empty');
       try { merged = mergeBranch(base, current, branch); } catch (error) { if (error instanceof ImageError) { error.status = 409; error.code = 'branch_conflict'; } throw error; }
       for (const id of branch.assetIds) this.linkAsset(documentId, id);
       const authored=doc=>canonical({name:doc.name,width:doc.width,height:doc.height,layers:doc.layers,metadata:doc.metadata,...(doc.schemaVersion===3?{contentAssets:doc.contentAssets,artboards:doc.artboards,guides:doc.guides,savedSelections:doc.savedSelections,resolution:doc.resolution}: {})});
       const unchanged=authored(current)===authored(merged),accepted=unchanged?this.getDocument(documentId,owner):this.commit(documentId, current, merged, body.commandId, request, 'accept-branch');
       if(unchanged)this.db.prepare('INSERT INTO command_receipts VALUES(?,?,?,?)').run(documentId,body.commandId,digest(request),json(accepted));
+      this.craftService?.acceptImageBranch(documentId,owner,branch.id,producers.filter(job=>job.kind==='agent'));
       this.db.prepare('INSERT INTO branch_acceptances VALUES(?,?,?,?)').run(branch.id,documentId,timestamp(),accepted.revision);return accepted;
     });
   }

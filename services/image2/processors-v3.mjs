@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { CONTENT_MIME, IDENTITY, multiplyMatrix, inverseMatrix, worldMatrix, validateContentJSON } from './domain-v3.mjs';
 import { executeOperation, encodePNG } from './processors.mjs';
 import { createNodeResolver } from './render-node.mjs';
-export const V3_CPU_OPERATIONS = Object.freeze(['resize', 'crop', 'pad', 'rotate', 'flip', 'recolor', 'erase', 'color_key', 'trace', 'fill', 'repair', 'prepare_text']);
+export const V3_CPU_OPERATIONS = Object.freeze(['resize', 'crop', 'pad', 'rotate', 'flip', 'recolor', 'erase', 'color_key', 'trace', 'fill', 'repair', 'prepare_text', 'adjust', 'filter']);
 const unavailable = message => {
     throw Object.assign(new Error(message), { status: 422, code: 'V3_OPERATION_UNAVAILABLE', retryable: false });
 };

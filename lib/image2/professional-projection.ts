@@ -72,10 +72,22 @@ export function professionalProxyRecords(document:ImageDocument|RawProfessionalD
 function fingerprint(shape:{type:unknown;x:unknown;y:unknown;rotation:unknown;parentId:unknown;props:unknown;index:unknown;opacity:unknown;isLocked:unknown;meta:Record<string,unknown>}) {
   return JSON.stringify({type:shape.type,x:shape.x,y:shape.y,rotation:shape.rotation,parentId:shape.parentId,props:shape.props,index:shape.index,opacity:shape.opacity,isLocked:shape.isLocked,hidden:shape.meta.image2Hidden});
 }
+
+/** A retained v2 display record is redundant only with exact migration provenance, never by name or old layer ID. */
+export function migratedProjectionResidueIds(document: ImageDocument, shapes: readonly { id: string; parentId: string; meta: Record<string, unknown> }[]): string[] {
+  const source = document.metadata?.professionalSource as { documentId?: unknown } | undefined;
+  if (typeof source?.documentId !== 'string' || source.documentId === document.id) return [];
+  const matched = new Set(shapes.filter(shape => shape.meta.image2DocumentId === source.documentId && document.layers.filter(layer => layer.metadata?.legacyShapeId === shape.id).length === 1).map(shape => shape.id));
+  // Deleting a group also deletes descendants. Unmapped children must stay recoverable.
+  let changed = true;
+  while (changed) { changed = false; for (const shape of shapes) if (matched.has(shape.parentId) && !matched.has(shape.id)) { matched.delete(shape.parentId); changed = true; } }
+  return [...matched];
+}
 /** Updates only this document's hit targets; the root owns registration and authoritative rendering. */
-export function projectProfessionalDocument(editor:Editor,document:ImageDocument,fingerprints:Map<string,string>,payloads:ContentPayloads={}) {
+export function projectProfessionalDocument(editor:Editor,document:ImageDocument,fingerprints:Map<string,string>,payloads:ContentPayloads={},options:{reconcileLegacyProjection?:boolean}={}) {
   const records=professionalProxyRecords(document,editor.getCurrentPageId(),payloads),wanted=new Set(records.map(r=>r.id)),selected=editor.getSelectedShapeIds();
   editor.run(()=>{
+    if (options.reconcileLegacyProjection) { const stale = migratedProjectionResidueIds(document, editor.getCurrentPageShapes()); if (stale.length) editor.deleteShapes(stale as TLShapeId[]); }
     const obsolete=[...editor.getCurrentPageShapeIds()].filter(key=>editor.getShape(key)?.meta.image2DocumentId===document.id&&!wanted.has(key));if(obsolete.length)editor.deleteShapes(obsolete);
     for(const record of records){const current=editor.getShape(record.id);const meta={...(current?.meta||{}),...record.meta};if(current&&current.type!==record.type)editor.deleteShapes([record.id]);const value={...record,meta};if(editor.getShape(record.id))editor.updateShapes([value as never]);else editor.createShapes([value as never]);}
     const retained=selected.filter(key=>editor.getShape(key));if(retained.length)editor.select(...retained);

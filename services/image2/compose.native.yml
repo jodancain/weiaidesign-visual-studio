@@ -1,0 +1,21 @@
+# Optional overlay: docker compose -f compose.yml -f compose.native.yml ...
+# No public port and no sandbox bypass. Verify user namespaces and bubblewrap
+# inside the actual runtime container before enabling native capabilities.
+services:
+  image2:
+    image: weiai-image2:${IMAGE2_NATIVE_IMAGE_TAG:-2.0.0-native}
+    build:
+      context: .
+      dockerfile: Dockerfile.native
+      args:
+        IMAGE2_BASE_IMAGE: ${IMAGE2_BASE_IMAGE:-weiai-image2:2.0.0}
+    environment:
+      IMAGE2_CRAFT_BIN_DIR: /opt/artcraft
+    volumes:
+      - type: bind
+        source: ${IMAGE2_CRAFT_BUNDLE_DIR:?Use a verified Linux native bundle directory}
+        target: /opt/artcraft
+        read_only: true
+    mem_limit: 2g
+    cpus: 2
+    pids_limit: 256

@@ -4,8 +4,9 @@ import type { Editor } from 'tldraw';
 import type { DocumentCommand, ImageDocument, ImageLayer, LayerMask, Matrix2D } from '../lib/image2/types';
 import type { QueuedBatch } from '../lib/image2/queue';
 import { applyProfessionalCommands, applyProfessionalDraft, asProfessional, clippingBase, copyOnWriteContent, deriveWorldDelta, duplicateProfessionalLayerCommands, groupProfessionalLayerCommands, inverseMatrix, maskWorldMatrix, multiplyMatrix, PROFESSIONAL_IDENTITY, transformBounds, transformPoint, ungroupProfessionalLayerCommands, worldBounds, worldMatrix, type RawProfessionalDocument, type RawProfessionalLayer } from '../lib/image2/professional-model';
-import { professionalLegacyView, professionalLayerShapeId, professionalProxyRecords, projectProfessionalDocument } from '../lib/image2/professional-projection';
+import { professionalLegacyView, professionalLayerShapeId, professionalProxyRecords, projectProfessionalDocument, migratedProjectionResidueIds } from '../lib/image2/professional-projection';
 import { canvasParentLayerId, canvasShapesParentFirst } from '../lib/image2/native-shape-order';
+import { elementPreviewSource } from '../lib/image2/element-preview';
 
 const cmd=(value:unknown)=>value as DocumentCommand;
 const layer=(id:string,patch:Partial<RawProfessionalLayer>={}):RawProfessionalLayer=>({id,type:'raster',name:id,contentId:'pixels',z:0,visible:true,locked:false,opacity:1,localBounds:{x:0,y:0,width:100,height:50},matrix:[1,0,0,1,0,0],blendMode:'normal',compositeMode:'isolated',masks:[],effects:[],...patch});
@@ -16,6 +17,17 @@ const raw=(d:ImageDocument)=>asProfessional(d);
 const close=(a:readonly number[],b:readonly number[])=>{assert.equal(a.length,b.length);a.forEach((n,i)=>assert.ok(Math.abs(n-b[i])<1e-8,`${a} != ${b}`));};
 const text=()=>({formatVersion:1,kind:'text',text:'中文',fontAssetId:'font-asset',fontFamily:'实际字体',fontSize:24,fontWeight:400,fill:'#000000',tracking:1,lineHeight:1.2});
 const batch=(d:ImageDocument,commands:DocumentCommand[],patch:Partial<QueuedBatch>={}):QueuedBatch=>({id:'request',documentId:d.id,createdAt:1,state:'queued',commands,...patch});
+
+test('Elements preview reads the active v3 compatibility content instead of raw layers or stale source URLs',()=>{
+  const d=document(),target={layerId:'photo',src:'/old-source.png'};
+  assert.equal(raw(d).layers[0].contentId,'pixels');assert.equal('assetId' in raw(d).layers[0],false);
+  assert.equal(elementPreviewSource(professionalLegacyView(d),target),'/api/v3/image2/assets/pixel-asset/content');
+  raw(d).contentAssets.push({id:'updated-pixels',kind:'raster',assetId:'updated-pixel-asset',formatVersion:1});
+  d.assetIds.push('updated-pixel-asset');
+  raw(d).layers[0].contentId='updated-pixels';
+  assert.equal(elementPreviewSource(professionalLegacyView(d),target),'/api/v3/image2/assets/updated-pixel-asset/content');
+  assert.equal(target.layerId,'photo');assert.equal(target.src,'/old-source.png');
+});
 
 test('native conversion resolves the parent before a lower-index child and preserves world coordinates',()=>{
   const shapes=[
@@ -155,6 +167,33 @@ test('transparent proxy projection is root-flattened, stable per copied layer, a
   const other={id:'shape:other',type:'geo',x:0,y:0,rotation:0,parentId:'page:root',props:{},index:'a0',opacity:1,isLocked:false,meta:{}},stale={...records[1],id:'shape:stale'},store=new Map<string,Record<string,unknown>>([[other.id,other],[stale.id,stale as unknown as Record<string,unknown>]]),selected=['shape:image2-photo'];let runOptions:unknown;
   const editor={getCurrentPageId:()=> 'page:root',getSelectedShapeIds:()=>selected,getCurrentPageShapeIds:()=>new Set(store.keys()),getShape:(key:string)=>store.get(key),deleteShapes:(keys:string[])=>keys.forEach(k=>store.delete(k)),updateShapes:(values:Array<{id:string}>)=>values.forEach(v=>store.set(v.id,v as Record<string,unknown>)),createShapes:(values:Array<{id:string}>)=>values.forEach(v=>store.set(v.id,v as Record<string,unknown>)),select:(...keys:string[])=>{selected.splice(0,selected.length,...keys);},run:(fn:()=>void,options:unknown)=>{runOptions=options;fn();},getCurrentPageShapes:()=>[...store.values()]} as unknown as Editor;
   const prints=new Map<string,string>();projectProfessionalDocument(editor,d,prints);assert.ok(store.has('shape:other'));assert.ok(!store.has('shape:stale'));assert.ok(store.has('shape:image2-photo'));assert.deepEqual(selected,['shape:image2-photo']);assert.deepEqual(runOptions,{history:'ignore',ignoreShapeLock:true});assert.equal(prints.size,store.size);assert.deepEqual(d,snapshot);
+});
+
+test('clean bind removes only the proven migrated v2 display residue and retains the current SVG revision and paint',()=>{
+  const d=document();d.metadata={professionalSource:{documentId:'v2-source',revision:13}};
+  raw(d).layers=[layer('logo',{type:'vector',contentId:'svg',metadata:{legacyShapeId:'shape:old-v2'}})];
+  const payloads={svg:{formatVersion:1,kind:'svg',sourceAssetId:'svg-asset',fontAssetIds:[],pathStyles:{path1:{strokeWidth:2}}}};
+  const old={id:'shape:old-v2',type:'design-vector',x:0,y:0,rotation:0,parentId:'page:root',index:'a0',opacity:1,isLocked:false,meta:{image2DocumentId:'v2-source',image2LayerId:'old-v2-id'},props:{w:100,h:50,layer:{id:'old-v2-id',type:'vector',assetId:'unregistered-old-svg',metadata:{pathStyles:{path1:{'stroke-width':0}}}}}};
+  const unrelated={...old,id:'shape:new-unsubmitted',meta:{},props:{w:40,h:20}};
+  const store=new Map<string,Record<string,unknown>>([[old.id,structuredClone(old)],[unrelated.id,unrelated]]),snapshot=structuredClone(d);
+  const editor={getCurrentPageId:()=> 'page:root',getSelectedShapeIds:()=>[],getCurrentPageShapeIds:()=>new Set(store.keys()),getShape:(key:string)=>store.get(key),deleteShapes:(keys:string[])=>keys.forEach(k=>store.delete(k)),updateShapes:(values:Array<{id:string}>)=>values.forEach(v=>store.set(v.id,v as Record<string,unknown>)),createShapes:(values:Array<{id:string}>)=>values.forEach(v=>store.set(v.id,v as Record<string,unknown>)),select:()=>{},run:(fn:()=>void)=>fn(),getCurrentPageShapes:()=>[...store.values()]} as unknown as Editor;
+  projectProfessionalDocument(editor,d,new Map(),payloads);assert.ok(store.has(old.id),'default projection preserves a dirty/unreviewed snapshot');
+  projectProfessionalDocument(editor,d,new Map(),payloads,{reconcileLegacyProjection:true});
+  assert.ok(!store.has(old.id));assert.ok(store.has(unrelated.id));assert.ok(store.has('shape:image2-logo'));
+  assert.deepEqual(professionalLegacyView(d,payloads).layers[0].metadata?.pathStyles,{path1:{strokeWidth:2}});
+  assert.deepEqual(d,snapshot);assert.equal(d.assetIds.includes('unregistered-old-svg'),false);
+});
+
+test('migration residue matching rejects foreign provenance, ambiguous identities, and groups with unsubmitted children',()=>{
+  const d=document();d.metadata={professionalSource:{documentId:'v2-source',revision:13}};
+  raw(d).layers=[layer('a',{metadata:{legacyShapeId:'shape:source'}})];
+  const source={id:'shape:source',parentId:'page:root',meta:{image2DocumentId:'v2-source'}};
+  assert.deepEqual(migratedProjectionResidueIds(d,[source]),[source.id]);
+  assert.deepEqual(migratedProjectionResidueIds(d,[{...source,meta:{image2DocumentId:'other-project'}}]),[]);
+  assert.deepEqual(migratedProjectionResidueIds(d,[{...source,id:'shape:same-old-layer-id'}]),[]);
+  assert.deepEqual(migratedProjectionResidueIds(d,[source,{id:'shape:new-child',parentId:source.id,meta:{}}]),[]);
+  raw(d).layers.push(layer('ambiguous',{metadata:{legacyShapeId:source.id}}));
+  assert.deepEqual(migratedProjectionResidueIds(d,[source]),[]);
 });
 test('duplicate copies an isolated subtree once, shares immutable content, and gives all layer/mask/effect identities fresh values',()=>{
   const d=document(),m:LayerMask={id:'mask',kind:'raster',contentId:'pixels',channel:'alpha',coordinateSpace:'document',linked:true,enabled:true,inverted:false,density:1,featherPx:0,matrix:[1,0,0,1,4,8]};

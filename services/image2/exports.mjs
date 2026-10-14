@@ -10,6 +10,7 @@ import { normalizeSvg } from './svg-normalize.mjs';
 import * as fontkit from 'fontkit';
 import { fontWeight, pdfFontBytes } from './fonts.mjs';
 import { decodeRGBA, encodePNG } from './processors.mjs';
+import { craftPackageAssetIds, prepareCraftPackage, installCraftPackage, isCraftOpaqueAsset } from './craft-package.mjs';
 
 const MAX_BUNDLE = 128 * 1024 * 1024;
 const MAX_ARCHIVE = 64 * 1024 * 1024; // Base64 plus JSON fits the 96 MiB BFF body budget.
@@ -241,11 +242,11 @@ export async function documentPdf(document, getAsset) {
   pdf.end(); return result;
 }
 
-export async function projectBundle(document, revisions, getAsset) {
-  const ids = new Set(document.assetIds || []);
+export async function projectBundle(document, revisions, getAsset, craft) {
+  const ids = new Set([...(document.assetIds || []),...craftPackageAssetIds(craft)]);
   for (const revision of revisions) for (const id of (revision.document || revision.snapshot || revision).assetIds || []) ids.add(id);
   const files = {}, assets = [];
-  const direct = new Set();
+  const direct = new Set(craftPackageAssetIds(craft));
   for (const doc of [document, ...revisions.map(r => r.document || r.snapshot || r)]) for (const layer of doc.layers || []) {
     for (const key of ['assetId','sourceAssetId','maskAssetId','fontAssetId']) if (layer[key]) direct.add(layer[key]);
     for (const key of ['cleanBackgroundAssetId','sourcePatchAssetId']) if (layer.metadata?.[key]) direct.add(layer.metadata[key]);
@@ -266,7 +267,7 @@ export async function projectBundle(document, revisions, getAsset) {
     assets.push({ ...descriptor, file: path, hash: hash(bytes) });
   }
   const clean = doc => ({ ...doc, assetIds: (doc.assetIds || []).filter(id => included.has(id)) });
-  files['manifest.json'] = strToU8(JSON.stringify({ format: 'weiai-image2-project', version: 2, document: clean(document), revisions: revisions.map(r => clean(r.document || r.snapshot || r)), assets }));
+  files['manifest.json'] = strToU8(JSON.stringify({ format: 'weiai-image2-project', version: 2, document: clean(document), revisions: revisions.map(r => clean(r.document || r.snapshot || r)), assets, ...(craft?{craft}:{}) }));
   fail(totalBytes + files['manifest.json'].length <= MAX_BUNDLE, '工程包解压内容超过128MB重新导入上限', 'bundle_too_large');
   const bytes = Buffer.from(zipSync(files, { level: 6, mtime: new Date('2000-01-01T00:00:00Z') }));
   fail(bytes.length <= MAX_ARCHIVE, '工程包超过64MB传输上限，请拆分工程后导出', 'bundle_too_large');
@@ -275,7 +276,7 @@ export async function projectBundle(document, revisions, getAsset) {
 
 export async function exportDocument(format, document, ctx) {
   const name = (document.name || '设计工程').replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').slice(0, 100);
-  if (format === 'project') return { bytes: await projectBundle(document, ctx.revisions || [], ctx.getAsset), mime: 'application/zip', name: `${name}.image2.zip` };
+  if (format === 'project') return { bytes: await projectBundle(document, ctx.revisions || [], ctx.getAsset, ctx.craft), mime: 'application/zip', name: `${name}.image2.zip` };
   document = scopedExportDocument(document, ctx);
   if (format === 'svg') return { bytes: Buffer.from((await documentSvg(document, ctx.getAsset)).svg), mime: 'image/svg+xml', name: `${name}.svg` };
   if (format === 'png') return { bytes: await documentPng(document, ctx.getAsset), mime: 'image/png', name: `${name}.png` };
@@ -298,17 +299,21 @@ export async function importProjectBundle(store, owner, input, inspectAsset) {
   let manifest;
   try { manifest = JSON.parse(strFromU8(files['manifest.json'])); } catch { fail(false, '工程清单无效'); }
   fail(manifest.format === 'weiai-image2-project' && manifest.version === 2 && manifest.document && Array.isArray(manifest.assets), '不支持的工程版本');
+  const craft = await prepareCraftPackage(store,manifest,files);
   // Validate all bytes before exposing an authored document.
   const inspected = [];
   const ids = new Set();
   for (const a of manifest.assets) {
-    fail(typeof a.id === 'string' && !ids.has(a.id) && /^assets\/[a-zA-Z0-9-]+$/.test(a.file), '工程资产描述无效');
+    fail(typeof a.id === 'string' && !ids.has(a.id) && a.file===`assets/${a.id}` && /^assets\/[a-zA-Z0-9-]+$/.test(a.file), '工程资产描述无效');
     ids.add(a.id);
     const bytes = Buffer.from(files[a.file] || []);
     fail(bytes.length && hash(bytes) === a.hash, '工程资产校验失败');
-    inspected.push({ descriptor: a, bytes, info: await inspectAsset(bytes, a.mime) });
+    inspected.push({ descriptor: a, bytes, info: isCraftOpaqueAsset(craft,a)?{mime:a.mime,craftOpaque:true}:await inspectAsset(bytes, a.mime) });
   }
+  fail(Object.keys(files).every(name=>name==='manifest.json'||manifest.assets.some(a=>a.file===name)),'工程包含清单以外的文件');
+  for(const asset of manifest.assets)for(const input of asset.inputs||[])fail(ids.has(input.assetId)&&(!input.hash||manifest.assets.find(a=>a.id===input.assetId)?.hash===input.hash),'工程素材来源缺失或hash不一致');
   const idMap = new Map(inspected.map(item => [item.descriptor.id, randomUUID()]));
+  for(const [from,to] of [...(craft?.projectIds||[]),...(craft?.receiptIds||[])])idMap.set(from,to);
   for (const layer of manifest.document.layers || []) idMap.set(layer.id, randomUUID());
   for (const revision of manifest.revisions || []) for (const layer of (revision.document || revision.snapshot || revision).layers || []) if (!idMap.has(layer.id)) idMap.set(layer.id, randomUUID());
   const remap = value => typeof value === 'string' ? idMap.get(value) || value : Array.isArray(value) ? value.map(remap) : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([k, v]) => [k, remap(v)])) : value;
@@ -320,10 +325,12 @@ export async function importProjectBundle(store, owner, input, inspectAsset) {
     const index = remaining.findIndex(item => (item.descriptor.inputs || []).every(ref => added.has(ref.assetId)));
     fail(index >= 0, '工程素材引用缺失或形成循环');
     const [item] = remaining.splice(index, 1);
-    store.addAsset(doc.id, owner, { assignedId: idMap.get(item.descriptor.id), name: item.descriptor.name, mime: item.info.mime, width: item.info.width, height: item.info.height, inputs: (item.descriptor.inputs || []).map(ref => ({ ...ref, assetId: idMap.get(ref.assetId) })), metadata: { ...remap(item.descriptor.metadata), ...item.info.metadata, importedAssetId: item.descriptor.id } }, item.bytes);
+    const descriptor={ assignedId: idMap.get(item.descriptor.id), name: item.descriptor.name, mime: item.info.mime, width: item.info.width, height: item.info.height, inputs: (item.descriptor.inputs || []).map(ref => ({ role:ref.role, assetId: idMap.get(ref.assetId) })), metadata: { ...remap(item.descriptor.metadata), ...item.info.metadata, importedAssetId: item.descriptor.id } };
+    if(item.info.craftOpaque)store.craftService.addAsset(doc.id,owner,descriptor,item.bytes);else store.addAsset(doc.id,owner,descriptor,item.bytes);
     added.add(item.descriptor.id);
   }
-  const currentDocument = { ...remap(manifest.document), id: doc.id, createdAt: doc.createdAt, updatedAt: doc.updatedAt };
+  const importedCraft=installCraftPackage(store,doc.id,owner,craft,idMap);
+  const currentDocument = { ...remap(manifest.document), id: doc.id, createdAt: doc.createdAt, updatedAt: doc.updatedAt,...(importedCraft?{metadata:{...remap(manifest.document.metadata),craftImport:importedCraft}}:{}) };
   const revisions = (manifest.revisions || []).map(revision => ({ ...remap(revision.document || revision.snapshot || revision), id: doc.id, createdAt: doc.createdAt }));
   if (revisions.length && store.importRevisions) return store.importRevisions(doc.id, owner, { revisions, currentDocument });
   const commands = (currentDocument.layers || []).map(layer => ({ type: 'layer.add', layer }));

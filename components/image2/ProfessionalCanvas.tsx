@@ -13,7 +13,7 @@ export function ProfessionalCanvas() {
   const [frame, setFrame] = useState<Frame | null>(null);
   useEffect(() => { errorHandler.current = onError; }, [onError]);
   const startWorker = () => {
-    const instance = new Worker('/image2-render-worker.js'); worker.current = instance;
+    const instance = new Worker('/image2-render-worker.js?sampling=pixel-boundary-sampling-1'); worker.current = instance;
     instance.onmessage = ({data}) => {
       if (data.id !== request.current) return;
       clearTimeout(watchdog.current);

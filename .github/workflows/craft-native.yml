@@ -1,0 +1,113 @@
+name: ArtCraft native engines
+
+# Native builds are separate from the fast image-service regression suite.
+# Each job compiles and tests the exact source commit in craft-engines.lock.json.
+on:
+  workflow_dispatch:
+    inputs:
+      engine:
+        description: 'Engine ID, or all for the complete pinned suite'
+        default: all
+        required: true
+      platform:
+        description: 'Build and verify on macOS or Linux; Linux results are independent acceptance evidence'
+        type: choice
+        options: [macos, linux]
+        default: macos
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      engines: ${{ steps.matrix.outputs.engines }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Select engines from the pinned source lock
+        id: matrix
+        env:
+          CRAFT_REQUESTED_ENGINE: ${{ inputs.engine }}
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const lock = JSON.parse(fs.readFileSync('services/image2/craft-engines.lock.json', 'utf8'));
+          const ids = lock.engines.map(engine => engine.id);
+          if (!ids.length || new Set(ids).size !== ids.length || ids.some(id => !/^[a-z][a-z0-9]*$/.test(id))) {
+            throw new Error('Invalid or duplicate engine IDs in the source lock');
+          }
+          const requested = process.env.CRAFT_REQUESTED_ENGINE;
+          if (requested !== 'all' && !ids.includes(requested)) throw new Error('Engine must be all or an ID from the source lock');
+          const selected = requested === 'all' ? ids : [requested];
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `engines=${JSON.stringify(selected)}\n`);
+          NODE
+  native:
+    needs: prepare
+    name: ${{ matrix.engine }} / ${{ inputs.platform }}
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        engine: ${{ fromJSON(needs.prepare.outputs.engines) }}
+    runs-on: ${{ inputs.platform == 'linux' && 'ubuntu-24.04' || 'macos-15' }}
+    timeout-minutes: 120
+    env:
+      CRAFT_ENGINE: ${{ matrix.engine }}
+      IMAGE2_CRAFT_BIN_DIR: ${{ github.workspace }}/output/artcraft-native/bin
+      IMAGE2_CRAFT_EVIDENCE_DIR: ${{ github.workspace }}/output/artcraft-native/evidence
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.98.1'
+      - name: Install Linux native build and sandbox prerequisites
+        if: inputs.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config clang cmake bubblewrap libasound2-dev libfontconfig1-dev libfreetype6-dev libudev-dev libssl-dev libx11-dev libxkbcommon-dev libwayland-dev fonts-noto-cjk ffmpeg
+      - name: Install macOS external media test oracle
+        if: inputs.platform != 'linux'
+        run: command -v ffprobe >/dev/null || brew install ffmpeg
+      - name: Install service dependencies
+        run: npm ci --prefix services/image2
+      - name: Compile pinned native engines
+        run: node scripts/build-craft-engines.mjs --engine "$CRAFT_ENGINE" --profile dev --jobs 4
+      - name: Prepare verification evidence directory
+        run: mkdir -p "$IMAGE2_CRAFT_EVIDENCE_DIR"
+      - name: Native process isolation and protocol regression
+        run: node --test services/image2/tests/craft-sandbox.test.mjs services/image2/tests/craft-runtime.test.mjs services/image2/tests/craft-service.test.mjs services/image2/tests/craft-package.test.mjs services/image2/tests/craft-font-inputs.test.mjs
+      - name: Real native checkpoint round trips
+        run: node services/image2/tests/craft-native.integration.mjs "$CRAFT_ENGINE"
+      - name: Real PhotoCraft persistent service integration
+        if: matrix.engine == 'photocraft'
+        env:
+          IMAGE2_CRAFT_REAL_BIN_DIR: ${{ github.workspace }}/output/artcraft-native/bin
+        run: node --test services/image2/tests/craft-service-native.test.mjs
+      - name: Real Chinese glyph and checkpoint verification
+        if: matrix.engine == 'photocraft' || matrix.engine == 'vectorcraft'
+        run: node services/image2/tests/craft-cjk.integration.mjs "$CRAFT_ENGINE"
+      - name: Real VectorCraft dots, holes and thin-line tracing measurements
+        if: matrix.engine == 'vectorcraft'
+        run: node services/image2/tests/craft-vector.integration.mjs
+      - name: Archive native verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: craft-native-evidence-${{ inputs.platform }}-${{ matrix.engine }}
+          path: output/artcraft-native/evidence/
+          retention-days: 14
+      - name: Archive reproducible binaries and licenses
+        uses: actions/upload-artifact@v4
+        with:
+          name: craft-native-${{ inputs.platform }}-${{ matrix.engine }}
+          path: output/artcraft-native/bin/
+          retention-days: 14

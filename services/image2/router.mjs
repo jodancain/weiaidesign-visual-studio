@@ -1,5 +1,6 @@
 import { timingSafeEqual, randomUUID } from 'node:crypto';
 import { fail, ImageError, requireOwner, validId } from './domain.mjs';
+import { routeCraft } from './craft-service.mjs';
 import { CONTENT_MIME } from './domain-v3.mjs';
 
 const PREFIX = '/api/v3/image2';
@@ -59,7 +60,7 @@ function legacyLayers(snapshot, mappings) {
   }
   return { layers, warnings };
 }
-export function createImageRouter({ store, runner, config = {}, assetInspector }) {
+export function createImageRouter({ store, runner, craft, config = {}, assetInspector }) {
   async function execute(name, ...args) { fail(typeof runner?.[name] === 'function', `${name} is unavailable`, 503, 'runner_unavailable'); return runner[name](...args); }
   return async function handle(req, res) {
     let url; try { url = new URL(req.url || '/', 'http://image2.internal'); } catch { send(res, 400, { detail: 'invalid URL', code: 'invalid_request' }); return true; }
@@ -80,7 +81,8 @@ export function createImageRouter({ store, runner, config = {}, assetInspector }
       else if (parts[0] === 'documents' && parts.length === 1 && method === 'POST') value = store.createDocument(owner, await body(req, 2 * 1024 * 1024));
       else if (parts[0] === 'documents' && parts[1]) {
         const id = parts[1]; store.getDocument(id, owner);
-        if (parts.length === 2 && method === 'GET') value = store.getDocument(id, owner);
+        if (parts[2] === 'craft') { fail(craft, 'Craft service unavailable', 503, 'craft_unavailable'); value = await routeCraft(craft, parts, method, owner, () => body(req, parts[3] === 'assets' ? MAX_BODY : 2 * 1024 * 1024)); }
+        else if (parts.length === 2 && method === 'GET') value = store.getDocument(id, owner);
         else if (parts[2] === 'commands' && parts[3] && parts.length === 4 && method === 'GET') value = store.getCommandReceipt(id, owner, parts[3]);
         else if (parts[2] === 'commands' && parts.length === 3 && method === 'POST') value = store.command(id, owner, await body(req, 2 * 1024 * 1024));
         else if (parts[2] === 'migrate-v3' && parts.length === 3 && method === 'POST') value = await store.migrateV3(id, owner, await body(req, 2 * 1024 * 1024));

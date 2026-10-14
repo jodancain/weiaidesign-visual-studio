@@ -12,18 +12,23 @@ import { runComfy, generateImages, providerCapabilities,imageFrameFor,configFrom
 import { restoreLayers } from './restore.mjs';
 import { normalizeSvg } from './svg-normalize.mjs';
 import {pdfFontBytes} from './fonts.mjs';
+import { adjustmentKinds, filterKinds } from './pixel-adjust.mjs';
 
 export const registry = Object.fromEntries([
   ['resize','cpu','调整像素尺寸'], ['crop','cpu','裁切'], ['pad','cpu','扩展画布'],
   ['rotate','cpu','旋转'], ['flip','cpu','翻转'], ['recolor','cpu','换色'],
   ['erase','cpu','像素擦除'], ['color_key','cpu','颜色去底'], ['trace','cpu','描摹矢量'],
   ['fill','cpu','选区填色'], ['repair','cpu','传统局部修补'],
+  ['adjust','cpu','像素调色'], ['filter','cpu','传统滤镜'],
   ['prepare_text','cpu','准备可编辑文字背景'],
   ['refine_mask','cpu','修正可见区域蒙版'],
   ['matting','vision','精细抠图'], ['segment','vision','对象分割'],
   ['super_resolution','vision','真实超分'], ['restore_layers','vision','还原可编辑图层'],
   ['generate','generation','生成图片'], ['inpaint','generation','局部生成'], ['export','cpu','导出'],
 ].map(([name, executionClass, label]) => [name, { executionClass, label }]));
+
+registry.adjust.paramsSchema={type:'object',properties:{kind:{type:'string',enum:adjustmentKinds},value:{type:'number',description:'brightness/contrast -100..100; exposure -5..5 stops; saturation -100..200; hue -180..180 degrees; gamma .1..5; threshold 0..255'},black:{type:'number',minimum:0,maximum:254},white:{type:'number',minimum:1,maximum:255},gamma:{type:'number',minimum:.1,maximum:5},feather:{type:'number',minimum:0}},required:['kind']};
+registry.filter.paramsSchema={type:'object',properties:{kind:{type:'string',enum:filterKinds},radius:{type:'number',minimum:.3,maximum:20},amount:{type:'number',minimum:0,maximum:3},size:{type:'integer',enum:[3,5,7,9]},feather:{type:'number',minimum:0}},required:['kind']};
 
 export function processingError(message, code='INVALID_PARAMS', extra={}) {
   return Object.assign(new Error(message), { code, status: code==='UNAVAILABLE'?503:400, ...extra });
@@ -165,15 +170,16 @@ export function compositeProtected(original,result,mask,protect) {
   }
   return {...original,data};
 }
+const traceMetadataKeys=['traceVersion','lineart','sourceColorAndAlphaPreserved','pixelBoundariesExact','opaquePixelsExact','translucentRenderRounding','rectangles','colors','pathCount','hiddenTransparentRgbPreserved'];
 function layerCommands(request,ctx,asset,extras={}) {
   const target=ctx.document.layers.find(l=>l.id===request.targetLayerId);
   // Pixel edits replace an asset in its existing canvas frame. A downsampled
   // source must not shrink a scaled/rotated object when only its pixels change.
-  const pixelEdits=['recolor','erase','repair','fill','color_key','inpaint','matting','trace','flip'];
+  const pixelEdits=['recolor','erase','repair','fill','color_key','inpaint','matting','trace','flip','adjust','filter'];
   const keepLayout=target&&(pixelEdits.includes(request.operation)||['resize','super_resolution'].includes(request.operation)&&request.params?.resizeLayout!==true);
   const {clearVectorPaint,clearSourceMask,...layerExtras}=extras;
   const priorMetadata={...target?.metadata};
-  if(request.operation==='trace'){delete priorMetadata.traceVersion;delete priorMetadata.lineart;}
+  if(request.operation==='trace')for(const key of traceMetadataKeys)delete priorMetadata[key];
   if(clearVectorPaint)delete priorMetadata.pathStyles;
   if(clearSourceMask)delete priorMetadata.sourceMaskAssetId;
   const patch={assetId:asset.id,width:keepLayout?target.width:asset.width,height:keepLayout?target.height:asset.height,...layerExtras,...(clearVectorPaint&&target?{fill:null}:{}),maskAssetId:null,metadata:{...priorMetadata,...asset.metadata,...layerExtras.metadata}};
@@ -399,8 +405,8 @@ async function processedVisibility(request,ctx,base,current,result,masks){
   let raw=state.raw;
   if(geometricOperations.has(op))raw=await decodeRGBA(await geometryBytes(op,raw,p),'image/png');
   else if(op==='super_resolution')raw=await decodeRGBA(await geometryBytes('resize',raw,{width:result.width,height:result.height}),'image/png');
-  else if(['recolor','fill','repair'].includes(op)){
-    const transformed=op==='repair'?repairPixels(raw,masks.effective,p).raw:colorPixels(op,raw,p);
+  else if(['recolor','fill','repair','adjust','filter'].includes(op)){
+    const transformed=op==='repair'?repairPixels(raw,masks.effective,p).raw:['adjust','filter'].includes(op)?await adjustmentWorker(op,raw,p,ctx):colorPixels(op,raw,p);
     raw=(masks.edit||masks.protect)?compositeProtected(raw,transformed,masks.effective,masks.protect):transformed;
   }
   if(raw.width!==result.width||raw.height!==result.height)throw processingError('Visibility source dimensions do not match processed pixels','MASK_GEOMETRY');
@@ -427,6 +433,25 @@ async function traceSVG(raw,options,ctx){
     worker.on('error',()=>finish(processingError('Tracing worker failed; source retained','TRACE_FAILED')));
     worker.on('exit',code=>{if(!settled)finish(processingError(`Tracing worker exited (${code}); source retained`,'TRACE_FAILED'));});
   });
+}
+
+function boundedPixelWorker(module,workerData,ctx) {
+  checkpointCancel(ctx);
+  const worker=new Worker(new URL(module,import.meta.url),{workerData,resourceLimits:{maxOldGenerationSizeMb:384}});
+  return new Promise((resolve,reject)=>{
+    let settled=false;
+    const finish=(error,result)=>{if(settled)return;settled=true;clearInterval(cancelTimer);clearTimeout(timer);void worker.terminate();error?reject(error):resolve(result);};
+    const cancelTimer=setInterval(()=>{if(ctx.cancelled?.())finish(processingError('操作已取消，原图已保留','CANCELLED',{status:409}));},50);
+    const timer=setTimeout(()=>finish(processingError('算法处理超时，原图已保留','CPU_TIMEOUT')),ctx.config?.pixelTimeoutMs||60000);
+    worker.on('message',result=>finish(result.error?processingError(result.error,result.code):null,result));
+    worker.on('error',()=>finish(processingError('算法工作者失败，原图已保留','CPU_WORKER_FAILED')));
+    worker.on('exit',code=>{if(!settled)finish(processingError(`算法工作者退出 (${code})，原图已保留`,'CPU_WORKER_FAILED'));});
+  });
+}
+async function adjustmentWorker(operation,raw,params,ctx) {
+  if(raw.width*raw.height>(ctx.config?.maxAdjustmentPixels||16000000))throw processingError('调色/滤镜超出像素预算，请先裁切；原图保留','PIXEL_BUDGET');
+  const result=await boundedPixelWorker('./pixel-adjust.mjs',{kind:'pixel-adjust',operation,raw,params},ctx);
+  return {...result.raw,data:Buffer.from(result.raw.data)};
 }
 function monochromePixels(raw,p){
   const threshold=p.threshold==null?128:Number(p.threshold),alphaThreshold=p.alphaThreshold==null?128:Number(p.alphaThreshold);
@@ -491,7 +516,11 @@ async function computeOperation(request,ctx) {
   }
   if(op==='trace') {
     // Mode-specific processing facts describe this output, not a previous trace.
-    delete meta.traceVersion;delete meta.lineart;
+    for(const key of traceMetadataKeys)delete meta[key];
+    if(p.preset==='exact') {
+      const result=await boundedPixelWorker('./pixel-trace.mjs',{kind:'exact-pixel-trace',raw,limits:{maxPixels:ctx.config?.maxTracePixels||4000000}},ctx);
+      bytes=Buffer.from(normalizeSvg(result.svg).svg);mime='image/svg+xml';meta={...meta,...result.metadata,preset:'exact',options:{quantization:false,threshold:false,pathomit:0,blurradius:0,strokewidth:0}};
+    } else {
     const options={ltres:1,qtres:1,pathomit:8,numberofcolors:16,mincolorratio:0,scale:1,roundcoords:3,desc:false,viewbox:true};
     const presets={monochrome:{numberofcolors:2,colorsampling:0},color:{numberofcolors:16},logo:{numberofcolors:8,pathomit:0,ltres:.5,qtres:.5},posterized2:{...ImageTracer.optionpresets.posterized2}};
     const preset=p.preset||'posterized2';if(!presets[preset])throw processingError('Unknown tracing preset');
@@ -513,6 +542,7 @@ async function computeOperation(request,ctx) {
     if(preset==='monochrome')svg=clipMonochromeSVG(svg,traceInput);
     svg=normalizeSvg(svg).svg;
     bytes=Buffer.from(svg);mime='image/svg+xml';meta={...meta,preset,options,approximation:true};
+    }
   } else if(['matting','segment','super_resolution'].includes(op)) {
     const preparedBase={...base,asset:{...base.asset,mime:'image/png',width:raw.width,height:raw.height},bytes:await encodePNG(raw)};
     const result=await runComfy(op,{...request,base:preparedBase},ctx);
@@ -566,6 +596,11 @@ async function computeOperation(request,ctx) {
       case 'recolor':case 'erase':case 'color_key':case 'fill':{
         out=colorPixels(op,raw,p);
         if(op==='recolor')meta.mode=p.mode|| (p.preserveLuminance===false?'flatten':'luminance');
+        break;
+      }
+      case 'adjust':case 'filter':{
+        out=await adjustmentWorker(op,raw,p,ctx);
+        meta={...meta,algorithmVersion:'srgb-rgba-v1',kind:p.kind,alphaPreserved:true};
         break;
       }
       default:throw processingError(`Operation ${op} has no processor`);

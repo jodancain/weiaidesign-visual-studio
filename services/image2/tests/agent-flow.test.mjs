@@ -22,7 +22,10 @@ async function harness(t,{fetchImpl,config={},processor}={}){
   async function request(path,body){return fetch(origin+path,{method:body===undefined?'GET':'POST',headers:{authorization:`Bearer ${TOKEN}`,'x-studio-visitor-id':OWNER,...(body===undefined?{}:{'content-type':'application/json'})},body:body===undefined?undefined:JSON.stringify(body)});}
   async function json(path,body){const response=await request(path,body),data=await response.json();assert.equal(response.status,200,JSON.stringify(data));return data.data;}
   async function bytes(id){const response=await request(`/assets/${id}/content`);assert.equal(response.status,200);return Buffer.from(await response.arrayBuffer());}
-  async function terminal(id){return waitFor(async()=>{const job=await json(`/jobs/${id}`);return ['complete','failed','uncertain','cancelled','awaiting_user'].includes(job.state)?job:null;});}
+  async function terminal(id){
+    try{return await waitFor(async()=>{const job=await json(`/jobs/${id}`);return ['complete','failed','uncertain','cancelled','awaiting_user'].includes(job.state)?job:null;},60000);}
+    catch(error){const record=service.store.jobRecord(id),state=record.private.agentState;throw new Error(`Agent fixture deadline 60000ms exceeded: ${JSON.stringify({jobId:id,state:record.job.state,stage:record.job.stage,phase:state?.phase,round:state?.round,toolIndex:state?.callIndex,pendingTools:state?.pending?.length,active:service.runner.active.has(id)})}`,{cause:error});}
+  }
   async function sourceDocument({unknownText=false,logo=false}={}){
     const document=await json('/documents',{name:'Agent fixture 中文',width:256,height:160}),source=await pixels();
     const asset=await json('/assets',{documentId:document.id,name:'source.png',mime:'image/png',data:source.toString('base64')});

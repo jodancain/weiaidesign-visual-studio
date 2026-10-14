@@ -83,6 +83,13 @@ const revised=createClassicWorker(async url=>{assert.equal(url.searchParams.get(
  const textCost=vm.runInContext('cost',worker.context)(actualText);assert.ok(textCost>actualText.paths.reduce((total,p)=>total+p.d.length*2,0));const cacheStatus=vm.runInContext('(()=>{const before=resources.size;remember("large-fixture",{kind:"raster",width:6144,height:6144,pixels:new Uint8Array(6144*6144*4)});return {before,after:resources.size,contains:resources.has("large-fixture"),withinLimit:cacheBytes<=cacheLimit};})()',worker.context);assert.equal(cacheStatus.before,cacheStatus.after);assert.equal(cacheStatus.contains,false);assert.equal(cacheStatus.withinLimit,true);out.cases.push({name:'cache accounts real text path storage and excludes oversized decoded pixels',passed:true});
  const bad=createClassicWorker(async()=>({resource:{...wire(prepared.image),pixels:'not-enough-rgba'}}));await bad.send({type:'render',id:13,document:old,bounds,pixelScale:1});assert.equal(bad.messages[0].type,'error');assert.equal(bad.messages[0].id,13);out.cases.push({name:'invalid typed raster cannot publish a pretend frame',passed:true});
 
+ const crisp=doc('nearest-resource',[layer('pixels',{matrix:[.5,0,0,.5,10,12]})]);crisp.assetIds=['pixels'];
+ const crispResource={...rgba(8,8,(x,y)=>[(x+y)%2?255:0,x%2?90:220,y%2?30:250,255]),sampling:'nearest'};
+ const crispWorker=createClassicWorker(async()=>({resource:crispResource}));await crispWorker.send({type:'render',id:50,document:crisp,bounds,pixelScale:1});assert.equal(crispWorker.messages[0].type,'frame');
+ const crispGold=await renderSoftware(engine,await prepareRenderGraph(crisp,async()=>crispResource,{bounds}),{bounds});assert.deepEqual(Buffer.from(crispWorker.messages[0].pixels),Buffer.from(crispGold.pixels));
+ const interpolated=await renderSoftware(engine,await prepareRenderGraph(crisp,async()=>({...crispResource,sampling:'linear'}),{bounds}),{bounds});assert.notDeepEqual(Buffer.from(interpolated.pixels),Buffer.from(crispGold.pixels));
+ out.cases.push({name:'wire nearest flag survives worker decoding and shared core preserves exact pixel colours instead of interpolating',rgbaDifferenceCount:0});
+
  const manifest=JSON.parse(readFileSync(join(ROOT,'public','vendor','image2','manifest.json')));for(const file of manifest.files)assert.equal(digest(readFileSync(join(ROOT,file.path))),file.sha256);for(const file of ['render-graph.mjs','render-software.mjs','matrix.mjs','paints.mjs','color-names.mjs'])assert.deepEqual(readFileSync(join(ROOT,'public','vendor','image2','core-1',file)),readFileSync(join(ROOT,'services','image2','core',file)));out.cases.push({name:'executed self-hosted assets match pinned manifest and service core bytes',passed:true});
  return out;
 }
@@ -91,6 +98,6 @@ if(process.argv.includes('--vm-child')){
  try{process.stdout.write(JSON.stringify(await scenarios())+'\n');}catch(error){console.error(error);process.exitCode=1;}
 }else{
  test('classic browser Worker executes actual pinned browser CanvasKit/WASM with complete Node RGBA parity and strict resource protocol',async()=>{
-  const child=spawn(process.execPath,['--experimental-vm-modules',fileURLToPath(import.meta.url),'--vm-child'],{cwd:ROOT,stdio:['ignore','pipe','pipe']});let stdout='',stderr='';child.stdout.on('data',data=>stdout+=data);child.stderr.on('data',data=>stderr+=data);const timer=setTimeout(()=>child.kill('SIGKILL'),20000);const code=await new Promise(resolve=>child.on('exit',resolve));clearTimeout(timer);assert.equal(code,0,stderr);const result=JSON.parse(stdout);assert.equal(result.cases.length,15);assert.ok(result.cases.every(c=>c.passed===true||c.rgbaDifferenceCount===0));console.log(JSON.stringify(result));
+  const child=spawn(process.execPath,['--experimental-vm-modules',fileURLToPath(import.meta.url),'--vm-child'],{cwd:ROOT,stdio:['ignore','pipe','pipe']});let stdout='',stderr='';child.stdout.on('data',data=>stdout+=data);child.stderr.on('data',data=>stderr+=data);const timer=setTimeout(()=>child.kill('SIGKILL'),20000);const code=await new Promise(resolve=>child.on('exit',resolve));clearTimeout(timer);assert.equal(code,0,stderr);const result=JSON.parse(stdout);assert.equal(result.cases.length,16);assert.ok(result.cases.every(c=>c.passed===true||c.rgbaDifferenceCount===0));console.log(JSON.stringify(result));
  });
 }

@@ -11,3 +11,9 @@
 This real subset contains `中` and omits `文`. It preserves the regression coverage for missing-glyph rejection, source-pixel preservation, foreign-owner denial and safe import rollback, and the two-file/same-family export test. It is only a test fixture; the public four-font tests continue to read the new complete files from `public/fonts/`.
 
 The fixture bytes and embedded font identity were not modified. Renaming the file does not rename the typeface.
+
+## Native custom-font persistence fixture
+
+`CraftAcceptanceFace-Regular.ttf` is a renamed, glyph-subset derivative of JetBrains Mono Regular, obtained from the pinned WordCraft repository's `assets/fonts/JetBrainsMono-Regular.ttf`. It contains only the characters needed for the native persistence acceptance fixture and uses a unique family name, `Craft Acceptance Face`, so a system or bundled font cannot hide a missing custom-font registration. It is test data, not a product font. The SIL Open Font License and original copyright are preserved in `OFL-CraftAcceptanceFace.txt` and in the font name table.
+
+The native integration test installs this font via WordCraft `font.add`, saves the DOCX and managed checkpoint, deletes the original workspace, and compares the rendered text after a new native process reopens the checkpoint. This verifies custom-font persistence independently of the original UI's font editing tests.

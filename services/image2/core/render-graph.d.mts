@@ -8,14 +8,15 @@ export type Mask = { id: string; kind: 'raster' | 'vector'; contentId: string; c
 export type Layer = { id: string; type: 'raster' | 'vector' | 'text' | 'group' | 'mask' | 'adjustment'; name?: string; contentId?: string; parentId?: string; z: number; visible: boolean; opacity?: number; matrix: Matrix; localBounds: Rect; blendMode?: Blend; compositeMode?: 'isolated' | 'passthrough'; masks?: Mask[]; effects?: Effect[]; clipToLayerId?: string; metadata?: Record<string, unknown> };
 export type RenderDocument = { id: string; schemaVersion: 3; revision: number; width: number; height: number; renderVersion: 'weiai-rg-1'; assetIds: string[]; contentAssets: ContentDescriptor[]; requiredFeatures?: string[]; workingColor: { space: 'srgb'; bitDepth: 8; alphaEncoding: 'straight' }; layers: Layer[] };
 export type PathItem = { id?: string; d: string; matrix?: Matrix; fill?: string; stroke?: string; strokeWidth?: number; fillRule?: 'nonzero' | 'evenodd'; antiAlias?: boolean; paintOrder?: 'stroke-fill' };
-export type Resource = ({ kind: 'raster'; pixels: Uint8Array; width: number; height: number; bounds?: RectTuple } | { kind: 'paths'; paths: PathItem[] }) & { hash: string; sourceAssetId?: string; contentId?: string; fontAssetId?: string; appearanceProxy?: boolean; preserved?: boolean };
+export type Resource = ({ kind: 'raster'; pixels: Uint8Array; width: number; height: number; bounds?: RectTuple; sampling?: 'linear' | 'nearest' } | { kind: 'paths'; paths: PathItem[] }) & { hash: string; sourceAssetId?: string; contentId?: string; fontAssetId?: string; appearanceProxy?: boolean; preserved?: boolean };
 export type RenderMask = Mask & { resource: string; worldMatrix: Matrix; density: number; featherPx: number };
 export type RenderNode = { id: string; type: Layer['type']; bounds: RectTuple; matrix: Matrix; opacity: number; blend: Blend; compositeMode: 'isolated' | 'passthrough'; effects: Effect[]; masks: RenderMask[]; children: RenderNode[]; resource?: string; clipBounds?: RectTuple; clipToLayerId?: string; hiddenClipBase?: boolean };
-export type RenderGraph = { version: 'weiai-rg-1'; engineVersion: 'canvaskit-0.42.0'; documentId: string; revision: number; width: number; height: number; roots: RenderNode[]; resources: Record<string, Resource>; clipBases: Record<string, RenderNode | null>; bounds: Rect; cacheMaterial: string };
+export type RenderGraph = { version: 'weiai-rg-1'; engineVersion: 'canvaskit-0.42.0'; samplingVersion: 'pixel-boundary-sampling-1'; documentId: string; revision: number; width: number; height: number; roots: RenderNode[]; resources: Record<string, Resource>; clipBases: Record<string, RenderNode | null>; bounds: Rect; cacheMaterial: string };
 export type PrepareOptions = { layerIds?: string[]; bounds?: Rect; maxResourcePixels?: number };
 export type Resolver = (content: ContentDescriptor, context: { layer: Layer; role: 'content' | 'mask'; document: RenderDocument }) => Resource | Promise<Resource>;
 export const RENDER_VERSION: 'weiai-rg-1';
 export const ENGINE_VERSION: 'canvaskit-0.42.0';
+export const SAMPLING_VERSION: 'pixel-boundary-sampling-1';
 export const BLENDS: readonly Blend[];
 export function renderError(message: string, code?: string): Error & { status: 422; code: string };
 export function canonical(value: unknown): string;
