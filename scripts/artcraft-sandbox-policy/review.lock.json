@@ -53,7 +53,7 @@
   "artifacts": {
     "policy.py": "b1c11fec3489e2f58e959bc97cfffa7fe6cfaaa93bd5853b6b0ee5cd9411d40b",
     "target-probe.mjs": "09a43a7458935df27c0ba159b0bbca42ea556a2423daa9b8ccd1301bc0cd4667",
-    "collect-review-facts.ps1": "0d902bba770ed010b49d9b0174e38288e124e38943e039c61d5192f5460a0d00",
+    "collect-review-facts.ps1": "654b30f228b45996f9faaa389a9a33877ce78d2f234fe5094b20360ec7cae4ba",
     "test_policy.py": "032a01cf0627902c7802541783756189a3cd1f48e0b3b678bf7ea95c49cc6255",
     "probe-checks.test.mjs": "0be3656ed204e2c413db54a22c2994b5616c02b6986f73aaad28b274b9533091",
     "README.md": "c0e610774c455b6d1190a7d76c427040af4ccc30694031a5cb2f6bab233ff66e"

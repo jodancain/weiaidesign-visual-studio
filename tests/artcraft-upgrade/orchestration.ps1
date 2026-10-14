@@ -68,6 +68,14 @@ try {
     Check ($facts.Mounts.Count -eq 1 -and $facts.Mounts[0].Type -ceq 'bind' -and $null -eq $facts.Mounts[0].Name -and !$facts.Mounts[0].RW) 'bind mount with omitted Name retains exact source and readonly flag'
     Check ($facts.SecurityOpt[1] -ceq 'seccomp={"mask":18446744073707453426}') 'embedded seccomp uint64 remains an unparsed string'
     Check ($script:collectorArguments[-1].Contains('{{json (index . `Name`)}}') -and !$script:collectorArguments[-1].Contains('"')) 'native template uses raw Go keys without embedded double quotes'
+    $arrayFields=[ordered]@{Devices='.HostConfig.Devices';Binds='.HostConfig.Binds'}
+    foreach($case in @(@{Devices='null';Binds='null';Count=0},@{Devices='[]';Binds='[]';Count=0},@{Devices='[{"PathOnHost":"/synthetic/a","PathInContainer":"/dev/a","CgroupPermissions":"r"}]';Binds='["synthetic-a:/data/a"]';Count=1},@{Devices='[{"PathOnHost":"/synthetic/a"},{"PathOnHost":"/synthetic/b"}]';Binds='["synthetic-a:/data/a","synthetic-b:/data/b"]';Count=2})){
+        $script:collectorLines=@($case.Devices,$case.Binds);$arrays=Read-DockerFields @('inspect','synthetic') $arrayFields
+        $json=$arrays|ConvertTo-Json -Depth 8 -Compress
+        Check ($arrays.Devices -is [array] -and $arrays.Binds -is [array] -and $arrays.Devices.Count -eq $case.Count -and $arrays.Binds.Count -eq $case.Count -and $json -notmatch '"value"|"Count"') 'null/empty/single/multiple device and bind arrays retain JSON array shape'
+        if($case.Count){Check ($arrays.Devices[0].PathOnHost -ceq '/synthetic/a' -and $arrays.Binds[0] -ceq 'synthetic-a:/data/a') 'nonempty forbidden device and bind details are never discarded'}
+    }
+    $script:collectorLines=@('[]');Reject {Read-DockerFields @('inspect','synthetic') $arrayFields} 'Incomplete Docker field output'
     $script:collectorExit=1;$script:collectorLines=@();Reject {Read-DockerFields @('inspect','synthetic') $fields} 'Read-only Docker query failed'
     $script:collectorExit=0;$script:collectorLines=@('"synthetic-id"');Reject {Read-DockerFields @('inspect','synthetic') $fields} 'Incomplete Docker field output'
 } finally {Remove-Item Function:docker}
@@ -94,6 +102,79 @@ try {
     Check ($redacted.ErrorId -ceq 'redacted' -and ($redacted|ConvertTo-Json -Compress) -notmatch 'synthetic_private_exception_text') 'throw text is never persisted as an ErrorId'
     Check ($redacted.Keys.Count -eq 3 -and $redacted.Line -gt 0 -and $redacted.ExceptionType) 'diagnostic contains only type, allowed identifier and line'
 } finally {[IO.Directory]::Delete($roundtrip,$true)}
+# Actual Docker omits Sysctls and bind Name, rather than emitting prefilled nulls.
+# Mandatory volume names, resource limits and the delegated policy check remain required.
+$runtimeDir=Join-Path ([IO.Path]::GetTempPath()) ('artcraft-runtime-fixture-'+[Guid]::NewGuid().ToString('N'));$null=[IO.Directory]::CreateDirectory($runtimeDir)
+$script:ReleaseRoot=$runtimeDir;$script:Release='fixture';$script:CanaryNetwork='canary';$script:Network='production';$script:CoreVolume='production-data';$script:WebVolume='production-web';$script:NativeVolume='native'
+$script:State=@{PolicyMountSource='/synthetic-policy'};$script:Plan=@{PolicyMode='builtin';PolicySha256='builtin'};$script:runtimePolicyCalls=0
+$script:runtimeFixture=@{Id='fixture-id';Image='fixture-image';Config=@{User='node';Labels=@{'artcraft.release'='fixture'}};HostConfig=@{Privileged=$false;CapAdd=$null;Devices=@();NanoCpus=2000000000;Memory=2147483648;PidsLimit=256;RestartPolicy=@{Name='unless-stopped'}};State=@{Running=$true;Restarting=$false};NetworkSettings=@{Networks=@{canary=@{}}};Mounts=@(@{Type='volume';Name='scratch';Destination='/data/image2';RW=$true},@{Type='volume';Name='native';Destination='/opt/artcraft';RW=$false},@{Type='bind';Destination='/policy';Source='/synthetic-policy';RW=$false})}
+function Container($Name){return $script:runtimeFixture}
+function Object($Kind,$Name){return @{Internal=$true}}
+function CollectFacts($Name,$Path){}
+function PolicyValidate($Arguments){Check ($Arguments[0] -ceq 'service-check') 'runtime still invokes exact service policy validator';$script:runtimePolicyCalls++}
+function Docker($A,$InputText='', $Environment=@{}){return 'fixture-id'}
+try {
+    Check (!$script:runtimeFixture.HostConfig.ContainsKey('Sysctls') -and !$script:runtimeFixture.Mounts[2].ContainsKey('Name')) 'runtime fixture uses genuinely omitted optional keys'
+    AssertRuntime 'builtin' 'fixture-image' 'scratch';Check ($script:runtimePolicyCalls -eq 1) 'omitted Sysctls and bind Name pass only through policy validation'
+    $script:runtimeFixture.HostConfig.Sysctls=$null;AssertRuntime 'builtin' 'fixture-image' 'scratch';Check ($script:runtimePolicyCalls -eq 2) 'explicit null Sysctls also passes through policy validation';$script:runtimeFixture.HostConfig.Remove('Sysctls')
+    $script:runtimeFixture.Remove('Image');try{AssertRuntime 'builtin' 'fixture-image' 'scratch';throw 'missing image accepted'}catch{Check ($_.FullyQualifiedErrorId -eq 'PropertyNotFoundStrict') 'missing mandatory image identity fails closed'};$script:runtimeFixture.Image='fixture-image'
+    $script:runtimeFixture.Mounts[2].Remove('Type');try{AssertRuntime 'builtin' 'fixture-image' 'scratch';throw 'missing mount type accepted'}catch{Check ($_.FullyQualifiedErrorId -match '^PropertyNotFoundStrict(,|$)') 'runtime mount Type remains mandatory'};$script:runtimeFixture.Mounts[2].Type='bind'
+    $script:runtimeFixture.HostConfig.Sysctls=@{'net.ipv4.ip_forward'='1'};Reject {AssertRuntime 'builtin' 'fixture-image' 'scratch'} 'runtime_limits_mismatch';$script:runtimeFixture.HostConfig.Remove('Sysctls')
+    $script:runtimeFixture.HostConfig.Memory=1;Reject {AssertRuntime 'builtin' 'fixture-image' 'scratch'} 'runtime_limits_mismatch';$script:runtimeFixture.HostConfig.Remove('Memory')
+    try{AssertRuntime 'builtin' 'fixture-image' 'scratch';throw 'missing memory accepted'}catch{Check ($_.FullyQualifiedErrorId -eq 'PropertyNotFoundStrict') 'missing mandatory memory is never defaulted'};$script:runtimeFixture.HostConfig.Memory=2147483648
+    $script:runtimeFixture.Mounts[2].Type='volume';try{AssertRuntime 'builtin' 'fixture-image' 'scratch';throw 'missing volume name accepted'}catch{Check ($_.FullyQualifiedErrorId -match '^PropertyNotFoundStrict(,|$)') 'only bind Name is optional; volume Name remains mandatory'};$script:runtimeFixture.Mounts[2].Type='bind'
+    $script:runtimeFixture.Mounts[0].Name=$CoreVolume;Reject {AssertRuntime 'builtin' 'fixture-image' 'scratch'} 'canary_has_production_volume';$script:runtimeFixture.Mounts[0].Name='scratch'
+    AssertExclusive 'scratch' @('fixture-id');AssertExclusive 'native' @();Check ($true) 'volume audit skips unnamed bind mounts and retains readonly native volume semantics'
+    Reject {AssertExclusive 'scratch' @()} 'another_running_volume_writer_requires_review'
+    $script:runtimeFixture.Mounts[2].Remove('Type');try{AssertExclusive 'scratch' @('fixture-id');throw 'exclusive missing type accepted'}catch{Check ($_.FullyQualifiedErrorId -eq 'PropertyNotFoundStrict') 'exclusive audit requires mount Type'};$script:runtimeFixture.Mounts[2].Type='bind'
+    $script:runtimeFixture.Mounts[0].Remove('Name');try{AssertExclusive 'scratch' @('fixture-id');throw 'exclusive missing volume name accepted'}catch{Check ($_.FullyQualifiedErrorId -eq 'PropertyNotFoundStrict') 'exclusive audit requires volume Name'};$script:runtimeFixture.Mounts[0].Name='scratch'
+} finally {
+    [IO.Directory]::Delete($runtimeDir,$true)
+    foreach($name in @('Container','Object','CollectFacts','PolicyValidate','Docker')){$f=$ast.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst]},$false)|Where-Object Name -eq $name;Invoke-Expression $f.Extent.Text}
+}
+# Independently created policy helper records the Windows request before Docker
+# supplies a resolved source. No service/container start belongs in this path.
+$script:Release='fixture';$script:CanaryNetwork='canary';$script:NativeVolume='native';$script:PolicyDir='C:\reviewed\policy';$script:CoreVolume='production-data';$script:WebVolume='production-web'
+$script:Plan=@{SourceArchiveSha256='frozen-source'};$script:State=@{NewCore='fixture-image';PolicyMountSource='previous-source'}
+$script:sourceId=('a'*64);$script:sourceName='artcraft-fixture-policy-source';$script:sourceVolume="$sourceName-data";$script:sourceEvents=@();$script:sourceExists=$false;$script:volumeListing=''
+$script:sourceHelper=@{Id=$sourceId;Name="/$sourceName";Image='fixture-image';Config=@{User='node';Labels=@{'artcraft.release'='fixture'};Entrypoint=@('true');Cmd=$null};State=@{Running=$false;Restarting=$false;StartedAt='0001-01-01T00:00:00Z'};HostConfig=@{Privileged=$false;CapAdd=$null;Devices=@();CapDrop=@('ALL');SecurityOpt=@('no-new-privileges=true');ReadonlyRootfs=$true;Memory=2147483648;NanoCpus=2000000000;PidsLimit=256;RestartPolicy=@{Name='unless-stopped'};NetworkMode='canary';PortBindings=@{};Tmpfs=@{'/tmp'='rw,nosuid,nodev,size=1073741824,mode=1777'};Mounts=@(@{Type='volume';Target='/data/image2';Source=$sourceVolume},@{Type='volume';Target='/opt/artcraft';Source='native';ReadOnly=$true},@{Type='bind';Target='/policy';Source='/independently-resolved-policy';ReadOnly=$true})};NetworkSettings=@{Networks=@{canary=@{}}};Mounts=@(@{Type='volume';Name=$sourceVolume;Destination='/data/image2';RW=$true},@{Type='volume';Name='native';Destination='/opt/artcraft';RW=$false},@{Type='bind';Destination='/policy';Source='/independently-resolved-policy';RW=$false})}
+function Container($Name){return $script:sourceHelper}
+function Object($Kind,$Name){return @{Internal=$true}}
+function Exists($Kind,$Name){return $script:sourceExists}
+function Resource($Kind,$Name){}
+function SaveState {}
+function StartContainer($Name){throw 'source helper must never start'}
+function Docker($A,$InputText='', $Environment=@{}){
+    $script:sourceEvents+=$A[0]
+    if($A[0] -ceq 'volume'){return $script:volumeListing}
+    Check ($A[0] -ceq 'create' -and $A[-2] -ceq 'true' -and $A[-1] -ceq 'fixture-image') 'source helper only creates true entrypoint with frozen image'
+    Check ($State.PolicySourceRequest.RequestedSource -ceq $PolicyDir -and !$State.PolicySourceRequest.ContainerId -and $A -contains "type=bind,source=$PolicyDir,target=/policy,readonly") 'exact Windows bind request is saved before Docker normalization'
+    Check ($Environment.ARTCRAFT_CANARY -ceq '1' -and $Environment.Keys.Count -eq 8 -and !$Environment.ContainsKey('OPENAI_API_KEY')) 'source helper uses same limited synthetic Core environment'
+    return $script:sourceId
+}
+try {
+    InitializePolicySource
+    Check ($State.PolicyMountSource -ceq '/independently-resolved-policy' -and $State.PolicySourceProof.ContainerId -ceq $sourceId -and $State.PolicySourceProof.RequestedSource -ceq $PolicyDir -and $State.PolicySourceProof.NeverStarted) 'source provenance binds exact independent helper and original request'
+    InitializePolicySource;Check (@($sourceEvents|Where-Object {$_ -ceq 'create'}).Count -eq 1 -and $sourceEvents -notcontains 'start') 'verified helper is rechecked without replay or start'
+    $request=$State.PolicySourceRequest
+    $sourceHelper.Id='wrong';Reject {AssertPolicySourceHelper $sourceHelper $request} 'policy_helper_identity';$sourceHelper.Id=$sourceId
+    $sourceHelper.Image='wrong';Reject {AssertPolicySourceHelper $sourceHelper $request} 'policy_helper_identity';$sourceHelper.Image='fixture-image'
+    $sourceHelper.Config.Labels['artcraft.release']='wrong';Reject {AssertPolicySourceHelper $sourceHelper $request} 'policy_helper_identity';$sourceHelper.Config.Labels['artcraft.release']='fixture'
+    $sourceHelper.State.StartedAt='2026-10-15T00:00:00Z';Reject {AssertPolicySourceHelper $sourceHelper $request} 'policy_helper_must_remain_unstarted';$sourceHelper.State.StartedAt='0001-01-01T00:00:00Z'
+    $sourceHelper.HostConfig.CapAdd=@('SYS_ADMIN');Reject {AssertPolicySourceHelper $sourceHelper $request} 'policy_helper_limits';$sourceHelper.HostConfig.CapAdd=$null
+    $sourceHelper.HostConfig.PortBindings=@{'80/tcp'=@(@{HostPort='12345'})};Reject {AssertPolicySourceHelper $sourceHelper $request} 'policy_helper_network_or_tmpfs';$sourceHelper.HostConfig.PortBindings=@{}
+    $request.RequestedSource='C:\unreviewed';Reject {AssertPolicySourceHelper $sourceHelper $request} 'policy_helper_request_changed';$request.RequestedSource=$PolicyDir
+    $request.DataVolume=$CoreVolume;Reject {AssertPolicySourceHelper $sourceHelper $request} 'policy_helper_mount_roles';$request.DataVolume=$sourceVolume
+    $sourceHelper.Mounts[1].RW=$true;Reject {AssertPolicySourceHelper $sourceHelper $request} 'policy_helper_mount_roles';$sourceHelper.Mounts[1].RW=$false
+    $sourceHelper.Mounts[2].RW=$true;Reject {AssertPolicySourceHelper $sourceHelper $request} 'policy_helper_bind';$sourceHelper.Mounts[2].RW=$false
+    $sourceHelper.HostConfig.Mounts[2].Source='/different';Reject {AssertPolicySourceHelper $sourceHelper $request} 'policy_helper_resolved_source_mismatch';$sourceHelper.HostConfig.Mounts[2].Source='/independently-resolved-policy'
+    $State.Remove('PolicySourceProof');$script:sourceExists=$true;Reject {InitializePolicySource} 'policy_helper_unreceipted_container';$script:sourceExists=$false
+    $script:volumeListing=$sourceVolume;Reject {InitializePolicySource} 'policy_helper_requires_fresh_volume';$script:volumeListing=''
+    $State.PolicyMountSource='previous-source';$sourceHelper.Mounts[2].RW=$true;Reject {InitializePolicySource} 'policy_helper_bind'
+    Check ($State.PolicyMountSource -ceq 'previous-source' -and !$State.ContainsKey('PolicySourceProof') -and $sourceEvents -notcontains 'start') 'rejected helper preserves prior expected source and never starts'
+} finally {
+    foreach($name in @('Container','Object','Exists','Resource','SaveState','StartContainer','Docker')){$f=$ast.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst]},$false)|Where-Object Name -eq $name;Invoke-Expression $f.Extent.Text}
+}
 # Exact queued bytes must be checked before any side effect.
 $tmp=Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString('N'));$null=[IO.Directory]::CreateDirectory($tmp)
 try {
@@ -127,7 +208,7 @@ function Container($Name){return $script:containers[$Name]}
 Rename 'live' 'retained' 'old'
 Reject {Rename 'live' 'retained' 'other'} 'retained_name_collision'
 # Stopped unrelated always-restart writers are unsafe even before a daemon restart.
-$script:containers=@{other=@{Id='other';State=@{Running=$false;Restarting=$false};HostConfig=@{RestartPolicy=@{Name='always'}};Mounts=@(@{Name='prod';RW=$true})}}
+$script:containers=@{other=@{Id='other';State=@{Running=$false;Restarting=$false};HostConfig=@{RestartPolicy=@{Name='always'}};Mounts=@(@{Type='volume';Name='prod';RW=$true})}}
 function Docker($A,$InputText='', $Environment=@{}) {return 'other'}
 Reject {AssertExclusive 'prod' @()} 'another_running_volume_writer_requires_review'
 $script:containers.other.HostConfig.RestartPolicy.Name='no';AssertExclusive 'prod' @()
@@ -138,6 +219,9 @@ $script:WebVolume='shared-web';$script:Web='web';$script:Core='core';$script:Old
 $script:State=@{OriginalWeb=@{Id='old-web-id';Image='old-web-image';RestartPolicy=@{Name='always';MaximumRetryCount=0}};OriginalCore=@{Id='old-core-id';Image='old-core-image'};NewWeb='new-web-image';NewCore='new-core-image';FreshBackup=@{Ledger=@{verifiedAssets=0;fingerprints=@{}}};OldWebNewCore=@{passed=$true}}
 $script:containers=@{web=@{Id='new-web-id';State=@{Running=$true};Image='new-web-image';Config=@{Labels=@{'artcraft.release'='rel'}}};core=@{Id='new-core-id';State=@{Running=$true};Image='new-core-image';Config=@{Labels=@{'artcraft.release'='rel'}}};oldweb=@{Id='old-web-id'};oldcore=@{Id='old-core-id'}}
 $script:events=@()
+$script:rejectRecoveryRuntime=$false
+function AssertRuntime($Name,$Image,$Volume,[switch]$Production,[switch]$IsWeb){Check ($Name -eq $Core -and $Image -eq $State.NewCore -and $Volume -eq $CoreVolume -and $Production -and !$IsWeb) 'recovery requires exact production Core runtime validation';$script:events+="validate:$Name";if($script:rejectRecoveryRuntime){throw 'runtime-rejected'}}
+function Restore($Volume,$Image,$Dir,$File){$script:events+='restore:data'}
 function SetRestart($Name,$Policy){$script:events+="restart:$Name=$($Policy.Name)"}
 function Stop($Name,[switch]$IsWeb){$script:events+="stop:$Name"}
 function StartContainer($Name){$script:events+="start:$Name"}
@@ -153,6 +237,17 @@ Check ($script:containers.core.Id -eq 'new-core-id') 'new core retained'
 Check ($script:containers.web.Id -eq 'old-web-id') 'old web restored'
 Check (!($script:events -contains 'start:oldcore')) 'old worker never started after acceptance'
 Check (!($script:events -contains 'stop:core')) 'active new Core never stopped for rollback'
+Check ($script:events.IndexOf('validate:core') -lt $script:events.IndexOf('start:core')) 'successful hybrid recovery validates before any Core start'
+# A just-created invalid candidate and a running rejected candidate both remain
+# intact. Validation failure never starts either worker or restores old data.
+foreach($running in @($false,$true)){
+    $script:containers=@{core=@{Id='new-core-id';State=@{Running=$running};Image='new-core-image';Config=@{Labels=@{'artcraft.release'='rel'}}};oldweb=@{Id='old-web-id'};oldcore=@{Id='old-core-id'}}
+    $script:events=@();$script:rejectRecoveryRuntime=$true
+    Reject {RestorePair} 'runtime-rejected'
+    Check (@($script:events|Where-Object {$_ -match '^(start|stop|restore|rename):'}).Count -eq 0) 'rejected recovery causes zero starts/stops/data restores/renames'
+    Check ($script:containers.core.Id -eq 'new-core-id' -and $script:containers.core.State.Running -eq $running -and $State.RecoveryInProgress) 'rejected new worker and recovery evidence remain intact'
+}
+$script:rejectRecoveryRuntime=$false
 # Create succeeded/start failed, exited worker, and stop-interrupted recovery all
 # reach the same stopped-candidate state. No docker exec is legal in this branch.
 foreach($failure in @('start-failed','exited-worker','interrupted-after-stop')){
@@ -164,6 +259,7 @@ foreach($failure in @('start-failed','exited-worker','interrupted-after-stop')){
     RestorePair
     Check ($script:containers.core.Id -eq 'new-core-id' -and $script:containers.web.Id -eq 'old-web-id') $failure
     Check ($script:events -contains 'start:core' -and !($script:events -contains 'stop:core')) 'stopped candidate resumes its own new ledger without old worker'
+    Check ($script:events.IndexOf('validate:core') -lt $script:events.IndexOf('start:core')) 'stopped recovery validates before start'
 }
 $script:events=@()
 function Probe($Name,$Witness,[switch]$Public,[switch]$Ordinary){throw 'readback failure'}
@@ -184,6 +280,8 @@ function Docker($A,$InputText='', $Environment=@{}) {return 'other'}
 Check (!(TargetsCore $client $target)) 'same token resolved to independent API is not target'
 $client.Config.Env=@('IMAGE2_API_TOKEN=different','IMAGE2_API_URL=http://image2:18088')
 Check (TargetsCore $client $target) 'actual target destination inventoried even token differs'
+$target.NetworkSettings.Networks.production.Remove('Aliases');Check (TargetsCore $client $target) 'target endpoint may omit optional Aliases'
+$other.NetworkSettings.Networks.production.Remove('Aliases');$client.Config.Env=@('IMAGE2_API_TOKEN=synthetic','IMAGE2_API_URL=http://independent-core:18088');Check (!(TargetsCore $client $target)) 'resolved independent endpoint may omit optional Aliases'
 $client.Config.Env=@('IMAGE2_API_TOKEN=synthetic','IMAGE2_API_URL=http://unknown.invalid:18088')
 Reject {TargetsCore $client $target} 'submitter_destination_unresolved'
 # All Docker bindings, including a stopped/unrelated IPv6 publication, participate.

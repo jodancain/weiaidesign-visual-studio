@@ -23,7 +23,10 @@ function Read-DockerFields([string[]]$DockerArguments, [System.Collections.IDict
   $index = 0
   foreach ($key in $Fields.Keys) {
     $value = ConvertFrom-Json -InputObject $lines[$index]
-    if ($key -in @('SecurityOptions', 'CapAdd', 'CapDrop', 'SecurityOpt')) {
+    # Windows PowerShell 5.1 can attach value/Count ETS wrappers to parsed
+    # arrays. Enumerate these array fields so empty and populated arrays retain
+    # their actual JSON values; nonempty Devices/Binds still reach the validator.
+    if ($key -in @('SecurityOptions', 'CapAdd', 'CapDrop', 'SecurityOpt', 'Devices', 'Binds')) {
       if ($null -eq $value) { $value = @() } else { $value = @($value) }
     }
     $result[$key] = $value

@@ -92,7 +92,7 @@ function AssertLayout($c,[string]$Volume,[string]$Destination,[switch]$IsWeb){
 }
 function AssertExclusive([string]$Volume,[string[]]$Allowed){
     $ids=(Docker @('ps','-aq','--filter',"volume=$Volume")) -split '\r?\n'
-    foreach($id in $ids){if(!$id){continue};$c=Container $id;foreach($m in $c.Mounts){if($m.Name -eq $Volume -and $m.RW -and ($c.State.Running -or $c.State.Restarting -or $c.HostConfig.RestartPolicy.Name -eq 'always')){Need ($Allowed -contains $c.Id) 'another_running_volume_writer_requires_review'}}}
+    foreach($id in $ids){if(!$id){continue};$c=Container $id;foreach($m in $c.Mounts){if($m.Type -eq 'volume' -and $m.Name -eq $Volume -and $m.RW -and ($c.State.Running -or $c.State.Restarting -or $c.HostConfig.RestartPolicy.Name -eq 'always')){Need ($Allowed -contains $c.Id) 'another_running_volume_writer_requires_review'}}}
 }
 function TargetsCore($Candidate,$Target) {
     # Values never leave host memory. Token equality alone does not identify a destination.
@@ -100,13 +100,13 @@ function TargetsCore($Candidate,$Target) {
     if(!$raw){return ($values['IMAGE2_API_TOKEN'] -and $values['IMAGE2_API_TOKEN'] -ceq (EnvMap $Target)['IMAGE2_API_TOKEN'])}
     $uri=$null;Need ([Uri]::TryCreate($raw,[UriKind]::Absolute,[ref]$uri)) 'submitter_destination_unresolved'
     $hostName=$uri.DnsSafeHost;$shared=@($Candidate.NetworkSettings.Networks.Keys|Where-Object {$Target.NetworkSettings.Networks.ContainsKey($_)})
-    foreach($net in $shared){$n=$Target.NetworkSettings.Networks[$net];if($hostName -in @('image2',$Core,$Target.Id,$Target.Id.Substring(0,12),$n.IPAddress)+@($n.Aliases)){return $true}}
+    foreach($net in $shared){$n=$Target.NetworkSettings.Networks[$net];if($hostName -in @('image2',$Core,$Target.Id,$Target.Id.Substring(0,12),$n.IPAddress)+@($n['Aliases'])){return $true}}
     # An unresolved same-token destination may route back through an external proxy.
     # Exact reviewed non-target destinations are allowed only when topology resolves.
     foreach($net in $shared){
         $others=(Docker @('ps','-q','--filter',"network=$net")) -split '\r?\n'
         foreach($id in $others){if(!$id -or $id -eq $Target.Id){continue};$other=Container $id;$n=$other.NetworkSettings.Networks[$net]
-            if($hostName -in @($other.Name.TrimStart('/'),$other.Id,$other.Id.Substring(0,12),$n.IPAddress)+@($n.Aliases)){return $false}}
+            if($hostName -in @($other.Name.TrimStart('/'),$other.Id,$other.Id.Substring(0,12),$n.IPAddress)+@($n['Aliases'])){return $false}}
     }
     Need (!$values['IMAGE2_API_TOKEN'] -or $values['IMAGE2_API_TOKEN'] -cne (EnvMap $Target)['IMAGE2_API_TOKEN']) 'submitter_destination_unresolved'
     return $false
@@ -311,9 +311,9 @@ function ServiceLayout([string]$Image,[string]$Volume,[switch]$Production){
 function AssertRuntime([string]$Name,[string]$Image,[string]$Volume,[switch]$IsWeb,[switch]$Production,[switch]$InternalWeb){
     $c=Container $Name;Need ($c.Image -ceq $Image -and $c.Config.Labels.'artcraft.release' -ceq $Release) 'candidate_identity_mismatch'
     $user=if($IsWeb){WebUser}else{'node'}
-    Need ($c.Config.User -eq $user -and !$c.HostConfig.Privileged -and !$c.HostConfig.CapAdd -and !$c.HostConfig.Devices -and !$c.HostConfig.Sysctls -and $c.HostConfig.NanoCpus -eq 2000000000 -and $c.HostConfig.Memory -eq 2147483648 -and $c.HostConfig.PidsLimit -eq 256) 'runtime_limits_mismatch'
+    Need ($c.Config.User -eq $user -and !$c.HostConfig.Privileged -and !$c.HostConfig.CapAdd -and !$c.HostConfig.Devices -and !$c.HostConfig['Sysctls'] -and $c.HostConfig.NanoCpus -eq 2000000000 -and $c.HostConfig.Memory -eq 2147483648 -and $c.HostConfig.PidsLimit -eq 256) 'runtime_limits_mismatch'
     $net=if($Production){$Network}else{$CanaryNetwork};Need ($c.NetworkSettings.Networks.Keys.Count -eq 1 -and $c.NetworkSettings.Networks.ContainsKey($net)) 'candidate_network_mismatch'
-    if(!$Production){Need ((Object 'network' $net).Internal) 'canary_network_not_internal';Need (@($c.Mounts|Where-Object {$_.Name -in @($CoreVolume,$WebVolume)}).Count -eq 0) 'canary_has_production_volume'}
+    if(!$Production){Need ((Object 'network' $net).Internal) 'canary_network_not_internal';Need (@($c.Mounts|Where-Object {$_.Type -eq 'volume' -and $_.Name -in @($CoreVolume,$WebVolume)}).Count -eq 0) 'canary_has_production_volume'}
     if(!$IsWeb){
         $stamp=[Guid]::NewGuid().ToString('N');$facts="runtime-$stamp.json";$layout="layout-$stamp.json"
         CollectFacts $Name (Join-Path $ReleaseRoot $facts);SaveJson (Join-Path $ReleaseRoot $layout) (ServiceLayout $Image $Volume -Production:$Production)
@@ -326,16 +326,23 @@ function AssertRuntime([string]$Name,[string]$Image,[string]$Volume,[switch]$IsW
         if(!$Production){Need ($bindings.Count -eq 1 -and $bindings[0].HostIp -eq '127.0.0.1') 'canary_public_binding'}
     }
 }
+function CoreCreateArguments([string]$Name,[string]$Volume,[string]$Net){
+    return @('create','--name',$Name,'--user','node','--restart','unless-stopped','--network',$Net,'--cpus','2','--memory','2g','--pids-limit','256','--label',"artcraft.release=$Release",'--label',"artcraft.source=$($Plan.SourceArchiveSha256)",'--mount',"type=volume,source=$Volume,target=/data/image2",'--network-alias','image2','--read-only','--tmpfs','/tmp:rw,nosuid,nodev,size=1073741824,mode=1777','--cap-drop','ALL','--security-opt','no-new-privileges=true','--mount',"type=volume,source=$NativeVolume,target=/opt/artcraft,readonly",'--mount',"type=bind,source=$PolicyDir,target=/policy,readonly")
+}
+function CanaryCoreValues {
+    return @{NODE_ENV='production';HOSTNAME='0.0.0.0';IMAGE2_API_TOKEN=('artcraft-canary-'+$Release+'-synthetic-local-only');STUDIO_VISITOR_SECRET=('artcraft-visitor-'+$Release+'-synthetic-local-only');ARTCRAFT_CANARY='1';PORT='18088';IMAGE2_DATA_DIR='/data/image2';IMAGE2_CRAFT_BIN_DIR='/opt/artcraft'}
+}
 function CreateService([string]$Name,[string]$Image,[string]$Volume,[switch]$IsWeb,[switch]$Production,[switch]$InternalWeb){
     if(Exists 'container' $Name){Need ((Container $Name).Image -ceq $Image -and (Container $Name).Config.Labels.'artcraft.release' -ceq $Release) 'existing_service_mismatch';AssertRuntime $Name $Image $Volume -IsWeb:$IsWeb -Production:$Production -InternalWeb:$InternalWeb;StartContainer $Name;return}
     $net=if($Production){$Network}else{$CanaryNetwork}
     if($Production){$source=if($IsWeb){$OldWeb}else{$OldCore};$values=EnvMap (Container $source)}
+    elseif(!$IsWeb){$values=CanaryCoreValues}
     else {$values=@{NODE_ENV='production';HOSTNAME='0.0.0.0';IMAGE2_API_TOKEN=('artcraft-canary-'+$Release+'-synthetic-local-only');STUDIO_VISITOR_SECRET=('artcraft-visitor-'+$Release+'-synthetic-local-only');ARTCRAFT_CANARY='1'}}
     if($IsWeb){$values.PORT='18084';$values.IMAGE2_API_URL='http://image2:18088';$dest='/data'}else{$values.PORT='18088';$values.IMAGE2_DATA_DIR='/data/image2';$values.IMAGE2_CRAFT_BIN_DIR='/opt/artcraft';$dest='/data/image2'}
     $user=if($IsWeb){WebUser}else{'node'}
     $a=@('create','--name',$Name,'--user',$user,'--restart','unless-stopped','--network',$net,'--cpus','2','--memory','2g','--pids-limit','256','--label',"artcraft.release=$Release",'--label',"artcraft.source=$($Plan.SourceArchiveSha256)",'--mount',"type=volume,source=$Volume,target=$dest")
     if(!$IsWeb){
-        $a+=@('--network-alias','image2','--read-only','--tmpfs','/tmp:rw,nosuid,nodev,size=1073741824,mode=1777','--cap-drop','ALL','--security-opt','no-new-privileges=true','--mount',"type=volume,source=$NativeVolume,target=/opt/artcraft,readonly",'--mount',"type=bind,source=$PolicyDir,target=/policy,readonly")
+        $a=@(CoreCreateArguments $Name $Volume $net)
         if($Plan.PolicyMode -eq 'candidate'){$a+=@('--security-opt',"seccomp=$PolicyFile")}
     } else {
         foreach($option in $State.OriginalWeb.SecurityOpt){Need ($option -in @('no-new-privileges','no-new-privileges=true')) 'web_custom_policy_requires_review';$a+=@('--security-opt',$option)}
@@ -423,6 +430,41 @@ function VerifyNativeVolume {
     Need ($proof.passed -and $proof.binaries.Count -eq 13 -and $proof.root -ceq '/opt/artcraft') 'native_final_root_not_verified'
     $State.NativeVolumeProof=$proof;SaveState
 }
+function AssertPolicySourceHelper($h,$Request){
+    Need ($Request.RequestedSource -ceq $PolicyDir -and $Request.Image -ceq $State.NewCore -and $Request.Network -ceq $CanaryNetwork -and $Request.NativeVolume -ceq $NativeVolume) 'policy_helper_request_changed'
+    Need ($h.Id -ceq $Request.ContainerId -and $h.Name -ceq "/$($Request.Name)" -and $h.Image -ceq $State.NewCore -and $h.Config.Labels.'artcraft.release' -ceq $Release) 'policy_helper_identity'
+    Need (!$h.State.Running -and !$h.State.Restarting -and $h.State.StartedAt -ceq '0001-01-01T00:00:00Z' -and $h.Config.Entrypoint.Count -eq 1 -and $h.Config.Entrypoint[0] -ceq 'true' -and !$h.Config.Cmd) 'policy_helper_must_remain_unstarted'
+    $hc=$h.HostConfig
+    Need ($h.Config.User -ceq 'node' -and !$hc.Privileged -and !$hc.CapAdd -and !$hc.Devices -and !$hc['Sysctls'] -and $hc.CapDrop.Count -eq 1 -and $hc.CapDrop[0] -ceq 'ALL' -and $hc.SecurityOpt.Count -eq 1 -and $hc.SecurityOpt[0] -ceq 'no-new-privileges=true' -and $hc.ReadonlyRootfs -and $hc.Memory -eq 2147483648 -and $hc.NanoCpus -eq 2000000000 -and $hc.PidsLimit -eq 256 -and $hc.RestartPolicy.Name -ceq 'unless-stopped') 'policy_helper_limits'
+    Need ($hc.NetworkMode -ceq $CanaryNetwork -and $h.NetworkSettings.Networks.Keys.Count -eq 1 -and $h.NetworkSettings.Networks.ContainsKey($CanaryNetwork) -and (Object 'network' $CanaryNetwork).Internal -and (!$hc.PortBindings -or $hc.PortBindings.Count -eq 0) -and $hc.Tmpfs.Keys.Count -eq 1 -and $hc.Tmpfs['/tmp'] -ceq 'rw,nosuid,nodev,size=1073741824,mode=1777') 'policy_helper_network_or_tmpfs'
+    Need ($Request.DataVolume -notin @($CoreVolume,$WebVolume) -and $h.Mounts.Count -eq 3) 'policy_helper_mount_roles'
+    foreach($role in @(@($Request.DataVolume,'/data/image2',$true),@($NativeVolume,'/opt/artcraft',$false))){Need (@($h.Mounts|Where-Object {$_.Type -ceq 'volume' -and $_.Name -ceq $role[0] -and $_.Destination -ceq $role[1] -and $_.RW -eq $role[2]}).Count -eq 1) 'policy_helper_mount_roles'}
+    $bind=@($h.Mounts|Where-Object {$_.Type -ceq 'bind' -and $_.Destination -ceq '/policy' -and !$_.RW});Need ($bind.Count -eq 1 -and $bind[0].Source) 'policy_helper_bind'
+    $requested=@($hc.Mounts|Where-Object {$_.Type -ceq 'bind' -and $_.Target -ceq '/policy' -and $_.ReadOnly})
+    Need ($hc.Mounts.Count -eq 3 -and $requested.Count -eq 1 -and $requested[0].Source -ceq $bind[0].Source) 'policy_helper_resolved_source_mismatch'
+    return $bind[0].Source
+}
+function InitializePolicySource {
+    # An independent service-shaped create produces the same Docker Desktop
+    # mount representation. It never starts and has its own fresh empty volume.
+    $name="artcraft-$Release-policy-source";$volume="$name-data"
+    Resource 'network' $CanaryNetwork
+    if(!$State['PolicySourceProof']){
+        Need (!(Exists 'container' $name)) 'policy_helper_unreceipted_container'
+        Need (((Docker @('volume','ls','--format','{{.Name}}')) -split '\r?\n') -notcontains $volume) 'policy_helper_requires_fresh_volume'
+        Resource 'volume' $volume
+        $args=@(CoreCreateArguments $name $volume $CanaryNetwork);$values=CanaryCoreValues
+        foreach($key in $values.Keys){$args+=@('--env',$key)};$args+=@('--entrypoint','true',$State.NewCore)
+        # Record exact nonsecret request before Docker can normalize its Source.
+        $State.PolicySourceRequest=@{Name=$name;Image=$State.NewCore;RequestedSource=$PolicyDir;DataVolume=$volume;NativeVolume=$NativeVolume;Network=$CanaryNetwork;Arguments=$args;ContainerId=$null};SaveState
+        BeginOp 'create-policy-source-helper';$id=Docker $args '' $values;Need ($id -match '^[a-f0-9]{64}$') 'policy_helper_create_id_missing'
+        $State.PolicySourceRequest.ContainerId=$id;SaveState
+    } else {Need ($State.PolicySourceProof.ContainerId -ceq $State.PolicySourceRequest.ContainerId) 'policy_helper_receipt_changed'}
+    $source=AssertPolicySourceHelper (Container $name) $State.PolicySourceRequest
+    if($State['PolicySourceProof']){Need ($State.PolicySourceProof.Source -ceq $source) 'policy_helper_source_changed'}
+    $State.PolicySourceProof=@{ContainerId=$State.PolicySourceRequest.ContainerId;Image=$State.NewCore;RequestedSource=$PolicyDir;Source=$source;DataVolume=$volume;NativeVolume=$NativeVolume;Network=$CanaryNetwork;NeverStarted=$true;Provenance='independent service-shaped create; frozen requested path recorded before Docker'}
+    $State.PolicyMountSource=$source;DoneOp
+}
 function InitializeNativePolicy {
     Resource 'volume' $NativeVolume
     if(!$State.NativeHydrated){
@@ -435,11 +477,7 @@ function InitializeNativePolicy {
         VerifyNativeVolume
         $State.NativeHydrated=$true;DoneOp
     } else {VerifyNativeVolume}
-    # Resolve only our requested Windows bind; this helper has no data volume access.
-    $helper="artcraft-$Release-mount-source"
-    if(!(Exists 'container' $helper)){$null=Docker @('create','--name',$helper,'--network','none','--label',"artcraft.release=$Release",'--mount',"type=bind,source=$PolicyDir,target=/policy,readonly",'--entrypoint','true',$State.NewCore)}
-    $h=Container $helper;Need ($h.Image -ceq $State.NewCore -and $h.Config.Labels.'artcraft.release' -ceq $Release) 'policy_helper_identity'
-    $State.PolicyMountSource=(@($h.Mounts|Where-Object {$_.Destination -eq '/policy' -and !$_.RW}))[0].Source
+    InitializePolicySource
     $before="policy-before-$Invocation.json";CollectFacts $Core (Join-Path $ReleaseRoot $before)
     PolicyValidate @('preflight','--facts',"/release/$before")
     $State.PolicyBeforeFile=$before;SaveState
@@ -561,6 +599,9 @@ function RestorePair {
         $c=Container $Core;Need ($c.Image -ceq $State.NewCore -and $c.Config.Labels.'artcraft.release' -ceq $Release) 'rollback_superseded'
         Need $State.OldWebNewCore.passed 'hybrid_rollback_not_verified'
         AssertExclusive $CoreVolume @($c.Id)
+        # Create may have failed validation before opening ingress. Recovery must
+        # enforce the same policy before starting, while retaining rejected state.
+        AssertRuntime $Core $State.NewCore $CoreVolume -Production
         # Existing restart/recovery contract preserves original accepted IDs and
         # refuses uncertain submissions. A live Core is never stopped here.
         StartContainer $Core;Ready $Core
