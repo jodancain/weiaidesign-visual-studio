@@ -19,6 +19,7 @@ import tempfile
 
 PROFILE = Path('/usr/share/apparmor/extra-profiles/bwrap-userns-restrict')
 POLICIES = Path('/sys/kernel/security/apparmor/policy/profiles')
+PROFILE_SOURCE_DIR = Path('/etc/apparmor.d')
 RESTRICTION = Path('/proc/sys/kernel/apparmor_restrict_unprivileged_userns')
 PROBE = r'''
 import json, os, socket, sys
@@ -112,21 +113,60 @@ def validate_profile_text(text):
         raise RuntimeError('Distro profile lacks the expected setup/child capability separation')
 
 
+def verified_package_bytes(file, expected_package=None):
+    info = file.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022 or info.st_size > 1048576:
+        raise RuntimeError(f'Expected a bounded root-owned, non-writable distro profile file: {file}')
+    ownership = execute(['dpkg-query', '-S', str(file)]).stdout.strip()
+    match = re.fullmatch(r'(apparmor(?:-profiles)?): ' + re.escape(str(file)), ownership)
+    if not match or (expected_package and match.group(1) != expected_package):
+        raise RuntimeError(f'Profile is not owned exclusively by the expected AppArmor package: {file}')
+    package = match.group(1)
+    sums = Path(execute(['dpkg-query', '--control-path', package, 'md5sums']).stdout.strip()).read_text()
+    expected = next((line.split()[0] for line in sums.splitlines() if len(line.split()) == 2 and line.split()[1].lstrip('./') == str(file).lstrip('/')), None)
+    if expected is None:
+        conffiles = execute(['dpkg-query', '-W', '-f=${Conffiles}', package]).stdout
+        expected = next((line.split()[1] for line in conffiles.splitlines() if len(line.split()) >= 2 and line.split()[0] == str(file)), None)
+    data = file.read_bytes()
+    if expected is None or hashlib.md5(data).hexdigest() != expected:
+        raise RuntimeError(f'The installed profile differs from the distribution package: {file}')
+    return data
+
+
+def resolve_unknown_attachment(name):
+    # Some kernel builds expose <unknown> for a compiled AARE attachment (for
+    # example Noble's traceroute alternation). Recover only a unique header
+    # from a checksum-verified installed distro profile, using its own parser.
+    from apparmor.regex import RE_PROFILE_START, parse_profile_start_line
+
+    candidates = []
+    for file in PROFILE_SOURCE_DIR.iterdir():
+        if not file.is_file() or file.stat().st_size > 1048576:
+            continue
+        text = file.read_text()
+        for line in text.splitlines():
+            if not line.startswith(('profile ', '/', '"', '@{')) or not RE_PROFILE_START.search(line):
+                continue
+            parsed = parse_profile_start_line(line, str(file))
+            if parsed['profile'] == name:
+                candidates.append((file, parsed.get('attachment') or parsed.get('plainprofile'), text))
+    if len(candidates) != 1:
+        raise RuntimeError(f'Cannot uniquely resolve existing attachment from installed policy: {name}')
+    file, pattern, text = candidates[0]
+    verified_package_bytes(file)
+    alias = PROFILE_SOURCE_DIR / 'tunables/alias'
+    if re.search(r'^\s*alias\s', text, re.M) or (alias.exists() and re.search(r'^\s*alias\s', alias.read_text(), re.M)):
+        raise RuntimeError(f'Existing attachment uses alias rules requiring manual review: {name}')
+    if not pattern or '@{' in pattern or not pattern.startswith(('/', '{')):
+        raise RuntimeError(f'Cannot safely resolve existing attachment variables: {name}')
+    return pattern, str(file)
+
+
 def inspect_profile():
     """Read-only privileged preflight; does not add, replace or remove policy."""
     from apparmor.aare import AARE  # Provided by Ubuntu apparmor-utils/python3-apparmor.
 
-    info = PROFILE.lstat()
-    if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
-        raise RuntimeError('Expected a root-owned, non-writable distro profile file')
-    owner = execute(['dpkg-query', '-S', str(PROFILE)]).stdout.strip()
-    if owner != f'apparmor-profiles: {PROFILE}':
-        raise RuntimeError('Profile is not owned exclusively by apparmor-profiles')
-    sums = Path(execute(['dpkg-query', '--control-path', 'apparmor-profiles', 'md5sums']).stdout.strip()).read_text()
-    expected = next((line.split()[0] for line in sums.splitlines() if len(line.split()) == 2 and line.split()[1].lstrip('./') == str(PROFILE).lstrip('/')), None)
-    data = PROFILE.read_bytes()
-    if expected is None or hashlib.md5(data).hexdigest() != expected:
-        raise RuntimeError('The installed profile differs from the distribution package')
+    data = verified_package_bytes(PROFILE, 'apparmor-profiles')
     validate_profile_text(data.decode())
     for name in ['bwrap-userns-restrict', 'unpriv_bwrap']:
         local = Path('/etc/apparmor.d/local') / name
@@ -136,14 +176,17 @@ def inspect_profile():
         raise RuntimeError('An installed bwrap profile already exists; refusing to override it')
     if not POLICIES.is_dir():
         raise RuntimeError('Cannot inspect active AppArmor profile attachments')
-    checked = 0
+    checked, resolved = 0, []
     for attachment in POLICIES.rglob('attach'):
         checked += 1
         name = attachment.with_name('name').read_text().strip()
         pattern = attachment.read_text().strip()
         if any(part in {'bwrap', 'unpriv_bwrap'} for part in name.split('//')):
             raise RuntimeError(f'Existing loaded profile conflicts: {name}')
-        if pattern == '<unknown>' or '@{' in pattern:
+        if pattern == '<unknown>':
+            pattern, source = resolve_unknown_attachment(name)
+            resolved.append({'name': name, 'attachment': pattern, 'source': source})
+        if '@{' in pattern:
             raise RuntimeError(f'Cannot safely resolve existing attachment: {name}: {pattern}')
         if pattern.startswith(('/', '{')):
             matcher = AARE(pattern, is_path=True)
@@ -151,7 +194,7 @@ def inspect_profile():
                 raise RuntimeError(f'Existing attachment conflicts: {name}: {pattern}')
     if not checked:
         raise RuntimeError('No readable AppArmor attachments; cannot prove absence of conflicts')
-    return {'profile': str(PROFILE), 'sha256': hashlib.sha256(data).hexdigest(), 'checkedAttachments': checked, 'package': execute(['dpkg-query', '-W', '-f=${Version}', 'apparmor-profiles']).stdout.strip()}
+    return {'profile': str(PROFILE), 'sha256': hashlib.sha256(data).hexdigest(), 'checkedAttachments': checked, 'resolvedAttachments': resolved, 'package': execute(['dpkg-query', '-W', '-f=${Version}', 'apparmor-profiles']).stdout.strip()}
 
 
 def main():
