@@ -23,7 +23,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: sudo apt-get update && sudo apt-get install -y poppler-utils
+      - run: sudo apt-get update && sudo apt-get install -y poppler-utils bubblewrap
       - run: npm ci && npm ci --prefix services/image2
       - run: npm run test:image2 && npm run test:image2:client
       - run: pip install Pillow==11.3.0 && python -m unittest discover -s services/image2/vision-worker -p test_worker.py
