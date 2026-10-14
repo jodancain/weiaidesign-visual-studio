@@ -55,6 +55,11 @@ export function craftCommonCommands(engine?: CraftEngine) {
 }
 export const craftJobRunning = (job: CraftJob) => ['queued', 'running', 'cancelling'].includes(job.state);
 export const craftJobLabels: Record<string, string> = { queued: '等待执行', running: '正在执行', complete: '待接受', failed: '执行失败', uncertain: '结果待核实', cancelled: '已取消', cancelling: '正在取消', accepted: '已接受' };
+export function craftJobStatus(job: CraftJob, reviewOnly = false): string {
+  const accepted = job.accepted || job.output?.accepted || job.state === 'accepted';
+  if (reviewOnly && (accepted || job.state === 'complete')) return '待整组接受';
+  return accepted ? '已接受' : craftJobLabels[job.state] || job.state;
+}
 export const craftEngineLabels: Record<string, string> = { photocraft: '图片编辑', vectorcraft: '矢量绘图', filmcraft: '视频剪辑', lightcraft: '照片调色', pdfcraft: 'PDF 编辑', effectcraft: '合成特效', designcraft: '版式设计', figcraft: '界面设计', wordcraft: '文字文档', soundcraft: '音频编辑', deckcraft: '演示文稿', cadcraft: 'CAD 绘图', gridcraft: '电子表格' };
 const fieldNames: Record<string, string> = { width: '宽度', height: '高度', name: '名称', text: '文字', title: '标题', x: '横向位置', y: '纵向位置', color: '颜色', fill: '填色', stroke: '描边', opacity: '不透明度', radius: '半径', angle: '角度', rotation: '旋转角度', format: '文件格式', quality: '质量', scale: '倍率', page: '页码', pages: '页面', start: '开始', end: '结束', duration: '时长', sample_rate: '采样率', layer_id: '图层编号', object_id: '对象编号', font_size: '字号', font_family: '字体', path: '文件', input: '输入文件', output: '输出文件', file: '文件', filename: '文件名' };
 export function craftFieldLabel(name: string, schema: CraftSchema) { return schema.title || fieldNames[name] || name.replace(/[_-]/g, ' '); }

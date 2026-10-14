@@ -2,16 +2,19 @@ import { mkdirSync, writeFileSync, renameSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { createImageService } from '../services/image2/server.mjs';
 import { executeOperation, registry } from '../services/image2/processors.mjs';
+import { createBrowserNativeAgentFixture } from './image2-browser-native-agent-fixture.mjs';
 
 const evidence = resolve(process.env.IMAGE2_CPU_EVIDENCE_DIR || '../output/image2-browser-nonai-20261012');
 mkdirSync(evidence, { recursive: true });
 const audit = { mode: 'local-real-service-cpu-only', startedAt: new Date().toISOString(), externalAttempts: [], operations: [] };
 function checkpoint() { const file = join(evidence, 'provider-audit.json'); writeFileSync(file + '.tmp', JSON.stringify(audit, null, 2)); renameSync(file + '.tmp', file); }
+const nativeAgentFixture = createBrowserNativeAgentFixture(process.env.IMAGE2_BROWSER_NATIVE_AGENT_PROJECT_ID, audit, checkpoint);
+if (nativeAgentFixture) audit.mode = 'local-real-native-service-fixed-agent-fixture';
 const service = createImageService({
   directory: process.env.IMAGE2_CPU_DATA_DIR || join(evidence, 'data'), token: 'image2-local-browser-test-token-20261010',
   config: { imageBaseUrl: '', imageApiKey: '', comfyBaseUrl: '', comfyToken: '', ocrUrl: '', ocrToken: '',
-    agent: { baseUrl: '', apiKey: '', models: ['disabled-local-test'], maxRounds: 6, maxTools: 24, maxGenerations: 0 } },
-  fetchImpl: async url => { const parsed = new URL(url); audit.externalAttempts.push({ at: new Date().toISOString(), origin: parsed.origin, path: parsed.pathname }); checkpoint(); throw new Error('External model access is forbidden in the CPU browser test'); },
+    agent: nativeAgentFixture?.agent || { baseUrl: '', apiKey: '', models: ['disabled-local-test'], maxRounds: 6, maxTools: 24, maxGenerations: 0 } },
+  fetchImpl: nativeAgentFixture?.fetchImpl || (async url => { const parsed = new URL(url); audit.externalAttempts.push({ at: new Date().toISOString(), origin: parsed.origin, path: parsed.pathname }); checkpoint(); throw new Error('External model access is forbidden in the CPU browser test'); }),
   processor: async (request, context) => {
     const entry = { jobId: context.jobId, operation: request.operation, executionClass: registry[request.operation]?.executionClass, startedAt: new Date().toISOString() };
     audit.operations.push(entry); checkpoint();
@@ -27,5 +30,5 @@ service.server.on('request', (req, res) => {
   return handler(req, res);
 });
 checkpoint();
-service.server.listen(18108, '127.0.0.1', () => process.stdout.write(`CPU-only test service on 18108; evidence=${evidence}\n`));
+service.server.listen(18108, '127.0.0.1', () => process.stdout.write(`${nativeAgentFixture ? 'Fixed native Agent fixture' : 'CPU-only test service'} on 18108; evidence=${evidence}\n`));
 for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, async () => { await service.close(); audit.stoppedAt = new Date().toISOString(); checkpoint(); process.exit(0); });

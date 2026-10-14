@@ -23,7 +23,7 @@ const cases = {
   filmcraft: { first: [s('file.import', { paths: [asset('image')] }), s('file.newSequenceFromClip', { items: [ref('0.items.0')] }), s('render_preview', { seconds: 0, max_side: 128 })], second: [s('render_preview', { seconds: 0, max_side: 128 })], preview: true },
   lightcraft: { first: [s('import', { paths: [asset('image')], mode: 'copy' }), s('set_develop', { values: { 'light.exposure': 0.5 } }), s('export', { path: output('result.png'), format: 'png' })], second: [s('export', { path: output('result.png'), format: 'png' })], compare: 'result.png' },
   pdfcraft: { first: [s('new', { width: 256, height: 192 }), s('page_add_text', { doc: ref('0.doc'), page: 1, text: 'Native Probe', at: [16, 16], size: 18 }), s('page_add_image', { doc: ref('0.doc'), page: 1, path: asset('image'), rect: [16, 50, 160, 100] }), s('render_preview', { max_side: 256 })], second: [s('render_preview', { max_side: 256 })], preview: true },
-  effectcraft: { first: [s('comp.new', { name: 'Native Probe', width: 128, height: 96, duration: 1, frameRate: 24 }), s('layer.newSolid', { name: 'Blue', color: '#136a9f', width: 64, height: 48 }), s('render_frame', { path: output('result.png'), max_side: 128 })], second: [s('render_frame', { path: output('result.png'), max_side: 128 })], compare: 'result.png' },
+  effectcraft: { first: [s('comp.new', { name: 'Native Probe', width: 128, height: 96, duration: 1, frameRate: 24 }), s('file.import', { paths: [asset('image')], sequence: false, addToComp: true, background: false }), s('layer.newSolid', { name: 'Blue', color: '#136a9f', width: 64, height: 48 }), s('render_frame', { path: output('result.png'), max_side: 128 })], second: [s('render_frame', { path: output('result.png'), max_side: 128 })], compare: 'result.png' },
   designcraft: { first: [s('new', { width: 256, height: 192 }), s('frame.create', { rect: [20, 20, 210, 80], content: 'text', text: 'Native Probe' }), s('export_png', { path: output('result.png'), page: 0, scale: 1 })], second: [s('export_png', { path: output('result.png'), page: 0, scale: 1 })], compare: 'result.png' },
   figcraft: { first: [s('create_node', { type: 'rectangle', name: 'Native Probe', x: 10, y: 10, width: 128, height: 96, props: { fill: '#136a9f', cornerRadius: 8 } }), png], second: [png], compare: 'result.png' },
   wordcraft: { first: [s('font.add', { path: asset('font') }), s('format.font', { name: 'Craft Acceptance Face' }), s('type_text', { text: 'Native Probe: persistent document.' }), s('render_page', { page: 1, scale: 1 })], second: [s('render_page', { page: 1, scale: 1 })], preview: true },
@@ -38,7 +38,7 @@ const exportCases = {
   vectorcraft: { steps: [s('export', { path: output('result.svg'), format: 'svg' })], files: ['result.svg'] },
   filmcraft: { steps: [s('file.exportMedia', { path: output('result.mp4'), format: 'h264', width: 128, height: 96, fps: 12, range: 'custom', startSeconds: 0, endSeconds: 0.25, audio: false, wait: true }), s('file.import', { paths: [output('result.mp4')] }), s('file.newSequenceFromClip', { items: [ref('4.items.0')] }), s('render_preview', { seconds: 0, max_side: 128 })], files: ['result.mp4'] },
   pdfcraft: { files: ['document.pdf'] },
-  effectcraft: { steps: [s('renderQueue.add', { output: output('result.mp4'), format: 'h264', timeSpan: 'custom', start: 0, end: 0.25, frameRate: 12, audio: 'off' }), s('renderQueue.render', { wait: true })], files: ['result.mp4'] },
+  effectcraft: { steps: [s('renderQueue.add', { output: output('result.mp4'), format: 'h264', timeSpan: 'custom', start: 0, end: 0.25, frameRate: 12, audio: 'off' }), s('renderQueue.render', { wait: true }), s('file.import', { paths: [output('result.mp4')], addToComp: true, background: false }), s('render_frame', { path: output('result.png'), max_side: 128 })], files: ['result.mp4'] },
   designcraft: { steps: [s('file.exportPdf', { path: output('result.pdf') })], files: ['result.pdf'] },
   wordcraft: { files: ['document.docx'] },
   deckcraft: { steps: [s('export', { path: output('result.pptx'), format: 'pptx' })], files: ['result.pptx'] },
@@ -137,8 +137,15 @@ export async function runNativeCraftAcceptance({ binDir = process.env.IMAGE2_CRA
         assert.ok(a && b, `${id} did not return its expected export`);
         if (a.mime.startsWith('image/') && a.mime !== 'image/svg+xml') {
           const av = await sharp(a.bytes).ensureAlpha().raw().toBuffer({ resolveWithObject: true }), bv = await sharp(b.bytes).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
-          assert.deepEqual(bv.info, av.info); assert.equal(Buffer.compare(av.data, bv.data), 0, `${id}: decoded pixels changed after checkpoint relocation`); comparison = { kind: 'decoded-rgba', width: av.info.width, height: av.info.height, differingChannels: 0 };
-        } else if (a.mime === 'audio/wav') { assert.equal(Buffer.compare(pcm(a.bytes), pcm(b.bytes)), 0); comparison = { kind: 'wav-pcm', identical: true }; }
+          const colors = new Set();
+          for (let at = 0; at < av.data.length; at += 4) {
+            const alpha = av.data[at + 3] / 255;
+            const rgb = [0, 1, 2].map(channel => Math.round(av.data[at + channel] * alpha + 255 * (1 - alpha)));
+            colors.add((rgb[0] << 16) | (rgb[1] << 8) | rgb[2]); if (colors.size >= 256) break;
+          }
+          assert.ok(colors.size >= (['photocraft', 'filmcraft'].includes(id) ? 16 : 2), `${id}: its real edit rendered a blank or uniform image`);
+          assert.deepEqual(bv.info, av.info); assert.equal(Buffer.compare(av.data, bv.data), 0, `${id}: decoded pixels changed after checkpoint relocation`); comparison = { kind: 'decoded-rgba', width: av.info.width, height: av.info.height, differingChannels: 0, distinctColorsAtLeast: colors.size };
+        } else if (a.mime === 'audio/wav') { const audio = pcm(a.bytes); assert.ok(audio.length > 1000 && audio.some(byte => byte !== 0), 'The native audio bounce is empty or silent'); assert.equal(Buffer.compare(audio, pcm(b.bytes)), 0); comparison = { kind: 'wav-pcm', identical: true, nonSilent: true }; }
         else { assert.equal(Buffer.compare(a.bytes, b.bytes), 0); comparison = { kind: 'bytes', identical: true }; }
         await fs.writeFile(path.join(engineRoot, a.name), a.bytes);
       }

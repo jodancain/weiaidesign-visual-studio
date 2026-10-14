@@ -31,8 +31,9 @@ export function craftPublicValue(value, workDir, key = '') {
   if (plain(value)) return Object.fromEntries(Object.entries(value).map(([name, item]) => [name, craftPublicValue(item, workDir, name)]));
   if (typeof value !== 'string' || /^(?:text|name|title|label|caption|description|value|string|characters|content)$/i.test(key)) return value;
   if (!(PATH_KEY.test(key) || LOCATION_KEY.test(key) || /^(?:root|workDir|workspace|library|source|src|uri|url)$/i.test(key))) return value;
-  const file = value.startsWith('file://') ? value.slice(7) : value;
-  if (!path.isAbsolute(file)) return value;
+  const rawFile = value.startsWith('file://') ? value.slice(7) : value;
+  if (!path.isAbsolute(rawFile)) return value;
+  const file = path.normalize(rawFile);
   if (inside(workDir, file)) return `workspace:/${path.relative(workDir, file).split(path.sep).join('/')}`;
   return `external:/${path.basename(file)}`;
 }

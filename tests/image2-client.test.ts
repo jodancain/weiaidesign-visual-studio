@@ -243,6 +243,14 @@ test('stale or unversioned preview images cannot be displayed or accepted throug
   assert.equal(candidatePreviewState({ ...job, state: 'running' }, branch).canAccept, false);
 });
 
+test('zero is a valid candidate preview and branch revision rather than missing evidence', () => {
+  const branch = { ...document(), id: 'native-task-branch', schemaVersion: 3 as const, revision: 0 };
+  const job: ImageJob = { id: 'agent-job', documentId: 'doc', kind: 'agent', state: 'complete', createdAt: 0, updatedAt: 0, output: { branchDocumentId: branch.id, revision: 0, previewRevision: 0, previewAssetId: 'frozen-preview' } };
+  assert.deepEqual(candidatePreviewState(job, branch), { status: 'ready', assets: ['frozen-preview'], canAccept: true });
+  assert.equal(candidatePreviewState({ ...job, output: { ...job.output, previewRevision: undefined } }, branch).canAccept, false);
+  assert.equal(candidatePreviewState(job, { ...branch, revision: 1 }).canAccept, false);
+});
+
 test('a missing preview is empty only when the loaded branch proves there are no visible drawing layers', () => {
   const branch = { ...document(), id: 'branch', schemaVersion: 3 as const }, job: ImageJob = { id: 'job', documentId: 'doc', kind: 'agent', state: 'complete', createdAt: 0, updatedAt: 0, output: { branchDocumentId: 'branch', revision: 3 } };
   assert.equal(candidatePreviewState(job, branch).status, 'unavailable');

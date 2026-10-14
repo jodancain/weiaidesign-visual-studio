@@ -1,17 +1,18 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Download, GitBranch, Layers, Loader2, X } from 'lucide-react';
 import type { useLegacyImage2 } from '../../lib/image2/useLegacyImage2';
-import { assetUrl } from '../../lib/image2/client';
+import { assetUrl, image2Api, unwrapDocument } from '../../lib/image2/client';
 import { groupLayerCommands, ungroupLayerCommands } from '../../lib/image2/grouping';
 import { reorderSiblingCommands } from '../../lib/image2/stacking';
-import type { ImageLayer } from '../../lib/image2/types';
+import type { ImageDocument, ImageLayer } from '../../lib/image2/types';
 import { VectorProperties } from './VectorProperties';
 import { capability } from '../../lib/image2/geometry';
 import { buildTemplate, templateNames, type TemplateKind } from '../../lib/image2/templates';
 import { groupProfessionalLayerCommands, ungroupProfessionalLayerCommands } from '../../lib/image2/professional-model';
 import { ProfessionalProperties } from './ProfessionalProperties';
 import { candidatePreviewState } from '../../lib/image2/candidate-preview';
+import { displayToolText } from '../../lib/image2/chat-projection';
 import { craftAgentProjects, craftNativeEvidenceKey } from '../../lib/image2/craft-client';
 import { CraftCandidateSummary } from './CraftToolsDialog';
 
@@ -145,21 +146,35 @@ export function LegacyImagePanels({ mode, onClose, bridge, onError, onResult, on
 
 export function CandidateResult({ bridge, job, onError, onViewVersions, onViewNativeCandidate }: { bridge: Bridge; job: Bridge['jobs'][number]; onError: (message: string) => void; onViewVersions?: () => void; onViewNativeCandidate?: (branchId: string, projectId?: string) => void }) {
   const [nativeEvidence, setNativeEvidence] = useState('');
+  const [resolvedBranch, setResolvedBranch] = useState<ImageDocument>();
+  const [resolutionError, setResolutionError] = useState<{ id: string; message: string }>();
   const branchId = String(job.output?.branchDocumentId || job.output?.candidateDocumentId || '');
-  const branch = bridge.branches.find(branch => branch.id === branchId);
+  const pendingBranch = bridge.branches.find(branch => branch.id === branchId);
+  useEffect(() => {
+    if (!branchId || pendingBranch) return;
+    let active = true;
+    // The pending list intentionally drops accepted branches. Read the immutable
+    // branch's server acceptance receipt instead of treating absence as lost proof.
+    void image2Api<ImageDocument>(`/documents/${encodeURIComponent(branchId)}`).then(unwrapDocument).then(value => {
+      if (active && value.id === branchId && value.parentDocumentId === job.documentId) setResolvedBranch(value);
+    }).catch(error => { if (active) setResolutionError({ id: branchId, message: displayToolText((error as Error).message) }); });
+    return () => { active = false; };
+  }, [branchId, job.documentId, pendingBranch]);
+  const branch = pendingBranch || (resolvedBranch?.id === branchId ? resolvedBranch : undefined);
   const preview = candidatePreviewState(job, branch), nativeProjects = craftAgentProjects(job.output);
-  const assets = nativeProjects.length && branch?.layers.length === 0 ? [] : preview.assets;
+  const assets = nativeProjects.length && (branch?.layers.length === 0 || branch?.revision === 0 && job.output?.revision === 0) ? [] : preview.assets;
   const nativeReady = !nativeProjects.length || nativeEvidence === craftNativeEvidenceKey(nativeProjects);
-  return <div className="msgAssistant"><div className="msgKind">{job.kind === 'agent' ? 'Agent 任务' : '图片结果'} · {job.state === 'complete' ? branchId ? '候选预览' : '完成' : job.state}</div>
-    {job.error && <p className="msgError">{job.error}</p>}
-    {preview.message && <p role="status">{preview.message}{onViewVersions && preview.status !== 'empty' && <button type="button" className="ghostButton" onClick={onViewVersions}>查看版本</button>}</p>}
+  return <div className="msgAssistant"><div className="msgKind">{job.kind === 'agent' ? 'Agent 任务' : '图片结果'} · {preview.status === 'accepted' ? '已接受' : job.state === 'complete' ? branchId ? '候选预览' : '完成' : job.state}</div>
+    {job.error && <p className="msgError">{displayToolText(job.error)}</p>}
+    {!branch && resolutionError?.id === branchId && <p className="msgError" role="alert">候选状态暂不可读取：{resolutionError.message}</p>}
+    {preview.message && <p role="status">{preview.message}{onViewVersions && !['empty', 'accepted'].includes(preview.status) && <button type="button" className="ghostButton" onClick={onViewVersions}>查看版本</button>}</p>}
     {assets.length > 0 && <div className="msgImages">{assets.map(id => <span className="msgImageWrap" key={id}>
       {/* eslint-disable-next-line @next/next/no-img-element -- Show immutable source pixels without image resampling. */}
       <img src={assetUrl(id)} alt="候选结果" /><button type="button" aria-label="download" onClick={() => void (async () => {
         try { const response = await fetch(assetUrl(id)); if (!response.ok) throw new Error('候选文件暂不可读取'); const blob = await response.blob(), link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = `图片候选.${blob.type === 'image/svg+xml' ? 'svg' : 'png'}`; link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 1000); }
         catch (error) { onError((error as Error).message); }
       })()}><Download size={12} /></button></span>)}</div>}
-    {nativeProjects.length > 0 && branchId && <CraftCandidateSummary branchId={branchId} projects={nativeProjects} onOpen={onViewNativeCandidate} onReady={setNativeEvidence} />}
-    {branchId && job.state === 'complete' && branch && <button className="darkButton" disabled={!preview.canAccept || !nativeReady} onClick={() => void bridge.acceptCandidate(branchId).catch(error => onError(error.message))}>接受候选</button>}
+    {nativeProjects.length > 0 && branchId && <CraftCandidateSummary branchId={branchId} projects={nativeProjects} accepted={preview.status === 'accepted'} onOpen={onViewNativeCandidate} onReady={setNativeEvidence} />}
+    {branchId && job.state === 'complete' && branch && preview.status !== 'accepted' && <button className="darkButton" disabled={!preview.canAccept || !nativeReady} onClick={() => void bridge.acceptCandidate(branchId).catch(error => onError(error.message))}>接受候选</button>}
   </div>;
 }

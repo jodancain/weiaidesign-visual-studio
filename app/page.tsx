@@ -63,6 +63,7 @@ import { designShapeUtils } from '../components/image2/DesignShapes';
 import { professionalCanvasComponents, ProfessionalCanvasContext } from '../components/image2/ProfessionalCanvas';
 import { LegacyImageAdjustments } from '../components/image2/LegacyImageAdjustments';
 import { CraftToolsDialog } from '../components/image2/CraftToolsDialog';
+import { projectConversationMessages } from '../lib/image2/chat-projection';
 import { elementPreviewSource } from '../lib/image2/element-preview';
 import { LegacyImagePanels, CandidateResult, type LegacyImagePanel } from '../components/image2/LegacyImagePanels';
 import { useLegacyImage2 } from '../lib/image2/useLegacyImage2';
@@ -2000,7 +2001,8 @@ export default function Home() {
   const selectedImageCount = selection.images.length;
   const composerHasText = prompt.trim().length > 0;
   const countdownTiles = useMemo(() => countdown.split(""), [countdown]);
-  const hasConversation = messages.length > 0 || image2.messages.length > 0 || image2.jobs.length > 0;
+  const persistentChatMessages = useMemo(() => projectConversationMessages(image2.messages), [image2.messages]);
+  const hasConversation = messages.length > 0 || persistentChatMessages.length > 0 || image2.jobs.length > 0;
   /* Canvas selection rides along as extra numbered attachments (after explicit ones), minus duplicates. */
   const selectionAttachments = useMemo(() => {
     const attached = new Set(attachments.map((item) => item.src));
@@ -2692,7 +2694,7 @@ export default function Home() {
                   </div>
                 );
               })}
-              {image2.messages.map(message => <div key={message.id} className={message.role === 'user' ? 'msgUser' : 'msgAssistant'}>{message.role !== 'user' && <div className="msgKind"><Sparkles size={12} /> Agent</div>}{renderAssistantText(String(message.text || message.content || ''))}</div>)}
+              {persistentChatMessages.map(message => <div key={message.id} className={message.role === 'user' ? 'msgUser' : 'msgAssistant'}>{message.role !== 'user' && <div className="msgKind"><Sparkles size={12} /> Agent</div>}{message.error ? <p className="msgError" role="alert">{message.text}</p> : renderAssistantText(message.text)}</div>)}
               {image2.jobs.filter(job => job.output?.branchDocumentId || job.state === 'uncertain' || job.state === 'failed').map(job => <CandidateResult key={job.id} job={job} bridge={image2} onError={setError} onViewVersions={() => setImagePanel('versions')} onViewNativeCandidate={viewNativeCandidate} />)}
               {agentBusy || image2Running ? (
                 <div className="msgAssistant msgAction">

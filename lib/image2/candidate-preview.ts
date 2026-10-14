@@ -1,10 +1,16 @@
 import type { ImageDocument, ImageJob } from './types';
 
 export interface CandidatePreviewState {
-  status: 'ready' | 'stale' | 'unavailable' | 'empty';
+  status: 'ready' | 'stale' | 'unavailable' | 'empty' | 'accepted';
   assets: string[]; canAccept: boolean; message?: string;
 }
 const revision = (value: unknown): number | undefined => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+/** A consumed native-only branch can leave the main image revision unchanged. Trust its server receipt. */
+export function acceptedCandidateRevision(branch?: ImageDocument): number | undefined {
+  const metadata = branch?.metadata;
+  return branch?.parentDocumentId && metadata?.acceptedIntoDocumentId === branch.parentDocumentId && typeof metadata.acceptedAt === 'string' && metadata.acceptedAt
+    ? revision(metadata.acceptedRevision) : undefined;
+}
 /** Visibility is positive evidence of no drawable layers, not a guess from a missing PNG. */
 function hasVisibleDrawing(branch: ImageDocument): boolean | undefined {
   for (const layer of branch.layers) {
@@ -29,6 +35,8 @@ export function candidatePreviewState(job?: ImageJob, branch?: ImageDocument): C
   const output = job?.output || {}, preview = typeof output.previewAssetId === 'string' && output.previewAssetId ? output.previewAssetId : undefined;
   const previewRevision = revision(output.previewRevision), outputRevision = revision(output.revision), branchRevision = revision(branch?.revision);
   const branchId = output.branchDocumentId || output.candidateDocumentId;
+  const acceptedRevision = acceptedCandidateRevision(branch);
+  if (acceptedRevision !== undefined && (!job || job.documentId === branch?.parentDocumentId) && branchId === branch?.id) return { status: 'accepted', assets: preview ? [preview] : [], canAccept: false, message: `已接受到主工程（图片版本 ${acceptedRevision}）${Array.isArray(output.craftProjects) && output.craftProjects.length ? '，原生工程已一并保存' : ''}。` };
   const running = job?.state === 'queued' || job?.state === 'running';
   const canAccept = Boolean(branch) && !running;
   const differentBranch = branch && typeof branchId === 'string' && branchId !== branch.id;

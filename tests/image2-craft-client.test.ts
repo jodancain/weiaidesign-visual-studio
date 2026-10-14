@@ -8,6 +8,7 @@ import { CraftSubmissionManager } from '../lib/image2/craft-submissions';
 import type { SubmissionAttempt, SubmissionStorage } from '../lib/image2/submissions';
 import type { ImageAsset, ImageDocument } from '../lib/image2/types';
 import { CandidateResult } from '../components/image2/LegacyImagePanels';
+import { acceptedCandidateRevision, candidatePreviewState } from '../lib/image2/candidate-preview';
 
 class MemoryStorage implements SubmissionStorage {
   records = new Map<string, SubmissionAttempt>();
@@ -118,6 +119,27 @@ test('native-only Agent card requires its real native receipt before acceptance 
   const props = { bridge: { branches: [branch] }, job: { id: 'agent-job', state: 'complete', kind: 'agent', output: { branchDocumentId: branch.id, revision: 2, previewRevision: 2, previewAssetId: 'transparent-png', craftProjects: [native] } }, onError: () => {}, onViewNativeCandidate: () => {} } as unknown as Parameters<typeof CandidateResult>[0];
   const html = renderToStaticMarkup(createElement(CandidateResult, props));
   assert.match(html, /本次任务包含 1 个原生工程候选/); assert.match(html, /查看原生候选/); assert.match(html, /disabled=""[^>]*>接受候选/); assert.doesNotMatch(html, /assets\/transparent-png\/content/);
+});
+
+test('a native-only zero-revision task does not present the inherited canvas as its edited result', () => {
+  const branch = { id: 'branch', schemaVersion: 3, revision: 0, layers: [{ id: 'inherited', type: 'raster', visible: true, opacity: 1 }] };
+  const native = { ...project, documentId: branch.id, lastJobId: 'native-job', nativeAssetId: 'checkpoint' };
+  const props = { bridge: { branches: [branch] }, job: { id: 'agent-job', state: 'complete', kind: 'agent', output: { branchDocumentId: branch.id, revision: 0, previewRevision: 0, previewAssetId: 'inherited-canvas', craftProjects: [native] } }, onError: () => {}, onViewNativeCandidate: () => {} } as unknown as Parameters<typeof CandidateResult>[0];
+  const html = renderToStaticMarkup(createElement(CandidateResult, props));
+  assert.match(html, /查看原生候选/); assert.doesNotMatch(html, /assets\/inherited-canvas\/content/);
+});
+
+test('native-only whole acceptance uses the server receipt even when the main image revision stays unchanged', () => {
+  const branch = { id: 'branch', parentDocumentId: 'image-document', schemaVersion: 3, revision: 0, layers: [], metadata: { acceptedAt: '2026-10-14T11:11:04Z', acceptedRevision: 18, acceptedIntoDocumentId: 'image-document' } } as unknown as ImageDocument;
+  const native = { ...project, documentId: branch.id, lastJobId: 'native-job', nativeAssetId: 'checkpoint' };
+  const props = { bridge: { branches: [branch] }, job: { id: 'agent-job', documentId: 'image-document', state: 'complete', kind: 'agent', output: { branchDocumentId: branch.id, revision: 0, previewRevision: 0, previewAssetId: 'inherited-canvas', craftProjects: [native] } }, onError: () => {}, onViewVersions: () => {}, onViewNativeCandidate: () => {} } as unknown as Parameters<typeof CandidateResult>[0];
+  assert.equal(acceptedCandidateRevision(branch), 18);
+  assert.equal(acceptedCandidateRevision({ ...branch, metadata: { ...branch.metadata, acceptedIntoDocumentId: 'another-document' } }), undefined);
+  assert.equal(candidatePreviewState(props.job, branch).status, 'accepted');
+  assert.equal(candidatePreviewState(props.job, branch).canAccept, false);
+  const html = renderToStaticMarkup(createElement(CandidateResult, props));
+  assert.match(html, /已接受到主工程（图片版本 18）/); assert.match(html, /查看原生结果/);
+  assert.doesNotMatch(html, /缺少当前版本依据|查看版本|>接受候选<|assets\/inherited-canvas\/content/);
 });
 
 test('asset form fields only select owned uploaded asset IDs and output filenames, not machine paths', () => {
