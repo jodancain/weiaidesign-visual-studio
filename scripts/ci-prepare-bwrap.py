@@ -93,6 +93,25 @@ def require_ephemeral_runner():
     execute(['sudo', '-n', 'true'])
 
 
+def validate_profile_text(text):
+    policy = '\n'.join(line.split('#', 1)[0] for line in text.splitlines())
+    parent = re.search(r'profile\s+bwrap\s+/usr/bin/bwrap\s+flags=\([^)]*\)\s*\{(.*?)^\}', policy, re.S | re.M)
+    child = re.search(r'profile\s+unpriv_bwrap\s+flags=\([^)]*\)\s*\{(.*?)^\}', policy, re.S | re.M)
+    if not parent or not child:
+        raise RuntimeError('Distro profile lacks the expected parent/child profile declarations')
+    # Noble's packaged 4.0 profile uses px -> bwrap//&unpriv_bwrap.
+    # Upstream's newer profile uses pix -> &bwrap//&unpriv_bwrap.
+    # Both must stack the capability-denying child; no generic ix/ux fallback.
+    rules = [
+        (parent.group(1), r'allow\s+capability\s*,'),
+        (parent.group(1), r'allow\s+(?:px\s+/\*\*\s*->\s*bwrap//&unpriv_bwrap|pix\s+/\*\*\s*->\s*&bwrap//&unpriv_bwrap)\s*,'),
+        (child.group(1), r'audit\s+deny\s+capability\s*,'),
+        (child.group(1), r'allow\s+pix\s+/\*\*\s*->\s*&unpriv_bwrap\s*,'),
+    ]
+    if any(not re.search(rule, body) for body, rule in rules):
+        raise RuntimeError('Distro profile lacks the expected setup/child capability separation')
+
+
 def inspect_profile():
     """Read-only privileged preflight; does not add, replace or remove policy."""
     from apparmor.aare import AARE  # Provided by Ubuntu apparmor-utils/python3-apparmor.
@@ -108,10 +127,7 @@ def inspect_profile():
     data = PROFILE.read_bytes()
     if expected is None or hashlib.md5(data).hexdigest() != expected:
         raise RuntimeError('The installed profile differs from the distribution package')
-    policy = '\n'.join(line.split('#', 1)[0] for line in data.decode().splitlines())
-    for required in [r'profile\s+bwrap\s+/usr/bin/bwrap\s', r'profile\s+unpriv_bwrap\s', r'allow\s+capability\s*,', r'audit\s+deny\s+capability\s*,', r'allow\s+pix\s+/\*\*\s*->\s*&bwrap//&unpriv_bwrap\s*,']:
-        if not re.search(required, policy):
-            raise RuntimeError('Distro profile lacks the expected setup/child capability separation')
+    validate_profile_text(data.decode())
     for name in ['bwrap-userns-restrict', 'unpriv_bwrap']:
         local = Path('/etc/apparmor.d/local') / name
         if local.exists() and any(line.split('#', 1)[0].strip() for line in local.read_text().splitlines()):
