@@ -1,4 +1,5 @@
 # No Docker or production calls. AST-load ONLY function definitions, then mock I/O.
+param([ValidateSet('suite','state-inspect','state-prepare')][string]$Mode='suite',[string]$StateDirectory)
 $ErrorActionPreference='Stop';Set-StrictMode -Version Latest
 # Windows Start alias takes precedence over functions. Reproduce that resolution
 # in this disposable test process on other platforms; no profile/system change.
@@ -8,6 +9,23 @@ $path=Join-Path $repo 'scripts/artcraft-upgrade/upgrade.ps1'
 $tokens=$null;$errors=$null;$ast=[Management.Automation.Language.Parser]::ParseFile($path,[ref]$tokens,[ref]$errors)
 if($errors.Count){throw ($errors|ForEach-Object {$_.ToString()}|Out-String)}
 foreach($f in $ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst]},$false)){Invoke-Expression $f.Extent.Text}
+# Separate processes exercise the real persisted-state functions before any mocks.
+# The parent owns this unique temporary directory; these branches never run stages.
+if($Mode -ne 'suite'){
+    Need ((Split-Path $StateDirectory -Leaf) -match '^artcraft-state-roundtrip-[a-f0-9]{32}$' -and [IO.Path]::GetFullPath((Split-Path $StateDirectory)) -eq [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([IO.Path]::DirectorySeparatorChar)) 'synthetic_state_directory_required'
+    $script:StatePath=Join-Path $StateDirectory 'state.json'
+    if($Mode -eq 'state-inspect'){
+        Need (!(Test-Path -LiteralPath $script:StatePath)) 'synthetic_state_already_exists'
+        $script:State=@{Inspected=$true;Prepared=$false;Sequence=1;PendingOperation=$null;PlanSha256='synthetic-plan';Empty=@();Singleton=@(@{Id='synthetic-id'})}
+        SaveState
+    } else {
+        $script:State=ReadJson $script:StatePath
+        Need ($State.Inspected -and $State.Sequence -eq 1 -and $State.PlanSha256 -ceq 'synthetic-plan') 'synthetic_inspect_state_required'
+        $State.Sequence=2;BeginOp 'synthetic-prepare'
+        $State.Prepared=$true;$State.Sequence=3;DoneOp
+    }
+    Write-Output "$Mode-passed";exit 0
+}
 $taskAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $repo 'scripts/artcraft-upgrade/task.ps1'),[ref]$tokens,[ref]$errors)
 if($errors.Count){throw 'task wrapper parse failed'}
 $null=[Management.Automation.Language.Parser]::ParseFile((Join-Path $repo 'scripts/artcraft-sandbox-policy/collect-review-facts.ps1'),[ref]$tokens,[ref]$errors)
@@ -34,6 +52,29 @@ Check ((QuoteArg 'a b\') -eq '"a b\\"') 'Windows trailing slash quoting'
 $out=Exec (Get-Process -Id $PID).Path @('-NoProfile','-Command','[Console]::Write($env:ARTCRAFT_SYNTHETIC_PROBE)') '' @{ARTCRAFT_SYNTHETIC_PROBE='local-value'}
 Check ($out -eq 'local-value') 'child-only environment injection'
 Check (!$env:ARTCRAFT_SYNTHETIC_PROBE) 'parent environment unchanged'
+# First-create then two atomic replacements survive process boundaries. This
+# reproduces Inspect -> saved state -> Prepare rather than mocking SaveState.
+$roundtrip=Join-Path ([IO.Path]::GetTempPath()) ('artcraft-state-roundtrip-'+[Guid]::NewGuid().ToString('N'));$null=[IO.Directory]::CreateDirectory($roundtrip)
+try {
+    $child=(Get-Process -Id $PID).Path;$stateFile=Join-Path $roundtrip 'state.json'
+    Check ((Exec $child @('-NoProfile','-File',$PSCommandPath,'-Mode','state-inspect','-StateDirectory',$roundtrip)) -ceq 'state-inspect-passed') 'Inspect child creates its first state receipt'
+    $first=ReadJson $stateFile;Check ($first.Sequence -eq 1 -and !$first.Prepared) 'first state is readable before Prepare starts'
+    Check ((Exec $child @('-NoProfile','-File',$PSCommandPath,'-Mode','state-prepare','-StateDirectory',$roundtrip)) -ceq 'state-prepare-passed') 'new Prepare process atomically replaces persisted state twice'
+    $third=ReadJson $stateFile
+    Check ($third.Sequence -eq 3 -and $third.Prepared -and $null -eq $third.PendingOperation) 'third write contains complete Prepare state'
+    Check ($third.Empty.Count -eq 0 -and $third.Singleton.Count -eq 1 -and $third.Singleton[0].Id -ceq 'synthetic-id') 'empty and singleton arrays survive saved-state round trip'
+    $prior=Hash $stateFile;$held=$null;$fault=$null
+    if($env:OS -eq 'Windows_NT'){$held=[IO.File]::Open($stateFile,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::None)}
+    else {& /bin/chmod 500 $roundtrip;if($LASTEXITCODE -ne 0){throw 'synthetic_directory_permission_setup_failed'}}
+    try {try{SaveJson $stateFile @{Sequence=4;ShouldNotCommit=$true}}catch{$fault=FailureDetails $_}}
+    finally {if($held){$held.Dispose()}else{& /bin/chmod 700 $roundtrip;if($LASTEXITCODE -ne 0){throw 'synthetic_directory_permission_restore_failed'}}}
+    Check ($null -ne $fault) 'filesystem write or replacement failure is surfaced'
+    Check ((Hash $stateFile) -ceq $prior -and (ReadJson $stateFile).Sequence -eq 3) 'failed update preserves previous state bytes and readability'
+    Check ($fault.ErrorId -in @('IOException','UnauthorizedAccessException')) 'known filesystem failure retains safe runtime diagnostic'
+    try{throw 'synthetic_private_exception_text'}catch{$redacted=FailureDetails $_}
+    Check ($redacted.ErrorId -ceq 'redacted' -and ($redacted|ConvertTo-Json -Compress) -notmatch 'synthetic_private_exception_text') 'throw text is never persisted as an ErrorId'
+    Check ($redacted.Keys.Count -eq 3 -and $redacted.Line -gt 0 -and $redacted.ExceptionType) 'diagnostic contains only type, allowed identifier and line'
+} finally {[IO.Directory]::Delete($roundtrip,$true)}
 # Exact queued bytes must be checked before any side effect.
 $tmp=Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString('N'));$null=[IO.Directory]::CreateDirectory($tmp)
 try {

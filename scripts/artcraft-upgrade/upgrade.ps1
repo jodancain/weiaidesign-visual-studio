@@ -7,7 +7,7 @@ $ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'
 $Root='C:\Users\qrrwi\studio-v3-production'
 $Web='weiai-studio-v3-web'; $Core='weiai-image2'; $Network='weiai-studio-v3-production'
 $CoreVolume='weiai-image2-data'; $WebVolume='weiaidesign-web_weiaidesign-data'
-$script:State=$null; $script:Lock=$null; $script:Failure='unclassified'; $script:Step='load-request'; $script:ExitCode=1
+$script:State=$null; $script:Lock=$null; $script:Failure='unclassified'; $script:Step='load-request'; $script:ExitCode=1; $script:FailureDiagnostic=$null
 function Need($Condition,[string]$Code) { if(!$Condition){$script:Failure=$Code;throw [InvalidOperationException]::new($Code)} }
 function Map($Value) {
     if($null -eq $Value){return $null}
@@ -34,7 +34,16 @@ function SaveJson([string]$Path,$Value){
     $tmp="$Path.$([Guid]::NewGuid().ToString('N')).partial"; $bytes=[Text.UTF8Encoding]::new($false).GetBytes(($Value|ConvertTo-Json -Depth 50))
     $f=[IO.File]::Open($tmp,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
     try{$f.Write($bytes,0,$bytes.Length);$f.Flush($true)}finally{$f.Dispose()}
-    if(Test-Path -LiteralPath $Path){[IO.File]::Replace($tmp,$Path,$null)}else{[IO.File]::Move($tmp,$Path)}
+    # PowerShell converts $null to an empty string for this .NET string argument.
+    # NullString preserves the actual null backup filename and atomic replacement.
+    if(Test-Path -LiteralPath $Path){[IO.File]::Replace($tmp,$Path,[NullString]::Value)}else{[IO.File]::Move($tmp,$Path)}
+}
+function FailureDetails($Record){
+    # A thrown string can itself become FullyQualifiedErrorId. Only known runtime
+    # identifiers are safe; never retain exception text, command text or stacks.
+    $id=$Record.FullyQualifiedErrorId
+    if($id -notin @('ArgumentException','IOException','UnauthorizedAccessException','CommandNotFoundException','PropertyNotFoundStrict','MethodNotFound','MethodInvocationException','ParameterBindingValidationException','ParseException')){$id='redacted'}
+    return @{ExceptionType=$Record.Exception.GetType().FullName;ErrorId=$id;Line=$Record.InvocationInfo.ScriptLineNumber}
 }
 function SaveState { $script:State.UpdatedAt=[DateTime]::UtcNow.ToString('o'); SaveJson $StatePath $script:State }
 function BeginOp([string]$Name){$script:Step=$Name;$script:State.PendingOperation=$Name;SaveState}
@@ -612,6 +621,7 @@ try {
     Need ($env:USERNAME -ieq 'qrrwi' -and $env:COMPUTERNAME -ieq 'AI') 'wrong_target_host'
     Need (!$env:SSH_CONNECTION -and !$env:SSH_CLIENT) 'scheduled_task_required'
     Need ($Plan.PolicyMode -in @('builtin','candidate') -and $Plan.PolicySha256 -ceq $(if($Plan.PolicyMode -eq 'builtin'){'builtin'}else{'54445b51b34a5884dba65c7875995a0991402c5d46ca66df404690f968fb2ac4'})) 'invalid_policy_plan'
+    $script:Step='verify-queued-source'
     VerifyQueuedBytes $PSCommandPath (Join-Path $PSScriptRoot '..\..\services\image2\ops\upgrade-ledger.mjs') (Join-Path $PSScriptRoot 'bff-probe.mjs')
     $ReleaseRoot=Join-Path $Root "releases\artcraft-$Release";PrivateDirectory $ReleaseRoot
     $StatePath=Join-Path $ReleaseRoot 'state.json';$CompletionPath=Join-Path $ReleaseRoot "completion-$Invocation.json"
@@ -623,7 +633,9 @@ try {
     $OldCore="$Core-pre-artcraft-$Release";$OldWeb="$Web-pre-artcraft-$Release"
     $LedgerCode=[IO.File]::ReadAllText((Join-Path $PSScriptRoot '..\..\services\image2\ops\upgrade-ledger.mjs'))
     $BffCode=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'bff-probe.mjs'))
+    $script:Step='acquire-deployment-lock'
     $script:Lock=[IO.File]::Open((Join-Path $Root 'artcraft-upgrade.lock'),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+    $script:Step='load-persisted-state'
     if(Test-Path -LiteralPath $StatePath){$script:State=ReadJson $StatePath;Need ($State.PlanSha256 -ceq $Request.PlanSha256) 'immutable_plan_changed'}
     else {$script:State=@{Version=1;ReleaseId=$Release;PlanSha256=$Request.PlanSha256;SourceCommit=$Plan.SourceCommit;SourceArchiveSha256=$Plan.SourceArchiveSha256;NativeArchiveSha256='2b3f7753d2a6eb4d0b80d2eb1bb105fd53c1862b6bdfcdacee31c7aa8b9a1a36';NativeArchiveBytes=512742646;Inspected=$false;Prepared=$false;PreparedBackup=$null;CanaryPassed=$false;CutoverStarted=$false;CutoverComplete=$false;RolledBack=$false;Backups=@();PendingOperation=$null;SnapshotInProgress=$null;FreshBackup=$null;RecoveryInProgress=$false;NativeHydrated=$false;BuiltinControl=$null;EntryReady=$false;GracefulStops=@{}}}
     # A completed invocation is immutable. Status never infers success from Scheduled Task Ready.
@@ -633,15 +645,17 @@ try {
         Need (!$State.CutoverStarted -or $Request.Phase -eq 'Rollback' -or $Request.Phase -eq 'Cutover') 'rollback_required_after_interrupted_cutover'
         if(!$State.CutoverStarted){Need ((Container $Web).Id -ceq $State.OriginalWeb.Id -and (Container $Core).Id -ceq $State.OriginalCore.Id) 'backup_recovery_identity';AssertExclusive $CoreVolume @($State.OriginalCore.Id);ResumeOriginalCore;$State.SnapshotInProgress=$null;SaveState;Need $false 'interrupted_backup_original_resumed_review_required'}
     }
+    $script:Step=$Request.Phase.ToLowerInvariant()+'-preflight'
     switch($Request.Phase){Inspect{InspectStage};Prepare{PrepareStage};Canary{CanaryStage};Cutover{CutoverStage};Rollback{Need $State.CutoverStarted 'no_cutover_to_rollback';RestorePair};Readback{ReadbackStage}}
     $script:ExitCode=0
 } catch {
     # Never print ErrorRecord/command output/Config.Env, even during partial failure.
-    if($script:State){$State.LastFailure=@{Step=$script:Step;At=[DateTime]::UtcNow.ToString('o');Line=$_.InvocationInfo.ScriptLineNumber;Code=$script:Failure};try{SaveState}catch{}}
+    $script:FailureDiagnostic=FailureDetails $_
+    if($script:State){$State.LastFailure=@{Step=$script:Step;At=[DateTime]::UtcNow.ToString('o');Line=$script:FailureDiagnostic.Line;Code=$script:Failure;Diagnostic=$script:FailureDiagnostic};try{SaveState}catch{}}
 } finally {
     if($script:Lock){$script:Lock.Dispose()}
     if(Get-Variable CompletionPath -ErrorAction SilentlyContinue){
-        $completion=@{InvocationId=$Invocation;Phase=$Request.Phase;ReleaseId=$Release;ExitCode=$script:ExitCode;Step=$script:Step;Code=$script:Failure;CompletedAt=[DateTime]::UtcNow.ToString('o');StatePath=$StatePath}
+        $completion=@{InvocationId=$Invocation;Phase=$Request.Phase;ReleaseId=$Release;ExitCode=$script:ExitCode;Step=$script:Step;Code=$script:Failure;CompletedAt=[DateTime]::UtcNow.ToString('o');StatePath=$StatePath;Diagnostic=$script:FailureDiagnostic}
         if(Test-Path -LiteralPath $StatePath){$completion.StateSha256=Hash $StatePath}
         try{if(!(Test-Path -LiteralPath $CompletionPath)){SaveJson $CompletionPath $completion};$completion|ConvertTo-Json -Compress}catch{$script:ExitCode=1}
     }
