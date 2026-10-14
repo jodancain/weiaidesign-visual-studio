@@ -78,19 +78,19 @@ IMAGE2_CRAFT_REAL_BIN_DIR=/absolute/native/bin node --test services/image2/tests
 
 ## 当前交付记录
 
-2026-10-14 本地 macOS 已通过 PhotoCraft、VectorCraft、FilmCraft、LightCraft、PdfCraft、EffectCraft、DesignCraft、FigCraft、WordCraft、SoundCraft、DeckCraft 的真实跨任务闭环。CADCraft 与 GridCraft 继续构建及真实验证；本记录不会以协议 mock 替代原生引擎通过。
+2026-10-14 本地 macOS 已通过 全部 13 个引擎的真实跨任务闭环，并在最终 runtime 上统一复跑 13/13 通过。10 个适用引擎的中文渲染均有相同最终二进制 SHA 的实际字形及重开证据。完整 macOS arm64 包已通过真实二进制、固定源码、字体和许可证校验后组装；不以协议 mock 替代原生引擎通过。
 
-原首页已实测素材打开、PNG/SVG 真实导出、候选接受、导出快照回画布、刷新恢复、原生历史恢复、工程包下载/上传后继续编辑。SVG 真实路径导出为 256×192；旧导出缺失的尺寸从同一不可变文件验证补读，回画布成为 SVG 图层并保留路径身份。全工程包另经过跨访客迁移、继续编辑和历史恢复，解码 RGBA 差异为 0。
+原首页已实测素材打开、PNG/SVG 真实导出、候选接受、导出快照回画布、刷新恢复、原生历史恢复、工程包下载/上传后继续编辑。SVG 真实路径导出为 256×192；旧导出缺失的尺寸从同一不可变文件验证补读，回画布成为 SVG 图层并保留路径身份。已从原版本按钮实际撤销/重做，再在原图层弹窗修改单路径填色，验证 CSS 继承、无描边、描边宽度与另一条路径保持一致；版本日期按保存时间显示。全工程包另经过跨访客迁移、继续编辑和历史恢复，解码 RGBA 差异为 0。
 
 原聊天区使用固定测试 LLM 回执及真实 PhotoCraft 完成三轮能力发现、编辑和导出；接受后原生工程升到版本 4，刷新后保持已接受，未重复执行。测试 fixture 已关闭，全程没有真实远端模型调用；此记录不代表自然语言模型效果验收。
 
-服务回归当前 355 项通过，另 1 项真实原生门控测试单独运行通过；客户端 114 项通过。typecheck、lint 和 Next.js 生产构建通过。构建时检出了聊天正则在压缩输出中的反引号转义问题，修复后再次完成真实生产构建。
+服务回归当前 357 项通过，另 1 项真实原生门控测试单独运行通过；客户端 116 项通过。typecheck、lint 和 Next.js 生产构建通过。构建时检出了聊天正则在压缩输出中的反引号转义问题，修复后再次完成真实生产构建。
 
 Ubuntu CI 已真实通过独立网络命名空间、零 capabilities、宿主相邻文件不可读和受限 AppArmor 子进程检查。完整 Linux 引擎矩阵仍是独立验收。代码推送、原生二进制分发、Linux 验收与正式生产部署分别记录；本地通过不代表线上已启用。
 
 
 ## 中文能力边界
 
-字体打包、真实文本编辑和原生渲染分别验收。`craft-cjk.integration.mjs` 使用 VectorCraft 逐字渲染“中、文、测、试、□”，检查实际像素轮廓彼此不同、非空，导出的 SVG 为路径且不依赖整图位图或外部字体；再删除初次任务目录，重开中文原生工程并比较解码 RGBA。当前 macOS 二进制已按固定 craft-fonts 来源构建，结果仍不能代替 Linux 验收。Film、Light、Effect、Design、Fig、Word 的五个中文/方框字形区分及原生重开检查已通过；Design、Word 的 PDF 另经 Poppler 渲染与文字提取验证。Word 的 DOCX 保存中文文本，但没有嵌入字体部件，不据此声称独立 DOCX 在任意设备字体一致。
+字体打包、真实文本编辑和原生渲染分别验收。`craft-cjk.integration.mjs` 使用 VectorCraft 逐字渲染“中、文、测、试、□”，检查实际像素轮廓彼此不同、非空，导出的 SVG 为路径且不依赖整图位图或外部字体；再删除初次任务目录，重开中文原生工程并比较解码 RGBA。当前 macOS 二进制已按固定 craft-fonts 来源构建，结果仍不能代替 Linux 验收。Film、Light、Effect、Design、Fig、Word、Deck、CAD 的五个中文/方框字形区分及原生重开检查已通过；Design、Word 的 PDF 另经 Poppler 渲染与文字提取验证。CAD PDF 中文使用轮廓，可渲染但不是可搜索文字。Word DOCX 和 Deck PPTX 保存中文 XML，但没有嵌入字体部件，不据此声称独立 Office 文件在任意设备字体一致。
 
 PDFCraft 固定版本的 `page_add_text` 只提供 Helvetica、Times、Courier，并明确仅接受 WinAnsi 西欧字符；新增中文文字会被上游拒绝。读取已有中文 PDF、在其他设计引擎完成中文排版后导出 PDF，与 PDFCraft 的新增文字能力分开记录。现有 Image2 文字层和 PDF 导出不因此降级，但不标称 PDFCraft 原生中文新增已接通。

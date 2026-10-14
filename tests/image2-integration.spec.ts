@@ -47,7 +47,7 @@ test('actual BFF/service: image, font, Logo, protected recolor, candidate restor
   await page.locator('input[accept="image/*,.svg"]').setInputFiles({ name: 'identity-logo.svg', mimeType: 'image/svg+xml', buffer: logo });
   await expect(page.getByRole('button', { name: '形 · identity-logo.svg', exact: true })).toBeVisible();
   await page.getByLabel('Logo 路径').selectOption('mark');
-  await page.getByLabel('Logo 填色').evaluate((element: HTMLInputElement) => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(element, '#bf3030'); element.dispatchEvent(new Event('input', { bubbles: true })); element.dispatchEvent(new Event('change', { bubbles: true })); });
+  await page.getByLabel('Logo 填色', { exact: true }).evaluate((element: HTMLInputElement) => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(element, '#bf3030'); element.dispatchEvent(new Event('input', { bubbles: true })); element.dispatchEvent(new Event('change', { bubbles: true })); });
   await expect.poll(() => page.locator('.i2-svg path').evaluate(element => getComputedStyle(element).fill)).toBe('rgb(191, 48, 48)');
   const beforeGroup = await get<ImageDocument>(`/documents/${doc.id}`), textBefore = beforeGroup.layers.find(layer => layer.name === '中文文字')!, logoBefore = beforeGroup.layers.find(layer => layer.name === 'identity-logo.svg')!;
   await page.getByRole('checkbox', { name: '选入组合 中文文字', exact: true }).check(); await page.getByRole('checkbox', { name: '选入组合 identity-logo.svg', exact: true }).check();

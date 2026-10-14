@@ -134,3 +134,25 @@ test('original selected and full-page SVG PDF exports retain Logo path font and 
   await close(page); await openLayers(page); await page.getByRole('button', { name: `文字 · ${newText.name}`, exact: true }).click(); await page.getByLabel('文字内容', { exact: true }).fill('回迁后继续改字'); await page.getByLabel('文字内容', { exact: true }).blur(); await expect.poll(async () => (await current(page, imported!.id)).layers.find(layer => layer.id === newText.id)?.text).toBe('回迁后继续改字'); expect((await current(page, doc.id)).layers.find(layer => layer.id === text.id)?.text).toBe('中文工程回迁');
   Object.assign(entries.get(page)!, { selectedBounds: [40, 30], pageBounds: [500, 240], importedDocument: imported!.id, fontBytesPreserved: true, svgBytesPreserved: true, mixedChineseExport: true, importedTextIndependentlyEditable: true });
 });
+
+test('original SVG properties read inherited paints and change only the selected path style', async ({ page }) => {
+  const source = await fixture(page); await openLayers(page, source.layer);
+  const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="256" height="192" viewBox="0 0 256 192"><style>.brand{fill:#136a9f} .outline{fill:none;stroke:#778899;stroke-width:7}</style><g class="brand" stroke="none" stroke-width="4"><path id="brand" d="M16 16L100 16L100 100Z"/></g><path id="outline" class="outline" d="M140 20L230 20L230 100Z"/></svg>');
+  await page.getByLabel('上传 SVG / 图片', { exact: true }).setInputFiles({ name: 'inherited-paints.svg', mimeType: 'image/svg+xml', buffer: svg });
+  const paths = page.getByLabel('Logo 路径', { exact: true }); await expect(paths).toBeEnabled();
+  await expect(page.getByLabel('Logo 填色色值', { exact: true })).toHaveValue('');
+  await paths.selectOption('brand');
+  await expect(page.getByLabel('Logo 填色色值', { exact: true })).toHaveValue('#136a9f');
+  await expect(page.getByLabel('Logo 描边色值', { exact: true })).toHaveValue('none');
+  await expect(page.getByLabel('描边宽度', { exact: true })).toHaveValue('4');
+  const before = await current(page, source.document.id), logo = before.layers.find(layer => layer.name === 'inherited-paints.svg')!;
+  await page.getByLabel('Logo 描边色值', { exact: true }).focus(); await page.getByLabel('Logo 描边色值', { exact: true }).blur();
+  expect((await current(page, before.id)).revision).toBe(before.revision);
+  await page.getByLabel('Logo 填色色值', { exact: true }).fill('#ff0000'); await page.getByLabel('Logo 填色色值', { exact: true }).blur();
+  await expect(page.getByLabel('Logo 填色色值', { exact: true })).toHaveValue('#ff0000');
+  await expect.poll(async () => (await current(page, before.id)).layers.find(layer => layer.id === logo.id)?.metadata?.pathStyles).toEqual({ brand: { fill: '#ff0000' } });
+  await expect(page.getByLabel('Logo 描边色值', { exact: true })).toHaveValue('none'); await expect(page.getByLabel('描边宽度', { exact: true })).toHaveValue('4');
+  await paths.selectOption('outline'); await expect(page.getByLabel('Logo 填色色值', { exact: true })).toHaveValue('none'); await expect(page.getByLabel('Logo 描边色值', { exact: true })).toHaveValue('#778899'); await expect(page.getByLabel('描边宽度', { exact: true })).toHaveValue('7');
+  expect(await bytes(page, logo.assetId!)).toEqual(svg);
+  Object.assign(entries.get(page)!, { inheritedPaintReadback: true, sourceSvgUnchanged: true, changedPath: 'brand', unchangedPath: 'outline', noImplicitStrokeWidth: true });
+});

@@ -6,6 +6,15 @@ export function svgHexPaintChange(value: string, current: string): string | unde
   return normalized === current.toLowerCase() ? undefined : normalized;
 }
 
+export function svgPaintChange(value: string, current?: string): string | undefined {
+  const text = value.trim();
+  // Focusing/blurring an existing none, gradient, alpha paint or mixed value
+  // must never manufacture a color edit.
+  if (text.toLowerCase() === (current || '').trim().toLowerCase()) return undefined;
+  if (text.toLowerCase() === 'none') return 'none';
+  return svgHexPaintChange(text, current || '');
+}
+
 /** Legacy SVG controls use CSS names; immutable v3 content uses typed JSON names. */
 export function professionalSvgStyles(value: unknown): Record<string, Record<string, unknown>> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('SVG 路径样式必须是对象');
@@ -21,8 +30,6 @@ export function professionalSvgStyles(value: unknown): Record<string, Record<str
 export function svgPaintPatch(layer: ImageLayer, target: string, paint: Record<string, unknown>, format: 'typed' | 'css' = 'typed'): Partial<ImageLayer> {
   const styles = professionalSvgStyles(layer.metadata?.pathStyles || {});
   const changed = professionalSvgStyles({ [target]: paint })[target];
-  const effective = { ...styles['*'], ...styles[target] };
-  if ('stroke' in changed && !('strokeWidth' in changed) && !Number(effective.strokeWidth)) changed.strokeWidth = 1;
   const merged = { ...styles, [target]: { ...styles[target], ...changed } };
   const pathStyles = format === 'typed' ? merged : Object.fromEntries(Object.entries(merged).map(([id, value]) => {
     const css = { ...value }; if ('strokeWidth' in css) { css['stroke-width'] = css.strokeWidth; delete css.strokeWidth; } return [id, css];

@@ -7,7 +7,8 @@ import { groupLayerCommands, ungroupLayerCommands } from '../lib/image2/grouping
 import { orderedLayers, reorderSiblingCommands } from '../lib/image2/stacking';
 import { imageAgentCapability, imageCapabilitiesForDocument, requireImageAgent } from '../lib/image2/agent-capabilities';
 import { imageAdjustmentRequest, imageAdjustments } from '../lib/image2/adjustments';
-import { professionalSvgContent, professionalSvgStyles, svgPaintPatch, svgHexPaintChange } from '../lib/image2/professional-svg-styles';
+import { professionalSvgContent, professionalSvgStyles, svgPaintPatch, svgHexPaintChange, svgPaintChange } from '../lib/image2/professional-svg-styles';
+import { commonSvgPaint, svgPaintValue } from '../lib/image2/svg-paint-readback';
 import { candidatePreviewAssets, candidatePreviewState } from '../lib/image2/candidate-preview';
 import { elementPreviewSource } from '../lib/image2/element-preview';
 import type { ImageJob } from '../lib/image2/types';
@@ -215,6 +216,26 @@ test('precise SVG color entry accepts only six-digit HEX and leaves unchanged va
   assert.equal(svgHexPaintChange('ff0000', '#20232b'), '#ff0000');
   assert.equal(svgHexPaintChange('#FF0000', '#ff0000'), undefined);
   for (const value of ['', '#fff', '#12345678', 'red', '#xyzxyz', 'url(data:)']) assert.throws(() => svgHexPaintChange(value, '#20232b'), /六位/);
+});
+
+test('SVG paint readback preserves actual blue, no paint, alpha and mixed styles without inventing a default', () => {
+  const paths = [{ id: 'i2-draw-path-0', fill: svgPaintValue('rgb(19, 106, 159)'), stroke: svgPaintValue('none'), strokeWidth: 1 }];
+  assert.deepEqual(commonSvgPaint(paths, '*'), { fill: '#136a9f', stroke: 'none', strokeWidth: 1 });
+  assert.deepEqual(commonSvgPaint(paths, paths[0].id), commonSvgPaint(paths, '*'));
+  assert.deepEqual(commonSvgPaint([...paths, { id: 'other', fill: '#ffffff', stroke: 'none', strokeWidth: 4 }], '*'), { stroke: 'none' });
+  assert.deepEqual(commonSvgPaint(paths, 'missing'), {});
+  assert.equal(svgPaintValue('#f0A'), '#ff00aa'); assert.equal(svgPaintValue('rgba(19, 106, 159, 1)'), '#136a9f');
+  assert.equal(svgPaintValue('rgba(19, 106, 159, 0.5)'), 'rgba(19, 106, 159, 0.5)');
+  for (const value of ['none', 'url(#gradient)', 'rgba(19, 106, 159, 0.5)', '']) assert.equal(svgPaintChange(value, value || undefined), undefined);
+  assert.equal(svgPaintChange('NONE', '#136a9f'), 'none'); assert.equal(svgPaintChange('#aa1133', 'none'), '#aa1133');
+});
+
+test('single SVG path paint edits never add or reset inherited stroke width or touch another path', () => {
+  const original = layer({ type: 'vector', metadata: { pathStyles: { first: { fill: '#136a9f' }, second: { fill: 'none', stroke: '#778899', strokeWidth: 7 } } } });
+  const changed = svgPaintPatch(original, 'first', { stroke: '#ff0000' });
+  assert.deepEqual(changed.metadata?.pathStyles, { first: { fill: '#136a9f', stroke: '#ff0000' }, second: { fill: 'none', stroke: '#778899', strokeWidth: 7 } });
+  assert.deepEqual(svgPaintPatch(original, 'first', { fill: 'none' }).metadata?.pathStyles, { first: { fill: 'none' }, second: { fill: 'none', stroke: '#778899', strokeWidth: 7 } });
+  assert.deepEqual(original.metadata?.pathStyles, { first: { fill: '#136a9f' }, second: { fill: 'none', stroke: '#778899', strokeWidth: 7 } });
 });
 
 test('professional candidates display the actual version-matched PNG preview and never immutable JSON content assets', () => {

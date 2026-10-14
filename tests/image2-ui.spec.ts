@@ -90,7 +90,7 @@ test('Logo path paint edits affect actual SVG pixels and persist export-compatib
   await page.goto('/image2'); await page.getByRole('button', { name: '形 · Logo', exact: true }).click();
   await expect.poll(() => page.locator('.i2-svg path').evaluate(element => getComputedStyle(element).fill)).toBe('rgb(51, 51, 51)');
   await page.getByLabel('Logo 路径').selectOption('symbol');
-  await page.getByLabel('Logo 填色').evaluate((element: HTMLInputElement) => {
+  await page.getByLabel('Logo 填色', { exact: true }).evaluate((element: HTMLInputElement) => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(element, '#e03131');
     element.dispatchEvent(new Event('input', { bubbles: true })); element.dispatchEvent(new Event('change', { bubbles: true }));
   });
