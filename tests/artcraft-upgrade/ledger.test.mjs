@@ -62,9 +62,9 @@ test('queued work prevents a drain gate, unknown states fail closed', t => {
 });
 test('store-only readback and new CraftService reopen preserve native history, assets and receipts', async t => {
   const f = fixture(t), before = audit(f.dir);
-  const module = resolve('services/image2/store.mjs');
-  const oldShape = await readWithStore(f.dir, { storeModule: module });
-  const reopened = await readWithStore(f.dir, { storeModule: module, craftModule: resolve('services/image2/craft-service.mjs') });
+  const storeModulePath = resolve('services/image2/store.mjs');
+  const oldShape = await readWithStore(f.dir, { storeModule: storeModulePath });
+  const reopened = await readWithStore(f.dir, { storeModule: storeModulePath, craftModule: resolve('services/image2/craft-service.mjs') });
   assertPreserved(before, oldShape); assertPreserved(before, reopened); assert.equal(oldShape.workerStarted, false);
   // Local validation uses current Store only. Actual old digest is a target gate.
   assert.equal(oldShape.fullOldFeatureCompatibility, false);
