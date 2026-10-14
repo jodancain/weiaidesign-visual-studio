@@ -16,6 +16,17 @@ const cleanEnv = { PATH: '/usr/local/bin:/usr/bin:/bin', LANG: 'C.UTF-8', HOME: 
 export const expectedEnvKeys = ['PATH', 'HOME', 'TMPDIR', 'TMP', 'TEMP', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME', 'LANG', 'LC_ALL', 'RUST_BACKTRACE'].sort();
 const canaryNames = ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'IMAGE2_API_TOKEN', 'HTTP_PROXY'];
 
+export function parseBwrapPackage(stdout) {
+  const values = stdout.trimEnd().split(/\r?\n/);
+  assert.equal(values.length, 5, 'Incomplete dpkg package/source metadata');
+  assert.ok(values.every(value => value.length > 0));
+  return Object.fromEntries(['binary', 'version', 'source', 'sourceVersion', 'architecture'].map((key, i) => [key, values[i]]));
+}
+
+export function assertBwrapIdentity(actual, expected) {
+  assert.deepEqual(actual, expected, 'Installed bwrap binary and Debian source identity must match the reviewed lock');
+}
+
 // Outputs only security facts and environment NAMES, never environment values.
 export const observationCode = String.raw`
 const fs = require('node:fs'), os = require('node:os');
@@ -113,11 +124,17 @@ async function main(args) {
     record.nativeManifestSha256 = sha(await fs.readFile('/opt/artcraft/manifest.json'));
     assert.equal(record.nativeManifestSha256, lock.nativeManifestSha256);
     record.node = await observation(); assertZeroCaps(record.node, true);
+    record.stage = 'package-provenance';
     const bwrap = await fs.realpath('/usr/bin/bwrap'), st = await fs.stat(bwrap);
     const version = await execute({ file: bwrap, args: ['--version'], env: cleanEnv });
     assert.equal(version.code, 0);
-    record.bwrap = { version: version.stdout.trim(), sha256: sha(await fs.readFile(bwrap)), setid: !!(st.mode & 0o6000) };
-    assert.equal(record.bwrap.setid, false); assert.equal(record.bwrap.version, 'bubblewrap 0.11.0', 'Review different package source before widening');
+    const format = ['${binary:Package}', '${Version}', '${source:Package}', '${source:Version}', '${Architecture}'].join('\\n');
+    const packageResult = await execute({ file: '/usr/bin/dpkg-query', args: ['-W', `-f=${format}`, 'bubblewrap'], env: cleanEnv });
+    assert.equal(packageResult.code, 0, 'Installed package/source metadata is required');
+    record.bwrap = { realpath: bwrap, version: version.stdout.trim(), sha256: sha(await fs.readFile(bwrap)), setid: !!(st.mode & 0o6000),
+      package: parseBwrapPackage(packageResult.stdout) };
+    assertBwrapIdentity(record.bwrap, lock.bwrap);
+    record.stage = 'isolation-probe';
     root = await fs.mkdtemp('/tmp/t03-policy-'); const work = join(root, 'project-a'); await fs.mkdir(work);
     const workerResult = await execute({ file: process.execPath, args: [fileURLToPath(import.meta.url), '--worker', serviceDir, work],
       env: { ...cleanEnv, ...Object.fromEntries(canaryNames.map(name => [name, 'T03_SYNTHETIC_ONLY'])) } });

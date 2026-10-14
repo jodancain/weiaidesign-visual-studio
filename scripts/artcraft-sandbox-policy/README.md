@@ -1,6 +1,6 @@
 # T03: Docker 29.4.1 bubblewrap policy proposal
 
-**Review candidate only. No custom policy or target-container test has been executed.**
+**Review candidate only. No custom policy has been applied; target acceptance remains pending.**
 Container scoped; no daemon change. Do not attach this policy to the live service
 until the supervisor has reviewed the exact bytes and target evidence. T04 integrates this candidate into the focused upgrade executor; target review is still required.
 
@@ -37,13 +37,20 @@ edits; they do not establish final-image provenance.
 - [Docker documentation](https://github.com/docker/docs/blob/37ba9076a66c8a5b1cd7ba7f4b0eb1eb361fe698/content/manuals/engine/security/seccomp.md)
   specifies an allowlist/default-ERRNO profile and per-container
   `--security-opt seccomp=...`. Its generic unconfined example is **not** used.
-- bwrap source reviewed: **v0.11.0**, commit
-  `9ca3b05ec787acfb4b17bed37db5719fa777834f`.
-  [bubblewrap.c](https://github.com/containers/bubblewrap/blob/9ca3b05ec787acfb4b17bed37db5719fa777834f/bubblewrap.c#L3065)
-  and [bind-mount.c](https://github.com/containers/bubblewrap/blob/9ca3b05ec787acfb4b17bed37db5719fa777834f/bind-mount.c#L408)
-  are primary evidence, **not a claim about an uninspected apt package**.
-  Record the actual binary hash and review Debian patches/version before use.
-  A different bwrap version requires source review; there is no automatic widening.
+- bwrap source frozen: **v0.12.0**, commit
+  `2a76602a8c71f36c1527cf9fc3417d9149822e0c`.
+  [bubblewrap.c](https://github.com/containers/bubblewrap/blob/2a76602a8c71f36c1527cf9fc3417d9149822e0c/bubblewrap.c#L3017)
+  and [bind-mount.c](https://github.com/containers/bubblewrap/blob/2a76602a8c71f36c1527cf9fc3417d9149822e0c/bind-mount.c#L408)
+  match the verified Debian orig archive. The native image pins
+  **bubblewrap=0.12.0-1~deb13u1**, source version **0.12.0-1~deb13u1**, **amd64**.
+  This [Debian security update](https://lists.debian.org/debian-security-announce/2026/msg00383.html)
+  fixes symlink traversal; its one Debian patch changes the EPERM diagnostic only.
+  Debian builds with `-Dassume_kernel=5.10.0`, using the safer openat2 path.
+  The probe and receipt verifier require `/usr/bin/bwrap`, non-setid mode, and exact
+  binary SHA256 `573236e5328ac2ebb08f59ae3a9805b4f8d12bdef14be8af4450d5463294985f`.
+  Binary, package, source-version or architecture drift stops before isolation tests.
+  The previous 0.11.0 version-gate failure is not a default-seccomp failure;
+  a fresh builtin control is required with this coherent source/package lock.
 
 `sources.lock.json` contains exact official URLs, commits, byte counts and SHA256
 for all research sources. Only the upstream profile and its license are vendored.
@@ -63,8 +70,8 @@ private proc/dev/tmpfs, read-only executable, writable job directory, job cwd.
 
 | Syscall | Permitted argument(s) | Reason and limit |
 | --- | --- | --- |
-| `clone` | arg0 **`0x7e020011`** exactly | SIGCHLD + NEWUSER/NEWNS/NEWPID/NEWNET/NEWIPC/NEWUTS/NEWCGROUP. bwrap.c 3065–3123. No other flags; no namespaces without NEWUSER. No cgroup-absent fallback on this reviewed kernel. |
-| `unshare` | arg0 **`0x10000000`** exactly | NEWUSER only. Non-setuid `--dev` maps UID 1000 to 0 in its first owned userns for devpts, then creates a second userns to restore UID/GID 1000 (3275–3292, 3445–3495). |
+| `clone` | arg0 **`0x7e020011`** exactly | SIGCHLD + NEWUSER/NEWNS/NEWPID/NEWNET/NEWIPC/NEWUTS/NEWCGROUP. bwrap.c 3017–3075. No other flags; no namespaces without NEWUSER. No cgroup-absent fallback on this reviewed kernel. |
+| `unshare` | arg0 **`0x10000000`** exactly | NEWUSER only. The owned user namespace restores UID/GID after devpts setup (3339–3382). |
 | `mount` | arg3 **`0x8c000`** | SILENT/SLAVE/REC: stop propagating mounts to parent. |
 | `mount` | arg3 **`0x6`** | NOSUID/NODEV: root, /dev and /tmp tmpfs. |
 | `mount` | arg3 **`0xc0edd000`** | MGC_VAL/SILENT/BIND/REC: initial newroot bind. Legacy magic retained because this source supplies it. |
@@ -72,9 +79,9 @@ private proc/dev/tmpfs, read-only executable, writable job directory, job cwd.
 | `mount` | arg3 **`0xe`** | NOSUID/NOEXEC/NODEV: procfs. |
 | `mount` | arg3 **`0xa`** | NOSUID/NOEXEC: devpts. |
 | `mount` | arg3 **`0x4c000`** | SILENT/REC/PRIVATE: oldroot before detach. |
-| `mount` | arg3 masked equality | Required `0x9022` (SILENT/BIND/REMOUNT/NOSUID). Only RO/NODEV/NOEXEC/NOATIME/NODIRATIME/RELATIME may vary; all other bits, including upper 32 bits, must be zero. bind-mount.c 435–535 preserves inherited flags and adds restrictions. NODEV cannot be mandatory for device binds. |
-| `pivot_root` | No pointer filtering possible | Two root pivots (3345, 3432); kernel namespace/capability checks must enforce ownership. |
-| `umount2` | arg1 **`2`** exactly | MNT_DETACH old roots (3408, 3436). No FORCE/EXPIRE/NOFOLLOW allowance. |
+| `mount` | arg3 masked equality | Required `0x9022` (SILENT/BIND/REMOUNT/NOSUID). Only RO/NODEV/NOEXEC/NOATIME/NODIRATIME/RELATIME may vary; all other bits, including upper 32 bits, must be zero. bind-mount.c 435–489 preserves inherited flags and adds restrictions. NODEV cannot be mandatory for device binds. |
+| `pivot_root` | No pointer filtering possible | Two root pivots (3282, 3326); kernel namespace/capability checks must enforce ownership. |
+| `umount2` | arg1 **`2`** exactly | MNT_DETACH old roots (3302, 3330). No FORCE/EXPIRE/NOFOLLOW allowance. |
 
 Numeric mask is a JSON **uint64**. Do not round-trip the profile through JavaScript
 Number or a floating-point JSON formatter. Python and Docker's Go JSON parser

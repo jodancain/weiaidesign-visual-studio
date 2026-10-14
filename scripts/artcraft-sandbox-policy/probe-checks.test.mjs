@@ -1,9 +1,27 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assertNetwork, assertZeroCaps, observationCode, prepareEvidenceDirectory } from './target-probe.mjs';
+import { assertBwrapIdentity, parseBwrapPackage, assertNetwork, assertZeroCaps, observationCode, prepareEvidenceDirectory } from './target-probe.mjs';
 import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+
+test('bwrap provenance rejects any binary, package, source, architecture or setid drift', async () => {
+  const lock = JSON.parse(await readFile(new URL('./review.lock.json', import.meta.url), 'utf8'));
+  const actual = structuredClone(lock.bwrap);
+  actual.package = parseBwrapPackage('bubblewrap\n0.12.0-1~deb13u1\nbubblewrap\n0.12.0-1~deb13u1\namd64\n');
+  assertBwrapIdentity(actual, lock.bwrap);
+  for (const key of ['realpath', 'version', 'sha256', 'setid']) {
+    const bad = structuredClone(actual); bad[key] = key === 'setid' ? true : 'unreviewed';
+    assert.throws(() => assertBwrapIdentity(bad, lock.bwrap));
+  }
+  for (const key of Object.keys(actual.package)) {
+    const bad = structuredClone(actual); bad.package[key] = 'unreviewed';
+    assert.throws(() => assertBwrapIdentity(bad, lock.bwrap));
+  }
+  assert.throws(() => parseBwrapPackage('bubblewrap\n0.12.0-1~deb13u1\n'));
+  assert.throws(() => parseBwrapPackage('bubblewrap\n0.12.0-1~deb13u1\n\n0.12.0-1~deb13u1\namd64\n'));
+  assert.throws(() => parseBwrapPackage('bubblewrap\n0.12.0-1~deb13u1\nbubblewrap\n0.12.0-1~deb13u1\namd64\nextra\n'));
+});
 
 test('empty owned volume creates evidence parent and unique leaf, without overwriting previous runs', async t => {
   const root = await mkdtemp(join(tmpdir(), 'policy-empty-volume-'));

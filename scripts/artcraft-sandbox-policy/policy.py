@@ -48,7 +48,7 @@ def rule(name, comment, *args):
 
 
 def additions():
-    # bubblewrap v0.11.0, non-setuid, --unshare-all --dev /dev.
+    # bubblewrap v0.12.0, non-setuid, --unshare-all --dev /dev; delta unchanged.
     # Deliberately no no-cgroup fallback: the reviewed WSL2 kernel has cgroupns.
     result = [
         rule("clone", "SIGCHLD + NEWNS/NEWUSER/NEWPID/NEWNET/NEWIPC/NEWUTS/NEWCGROUP; no other flags",
@@ -215,8 +215,7 @@ def bind(before, after, result, lock, profile, *, service_layout=None):
     require(result["probeSha256"] == lock["artifacts"]["target-probe.mjs"], "Probe implementation changed")
     native_pin = next(i["sha256"] for i in lock["inputs"] if i["path"].endswith("/craft-native.integration.mjs"))
     require(result["nativeTestSha256"] == native_pin, "Native suite changed")
-    require(result["bwrap"]["version"] == "bubblewrap 0.11.0", "bwrap version needs source review")
-    require(len(result["bwrap"]["sha256"]) == 64 and result["bwrap"]["setid"] is False, "Require hashed non-setuid bwrap")
+    require(result["bwrap"] == lock["bwrap"], "bwrap binary/package/source identity needs review")
     for process in [result["node"], result["worker"], result["sandbox"]]:
         require(process["uid"] == 1000 and process["gid"] == 1000, "Unexpected process UID/GID")
         for key in ["CapEff", "CapPrm", "CapInh", "CapAmb", "CapBnd"]:

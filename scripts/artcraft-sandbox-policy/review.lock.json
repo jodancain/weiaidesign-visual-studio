@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "status": "T06-local-candidate-target-not-run",
   "profileSha256": "54445b51b34a5884dba65c7875995a0991402c5d46ca66df404690f968fb2ac4",
-  "sourcesLockSha256": "098ca8ec214c12bd7a0ef1730d75d30a6db699b2cc91564e3f79fd7050985a90",
+  "sourcesLockSha256": "dbe555ed580b460900943d74f408b42601ac0e16727fef7152fd9007ef444109",
   "inputs": [
     {
       "path": "services/image2/craft-sandbox.mjs",
@@ -18,7 +18,7 @@
     },
     {
       "path": "services/image2/Dockerfile.native",
-      "sha256": "360bd26ac7ca1b7455ed9b9eec526fb361f90851d1d639b60e429621af436dcb"
+      "sha256": "39c8d27738c2308e30ffa8ec0c78576ba4eeab376840986db4c63017860c63fa"
     },
     {
       "path": "services/image2/compose.native.yml",
@@ -51,12 +51,25 @@
     "No root production policy approval is asserted by this local lock."
   ],
   "artifacts": {
-    "policy.py": "b1c11fec3489e2f58e959bc97cfffa7fe6cfaaa93bd5853b6b0ee5cd9411d40b",
-    "target-probe.mjs": "09a43a7458935df27c0ba159b0bbca42ea556a2423daa9b8ccd1301bc0cd4667",
+    "policy.py": "0cc711cc6be7f3a2c95db2fa20dae5fcaac318f8841b913af953c1809694d80b",
+    "target-probe.mjs": "e3ae846144a279982e12fc8494a4a8a1d44617643e6c74a9022317104ea4e8cb",
     "collect-review-facts.ps1": "654b30f228b45996f9faaa389a9a33877ce78d2f234fe5094b20360ec7cae4ba",
-    "test_policy.py": "032a01cf0627902c7802541783756189a3cd1f48e0b3b678bf7ea95c49cc6255",
-    "probe-checks.test.mjs": "0be3656ed204e2c413db54a22c2994b5616c02b6986f73aaad28b274b9533091",
-    "README.md": "c0e610774c455b6d1190a7d76c427040af4ccc30694031a5cb2f6bab233ff66e"
+    "test_policy.py": "883075e34fd9609d7f1a123a7536cddca48c0e77540bfc2787e5369f245a268a",
+    "probe-checks.test.mjs": "2e80f8a94a128d76c1c0a4abcbd5ecacceb2dacb82c02e1e9df0553928c44b8c",
+    "README.md": "7b33efad85548a0c7644c07fde62b50b0c9269e3fd09131386397cd10b1a106f"
   },
-  "nativeManifestSha256": "8e050bb717ab92246fec121a4e8bff45e328c1b9ff0994b015fc99c2dcc45509"
+  "nativeManifestSha256": "8e050bb717ab92246fec121a4e8bff45e328c1b9ff0994b015fc99c2dcc45509",
+  "bwrap": {
+    "realpath": "/usr/bin/bwrap",
+    "version": "bubblewrap 0.12.0",
+    "sha256": "573236e5328ac2ebb08f59ae3a9805b4f8d12bdef14be8af4450d5463294985f",
+    "setid": false,
+    "package": {
+      "binary": "bubblewrap",
+      "version": "0.12.0-1~deb13u1",
+      "source": "bubblewrap",
+      "sourceVersion": "0.12.0-1~deb13u1",
+      "architecture": "amd64"
+    }
+  }
 }

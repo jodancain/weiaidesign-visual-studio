@@ -5,8 +5,8 @@
   "seccompModule": "github.com/moby/profiles/seccomp v0.1.0",
   "seccompTag": "seccomp/v0.1.0",
   "seccompCommit": "c936cc7b4074219137bc0bee45670f5e4618d462",
-  "bubblewrapTag": "v0.11.0",
-  "bubblewrapCommit": "9ca3b05ec787acfb4b17bed37db5719fa777834f",
+  "bubblewrapTag": "v0.12.0",
+  "bubblewrapCommit": "2a76602a8c71f36c1527cf9fc3417d9149822e0c",
   "sources": [
     {
       "id": "default",
@@ -73,22 +73,22 @@
     {
       "id": "bubblewrap",
       "repository": "containers/bubblewrap",
-      "commit": "9ca3b05ec787acfb4b17bed37db5719fa777834f",
+      "commit": "2a76602a8c71f36c1527cf9fc3417d9149822e0c",
       "path": "bubblewrap.c",
-      "url": "https://raw.githubusercontent.com/containers/bubblewrap/9ca3b05ec787acfb4b17bed37db5719fa777834f/bubblewrap.c",
-      "permalink": "https://github.com/containers/bubblewrap/blob/9ca3b05ec787acfb4b17bed37db5719fa777834f/bubblewrap.c",
-      "sha256": "7e972f6193fe48ff046033be85c5d8988102978ac6176ba19ff9e02e0594f741",
-      "bytes": 116178
+      "url": "https://raw.githubusercontent.com/containers/bubblewrap/2a76602a8c71f36c1527cf9fc3417d9149822e0c/bubblewrap.c",
+      "permalink": "https://github.com/containers/bubblewrap/blob/2a76602a8c71f36c1527cf9fc3417d9149822e0c/bubblewrap.c",
+      "sha256": "3f17ee26057cae9d660801ca8d9ba84722f1bafdcd072d5151ee1c64eeeb15f4",
+      "bytes": 113001
     },
     {
       "id": "bind_mount",
       "repository": "containers/bubblewrap",
-      "commit": "9ca3b05ec787acfb4b17bed37db5719fa777834f",
+      "commit": "2a76602a8c71f36c1527cf9fc3417d9149822e0c",
       "path": "bind-mount.c",
-      "url": "https://raw.githubusercontent.com/containers/bubblewrap/9ca3b05ec787acfb4b17bed37db5719fa777834f/bind-mount.c",
-      "permalink": "https://github.com/containers/bubblewrap/blob/9ca3b05ec787acfb4b17bed37db5719fa777834f/bind-mount.c",
-      "sha256": "19a6ae020803e342667dd562efab027967b1c1f2965525ec7ee09521554f8f71",
-      "bytes": 15808
+      "url": "https://raw.githubusercontent.com/containers/bubblewrap/2a76602a8c71f36c1527cf9fc3417d9149822e0c/bind-mount.c",
+      "permalink": "https://github.com/containers/bubblewrap/blob/2a76602a8c71f36c1527cf9fc3417d9149822e0c/bind-mount.c",
+      "sha256": "b14a8adfe22a45fb2e02a81bccfd14500c42a07452fb94664ba5ec16ae7ba744",
+      "bytes": 16182
     },
     {
       "id": "docker_docs",
@@ -109,6 +109,92 @@
       "permalink": "https://github.com/moby/profiles/blob/c936cc7b4074219137bc0bee45670f5e4618d462/seccomp/generate.go",
       "sha256": "43fa91d623f3f1b1861b84ccf8f39a35bda7db9e0c45d492ae05b3b08d97e683",
       "bytes": 560
+    },
+    {
+      "id": "bubblewrap_utils",
+      "repository": "containers/bubblewrap",
+      "commit": "2a76602a8c71f36c1527cf9fc3417d9149822e0c",
+      "path": "utils.c",
+      "url": "https://raw.githubusercontent.com/containers/bubblewrap/2a76602a8c71f36c1527cf9fc3417d9149822e0c/utils.c",
+      "permalink": "https://github.com/containers/bubblewrap/blob/2a76602a8c71f36c1527cf9fc3417d9149822e0c/utils.c",
+      "sha256": "b53c73465e0188259a8438396e25531f6b6ae7e2fb88d37bf13cee29acedd222",
+      "bytes": 21976
+    },
+    {
+      "id": "bubblewrap_utils_header",
+      "repository": "containers/bubblewrap",
+      "commit": "2a76602a8c71f36c1527cf9fc3417d9149822e0c",
+      "path": "utils.h",
+      "url": "https://raw.githubusercontent.com/containers/bubblewrap/2a76602a8c71f36c1527cf9fc3417d9149822e0c/utils.h",
+      "permalink": "https://github.com/containers/bubblewrap/blob/2a76602a8c71f36c1527cf9fc3417d9149822e0c/utils.h",
+      "sha256": "a62180bf1cecc785e3cebc7957ea73f7e016395d6fce6bdc55fcec865396152d",
+      "bytes": 7818
+    },
+    {
+      "id": "bubblewrap_build",
+      "repository": "containers/bubblewrap",
+      "commit": "2a76602a8c71f36c1527cf9fc3417d9149822e0c",
+      "path": "meson.build",
+      "url": "https://raw.githubusercontent.com/containers/bubblewrap/2a76602a8c71f36c1527cf9fc3417d9149822e0c/meson.build",
+      "permalink": "https://github.com/containers/bubblewrap/blob/2a76602a8c71f36c1527cf9fc3417d9149822e0c/meson.build",
+      "sha256": "6909022047bcc8c36e1fa07d8b7642f6db39d86df2e62d34be2685fd0e6099ba",
+      "bytes": 4743
     }
-  ]
+  ],
+  "bubblewrapTagObject": "014a04330642e5c870418beb621532cb896e0002",
+  "bubblewrapDebian": {
+    "package": "bubblewrap",
+    "version": "0.12.0-1~deb13u1",
+    "sourceVersion": "0.12.0-1~deb13u1",
+    "architecture": "amd64",
+    "binarySha256": "573236e5328ac2ebb08f59ae3a9805b4f8d12bdef14be8af4450d5463294985f",
+    "archives": [
+      {
+        "url": "https://security.debian.org/debian-security/pool/updates/main/b/bubblewrap/bubblewrap_0.12.0-1~deb13u1.dsc",
+        "sha256": "1abef77e6c35ce6c48c8969d31bffcc7a589bfd8e8fea9284fd8d77750f01d39",
+        "bytes": 2362,
+        "name": "bubblewrap_0.12.0-1~deb13u1.dsc"
+      },
+      {
+        "name": "bubblewrap_0.12.0.orig.tar.xz",
+        "url": "https://security.debian.org/debian-security/pool/updates/main/b/bubblewrap/bubblewrap_0.12.0.orig.tar.xz",
+        "bytes": 126452,
+        "sha256": "9760d007363e3abba7c747489910f9f82d9fca53ba3bd3282e396fa3c97a3314"
+      },
+      {
+        "name": "bubblewrap_0.12.0-1~deb13u1.debian.tar.xz",
+        "url": "https://security.debian.org/debian-security/pool/updates/main/b/bubblewrap/bubblewrap_0.12.0-1~deb13u1.debian.tar.xz",
+        "bytes": 13728,
+        "sha256": "7b54f121aebf5d4b38360ea728274c26fa471582bc3e6658379b679ecd8b5a2f"
+      }
+    ],
+    "patches": [
+      {
+        "path": "debian/patches/debian/Change-EPERM-error-message-to-show-Debian-specific-inform.patch",
+        "sha256": "e86a163263e90d0020f40604a85f6525f23c8f8f66fc0ff9ee4c623ef1ed78ea",
+        "bytes": 1063
+      },
+      {
+        "path": "debian/patches/series",
+        "sha256": "409749282d0ae668c26a8c8b72ecd0d1f463a96a7906053d5bcfea587d6ab492",
+        "bytes": 71
+      }
+    ],
+    "buildRules": {
+      "path": "debian/rules",
+      "sha256": "2e15a6db8bc7c8be3ee19456ac3121b19743208c8244ec4bd2c27631d60245ff",
+      "bytes": 730
+    },
+    "patchedBubblewrapSha256": "7b27763263039b68605629498fc133d33d4c73584357da4f48787592ef2a706c",
+    "securityAnnouncement": "https://lists.debian.org/debian-security-announce/2026/msg00383.html",
+    "archiveAcceptance": "https://tracker.debian.org/news/1790935/accepted-bubblewrap-0120-1deb13u1-source-into-stable-security/",
+    "binaryPackage": {
+      "url": "https://security.debian.org/debian-security/pool/updates/main/b/bubblewrap/bubblewrap_0.12.0-1~deb13u1_amd64.deb",
+      "sha256": "70aca4fa8daeacb677ec00e8063eb586f08ae3d94b1f11e684370b5524c43431",
+      "bytes": 56876,
+      "bwrapBytes": 80248,
+      "bwrapMode": "0755",
+      "bwrapSha256": "573236e5328ac2ebb08f59ae3a9805b4f8d12bdef14be8af4450d5463294985f"
+    }
+  }
 }

@@ -4,7 +4,7 @@ ARG IMAGE2_BASE_IMAGE=weiai-image2:2.0.0
 FROM ${IMAGE2_BASE_IMAGE}
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    bubblewrap fontconfig fonts-noto-cjk libasound2t64 libfontconfig1 libfreetype6 \
+    bubblewrap=0.12.0-1~deb13u1 fontconfig fonts-noto-cjk libasound2t64 libfontconfig1 libfreetype6 \
     libudev1 libx11-6 libxcb1 libxkbcommon0 libwayland-client0 libegl1 libgl1 \
     libvulkan1 mesa-vulkan-drivers \
     curl ffmpeg poppler-utils python3 \
