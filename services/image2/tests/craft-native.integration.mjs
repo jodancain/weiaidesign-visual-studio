@@ -22,14 +22,14 @@ const cases = {
   vectorcraft: { first: [s('new', { width: 128, height: 96 }), s('draw_path', { points: [[8, 8], [110, 18], [60, 80]], closed: true, fill: '#136a9f', stroke: 'none' }), png], second: [png], compare: 'result.png' },
   filmcraft: { first: [s('file.import', { paths: [asset('image')] }), s('file.newSequenceFromClip', { items: [ref('0.items.0')] }), s('render_preview', { seconds: 0, max_side: 128 })], second: [s('render_preview', { seconds: 0, max_side: 128 })], preview: true },
   lightcraft: { first: [s('import', { paths: [asset('image')], mode: 'copy' }), s('set_develop', { values: { 'light.exposure': 0.5 } }), s('export', { path: output('result.png'), format: 'png' })], second: [s('export', { path: output('result.png'), format: 'png' })], compare: 'result.png' },
-  pdfcraft: { first: [s('new', { width: 256, height: 192 }), s('page_add_text', { doc: ref('0.id'), page: 1, text: 'Native Probe', at: [16, 16], size: 18 }), s('page_add_image', { doc: ref('0.id'), page: 1, path: asset('image'), rect: [16, 50, 160, 100] }), s('render_preview', { max_side: 256 })], second: [s('render_preview', { max_side: 256 })], preview: true },
+  pdfcraft: { first: [s('new', { width: 256, height: 192 }), s('page_add_text', { doc: ref('0.doc'), page: 1, text: 'Native Probe', at: [16, 16], size: 18 }), s('page_add_image', { doc: ref('0.doc'), page: 1, path: asset('image'), rect: [16, 50, 160, 100] }), s('render_preview', { max_side: 256 })], second: [s('render_preview', { max_side: 256 })], preview: true },
   effectcraft: { first: [s('comp.new', { name: 'Native Probe', width: 128, height: 96, duration: 1, frameRate: 24 }), s('layer.newSolid', { name: 'Blue', color: '#136a9f', width: 64, height: 48 }), s('render_frame', { path: output('result.png'), max_side: 128 })], second: [s('render_frame', { path: output('result.png'), max_side: 128 })], compare: 'result.png' },
   designcraft: { first: [s('new', { width: 256, height: 192 }), s('frame.create', { rect: [20, 20, 210, 80], content: 'text', text: 'Native Probe' }), s('export_png', { path: output('result.png'), page: 0, scale: 1 })], second: [s('export_png', { path: output('result.png'), page: 0, scale: 1 })], compare: 'result.png' },
   figcraft: { first: [s('create_node', { type: 'rectangle', name: 'Native Probe', x: 10, y: 10, width: 128, height: 96, props: { fill: '#136a9f', cornerRadius: 8 } }), png], second: [png], compare: 'result.png' },
   wordcraft: { first: [s('font.add', { path: asset('font') }), s('format.font', { name: 'Craft Acceptance Face' }), s('type_text', { text: 'Native Probe: persistent document.' }), s('render_page', { page: 1, scale: 1 })], second: [s('render_page', { page: 1, scale: 1 })], preview: true },
   soundcraft: { first: [s('import_audio', { path: asset('audio') }), s('bounce_mix', { path: output('result.wav'), format: 'wav', start: { seconds: 0 }, end: { seconds: 0.25 } })], second: [s('bounce_mix', { path: output('result.wav'), format: 'wav', start: { seconds: 0 }, end: { seconds: 0.25 } })], compare: 'result.wav' },
   deckcraft: { first: [s('add_shape', { preset: 'rect', x: 30, y: 30, w: 160, h: 100, text: 'Native Probe', fill: '#136a9f' }), s('export', { path: output('result.png'), format: 'png', slide: 0, scale: 1 })], second: [s('export', { path: output('result.png'), format: 'png', slide: 0, scale: 1 })], compare: 'result.png' },
-  cadcraft: { first: [s('circle', { center: [10, 10], radius: 8 }), s('line', { points: [[0, 0], [20, 20]] }), s('render', { path: output('result.png'), width: 256, height: 192 })], second: [s('render', { path: output('result.png'), width: 256, height: 192 })], compare: 'result.png' },
+  cadcraft: { first: [s('circle', { center: [10, 10], radius: 8 }), s('line', { points: [[0, 0], [20, 20]] }), s('xattach', { path: asset('cad-reference'), name: 'Reference', at: [30, 0] }), s('xref'), s('render', { path: output('result.png'), width: 256, height: 192 })], second: [s('-xref', { option: 'reload', names: 'Reference' }), s('xref'), s('render', { path: output('result.png'), width: 256, height: 192 })], compare: 'result.png' },
   gridcraft: { first: [s('cell.set', { cell: 'A1', input: 'Native Probe' }), s('cell.set', { cell: 'B1', input: '=6*7' }), s('read_range', { range: 'A1:B1' })], second: [s('read_range', { range: 'A1:B1' })], values: true },
 };
 
@@ -60,8 +60,14 @@ async function inspectFormat(file, directory) {
     return { format: extension, archiveMembers: Object.keys(entries).length, requiredPart: member, bytes: bytes.length };
   }
   if (extension === 'pdf') {
-    const text = bytes.toString('latin1'); assert.match(text, /^%PDF-/); assert.match(text.slice(-1024), /%%EOF/); assert.match(text, /\/Type\s*\/Page(?:\s|\/|>)/); assert.match(text, /\/MediaBox\s*\[/);
-    return { format: 'pdf', realHeader: true, pageObject: true, mediaBox: true, bytes: bytes.length };
+    assert.ok(bytes.subarray(0, 8).toString('ascii').startsWith('%PDF-'), 'Missing PDF signature'); assert.ok(bytes.subarray(-1024).includes(Buffer.from('%%EOF')), 'Missing PDF trailer');
+    // PDF 1.5+ legitimately puts Page/MediaBox dictionaries into compressed
+    // object streams. Use an independent parser, not a plaintext-regex shortcut.
+    const { stdout, stderr } = await execFileAsync(process.env.IMAGE2_CRAFT_PDFINFO || 'pdfinfo', ['-box', local], { timeout: 30000, maxBuffer: 1024 * 1024 });
+    const pages = Number(/^Pages:\s+(\d+)/m.exec(stdout)?.[1]), box = /^Page size:\s+([\d.]+) x ([\d.]+) pts/m.exec(stdout);
+    assert.ok(pages > 0 && box && Number(box[1]) > 0 && Number(box[2]) > 0, 'PDF parser did not find valid pages and dimensions');
+    assert.doesNotMatch(stderr, /Syntax Error/i);
+    return { format: 'pdf', parser: 'poppler-pdfinfo', realHeader: true, pages, width: Number(box[1]), height: Number(box[2]), bytes: bytes.length };
   }
   if (extension === 'dxf') { assert.match(bytes.toString(), /SECTION/); assert.match(bytes.toString(), /ENTITIES/); assert.match(bytes.toString(), /CIRCLE/); return { format: 'dxf', circleEntity: true, bytes: bytes.length }; }
   if (extension === 'svg') { const text = bytes.toString(); assert.match(text, /<svg[\s>]/); assert.match(text, /<path[\s>]/); return { format: 'svg', path: true, bytes: bytes.length }; }
@@ -100,7 +106,9 @@ export async function runNativeCraftAcceptance({ binDir = process.env.IMAGE2_CRA
   for (let y = 0; y < 96; y++) for (let x = 0; x < 128; x++) { const at = (y * 128 + x) * 4; image[at] = x * 2; image[at + 1] = y * 2; image[at + 2] = 128; image[at + 3] = 255; }
   const imagePath = path.join(root, 'fixture.png'), audioPath = path.join(root, 'fixture.wav');
   await sharp(image, { raw: { width: 128, height: 96, channels: 4 } }).png().toFile(imagePath); await fs.writeFile(audioPath, wavFixture());
-  const inputFiles = [{ assetId: 'image', filename: 'fixture.png', path: imagePath }, { assetId: 'audio', filename: 'fixture.wav', path: audioPath }, { assetId: 'font', filename: 'CraftAcceptanceFace-Regular.ttf', path: fileURLToPath(new URL('./fixtures/CraftAcceptanceFace-Regular.ttf', import.meta.url)) }];
+  const cadReference = path.join(root, 'reference.dxf');
+  await fs.writeFile(cadReference, '0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1032\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n0\nCIRCLE\n5\nAA\n100\nAcDbEntity\n8\n0\n100\nAcDbCircle\n10\n0\n20\n0\n30\n0\n40\n4\n0\nENDSEC\n0\nEOF\n');
+  const inputFiles = [{ assetId: 'cad-reference', filename: 'reference.dxf', path: cadReference }, { assetId: 'image', filename: 'fixture.png', path: imagePath }, { assetId: 'audio', filename: 'fixture.wav', path: audioPath }, { assetId: 'font', filename: 'CraftAcceptanceFace-Regular.ttf', path: fileURLToPath(new URL('./fixtures/CraftAcceptanceFace-Regular.ttf', import.meta.url)) }];
   const runtime = createCraftRuntime({ binDir, timeoutMs: 120000 }); const capabilities = await runtime.capabilities(engineId ? { engineId } : {});
   await fs.writeFile(path.join(root, 'capabilities.json'), JSON.stringify(capabilities, null, 2));
   const ids = engineId ? [engineId] : Object.keys(cases); const results = [];
@@ -119,6 +127,7 @@ export async function runNativeCraftAcceptance({ binDir = process.env.IMAGE2_CRA
       const second = await runtime.execute({ engineId: id, workDir: path.join(engineRoot, 'job2'), nativeFile: checkpoint, steps: spec.second });
       assert.equal(second.receipt.externalModelCalls, 0); assert.ok(second.state);
       if (id === 'wordcraft') { assert.match(JSON.stringify(second.state), /Craft Acceptance Face/); assert.ok(second.files.find(file => file.name === 'document.docx')); }
+      if (id === 'cadcraft') { const refs = second.result[1]?.xrefs; assert.equal(refs?.length, 1); assert.equal(refs[0].status, 'Loaded'); assert.ok(refs[0].objects > 0); assert.ok(refs[0].path.startsWith('workspace:/inputs/')); }
       const a = spec.preview ? first.files.findLast(file => file.role === 'preview') : first.files.find(file => file.name === spec.compare);
       const b = spec.preview ? second.files.findLast(file => file.role === 'preview') : second.files.find(file => file.name === spec.compare);
       let comparison;

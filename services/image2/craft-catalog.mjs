@@ -35,6 +35,7 @@ const UNSAFE_WORDS = /(?:desktop app only|APP_ONLY|requires a running|connected 
 const UI_TOOLS = new Set(['screenshot', 'click', 'drag', 'key', 'pointer', 'pointer_gesture', 'select_tool', 'menu_invoke', 'inspect_ui', 'type_key', 'script_ui']);
 
 export function craftCommandUnavailableReason(id, description = '', engineId) {
+  if (engineId === 'cadcraft' && ['attach', '3dorbit', 'orbit'].includes(id)) return 'CRAFT_UPSTREAM_NOT_IMPLEMENTED';
   // Match the pinned PhotoCraft automation boundary, which rejects filesystem
   // engine commands even when our surrounding OS sandbox would allow the files.
   // Its doc_open/doc_save/doc_export MCP tools are the supported file route.
@@ -61,7 +62,7 @@ export function craftCommandUnavailableReason(id, description = '', engineId) {
 }
 
 export function isCraftCommandSafe(id, description = '', engineId) {
-  return typeof id === 'string' && /^[a-zA-Z][\w.:-]{0,159}$/.test(id)
+  return typeof id === 'string' && (/^[a-zA-Z][\w.:-]{0,159}$/.test(id) || (engineId === 'cadcraft' && id === '-xref'))
     && !GENERIC.has(id) && !UNSAFE.test(id) && !UNSAFE_WORDS.test(description) && !craftCommandUnavailableReason(id, description, engineId)
     && !/^(?:help|window|view|workspace|control|system|automation|extension|plugin|clipboard|action|actions|app|font\.scan|font\.rescan)\./i.test(id)
     && !/^(?:file\.(?:openRecent|recent|closeAll|revert|package|collect|dependencies|link|links)|library\.(?:open|new|switch|move|remove|delete|scan|rescan)|data\.(?:refresh|connect|connection|fromWeb|fromDatabase)|text\.fonts|fonts\.rescan)/i.test(id);

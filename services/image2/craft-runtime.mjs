@@ -23,6 +23,24 @@ const inside = (root, target) => target === root || target.startsWith(`${root}${
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const plain = v => !!v && typeof v === 'object' && !Array.isArray(v) && Object.getPrototypeOf(v) === Object.prototype;
 
+/** Public metadata never exposes worker directories. Native state and result
+ * references retain real paths until the entire job and checkpoint are complete.
+ * Content fields are deliberately excluded: a paragraph may discuss a path. */
+export function craftPublicValue(value, workDir, key = '') {
+  if (Array.isArray(value)) return value.map(item => craftPublicValue(item, workDir, key));
+  if (plain(value)) return Object.fromEntries(Object.entries(value).map(([name, item]) => [name, craftPublicValue(item, workDir, name)]));
+  if (typeof value !== 'string' || /^(?:text|name|title|label|caption|description|value|string|characters|content)$/i.test(key)) return value;
+  if (!(PATH_KEY.test(key) || LOCATION_KEY.test(key) || /^(?:root|workDir|workspace|library|source|src|uri|url)$/i.test(key))) return value;
+  const file = value.startsWith('file://') ? value.slice(7) : value;
+  if (!path.isAbsolute(file)) return value;
+  if (inside(workDir, file)) return `workspace:/${path.relative(workDir, file).split(path.sep).join('/')}`;
+  return `external:/${path.basename(file)}`;
+}
+
+function publicDiagnostic(message, workDir) {
+  return String(message).split(`${workDir}${path.sep}`).join('workspace:/').split(workDir).join('workspace:/');
+}
+
 export function validateCraftSchema(value, schema = {}, root = schema, depth = 0) {
   if (depth > 32) throw error('CRAFT_ARGS_INVALID', 'Arguments exceed the nesting limit');
   if (schema.$ref) {
@@ -221,11 +239,30 @@ function remapNative(bytes, oldRoot, newRoot, depth = 0) {
   return remapJson(bytes, oldRoot, newRoot);
 }
 
+// DXF stores external references in typed records rather than JSON. Rewrite only
+// known path-bearing group codes; TEXT/MTEXT contents that look like paths remain literal.
+function remapDxf(bytes, oldRoot, newRoot) {
+  if (!oldRoot || oldRoot === newRoot) return bytes;
+  const text = bytes.toString('utf8');
+  if (!/^\s*0\r?\nSECTION\r?\n/.test(text)) return bytes;
+  const newline = text.includes('\r\n') ? '\r\n' : '\n', lines = text.split(/\r?\n/);
+  let record = '', changed = false;
+  for (let index = 0; index + 1 < lines.length; index += 2) {
+    const code = Number(lines[index].trim()), value = lines[index + 1];
+    if (code === 0) record = value.trim();
+    const filePath = code === 1 && ['IMAGEDEF', 'BLOCK'].includes(record);
+    const fontPath = [3, 4].includes(code) && record === 'STYLE';
+    if ((filePath || fontPath) && value.startsWith(`${oldRoot}/`)) { lines[index + 1] = `${newRoot}${value.slice(oldRoot.length)}`; changed = true; }
+  }
+  return changed ? Buffer.from(lines.join(newline)) : bytes;
+}
+
 export async function restoreCraftBundle(nativeFile, workDir, engineId) {
   const packed = await readBounded(nativeFile);
   let bundle;
   try { bundle = JSON.parse(gunzipSync(packed, { maxOutputLength: MAX_TOTAL * 1.5 }).toString('utf8')); } catch { throw error('CRAFT_CHECKPOINT_INVALID', 'Expected a valid ArtCraft workspace checkpoint'); }
   if (bundle.version !== 1 || bundle.engineId !== engineId || !Array.isArray(bundle.files) || bundle.files.length > 2000) throw error('CRAFT_CHECKPOINT_INVALID', 'Checkpoint engine or format mismatch');
+  if (bundle.engineVersion?.sourceCommit && bundle.engineVersion.sourceCommit !== craftEngine(engineId).commit) throw error('CRAFT_CHECKPOINT_VERSION_MISMATCH', 'Checkpoint was saved by another native source version; an explicit format migration is required', 409);
   let sum = 0;
   for (const entry of bundle.files) {
     if (!plain(entry) || typeof entry.path !== 'string' || !/^(?:inputs|native|library|exports)\//.test(entry.path) || entry.path.split('/').some(v => !v || v === '.' || v === '..') || entry.path.includes('\\')) throw error('CRAFT_CHECKPOINT_INVALID', 'Checkpoint contains an unsafe path');
@@ -233,7 +270,7 @@ export async function restoreCraftBundle(nativeFile, workDir, engineId) {
     if (!inside(workDir, target)) throw error('CRAFT_CHECKPOINT_INVALID', 'Checkpoint path escapes its workspace');
     let bytes = Buffer.from(entry.data, 'base64'); sum += bytes.length;
     if (bytes.length > MAX_FILE || sum > MAX_TOTAL || digest(bytes) !== entry.sha256) throw error('CRAFT_CHECKPOINT_INVALID', 'Checkpoint file integrity or size check failed');
-    if (!entry.path.startsWith('inputs/')) bytes = remapNative(bytes, bundle.workDir, workDir);
+    if (!entry.path.startsWith('inputs/')) bytes = entry.path.endsWith('.dxf') ? remapDxf(bytes, bundle.workDir, workDir) : remapNative(bytes, bundle.workDir, workDir);
     await fs.mkdir(path.dirname(target), { recursive: true }); await fs.writeFile(target, bytes, { flag: 'wx' });
   }
   return bundle;
@@ -270,7 +307,7 @@ function commandSchema(entry) {
 }
 
 function commandAvailable(engine, entry) {
-  return isCraftCommandSafe(entry.id, entry.description ?? '', engine.id) && !(engine.id === 'pdfcraft' && !entry.tool);
+  return isCraftCommandSafe(entry.id, entry.description ?? '', engine.id) && (engine.id !== 'pdfcraft' || (typeof entry.tool === 'string' && isCraftToolSafe({ name: entry.tool }, engine.id)));
 }
 
 export function createCraftRuntime({ binDir = process.env.IMAGE2_CRAFT_BIN_DIR, timeoutMs = 120000, maxOutputBytes = 64 * 1024 * 1024, sandbox = craftSandboxCommand } = {}) {
@@ -409,7 +446,7 @@ export function createCraftRuntime({ binDir = process.env.IMAGE2_CRAFT_BIN_DIR, 
         // alive until these file-producing commands have actually finished.
         if ((engine.id === 'filmcraft' && ['file.exportMedia', 'sequence.renderVideo', 'sequence.renderAudio', 'sequence.renderInToOut'].includes(command)) || (engine.id === 'effectcraft' && command === 'renderQueue.render')) args = { ...args, wait: true };
         validateCraftBudgets(command, args);
-        if (engine.id === 'pdfcraft' && command === 'form_set_actions' && Array.isArray(args.actions) && args.actions.some(action => plain(action) && typeof action.javascript === 'string')) throw error('CRAFT_SCRIPT_DISABLED', 'Managed PDF form actions cannot install executable JavaScript');
+        if (engine.id === 'pdfcraft' && (commands.get(command)?.tool ?? command) === 'form_set_actions' && Array.isArray(args.actions) && args.actions.some(action => plain(action) && typeof action.javascript === 'string')) throw error('CRAFT_SCRIPT_DISABLED', 'Managed PDF form actions cannot install executable JavaScript');
         if (engine.id === 'soundcraft' && command === 'mix.insert' && /^(?:vst3|clap|au):/i.test(args.plugin ?? '')) throw error('CRAFT_PLUGIN_DISABLED', 'Managed native jobs only load built-in audio effects');
         if (engine.id === 'lightcraft' && /mask/i.test(command)) {
           const check = value => { if (!plain(value)) { if (Array.isArray(value)) value.forEach(check); return; } if (['object', 'prompt'].includes(String(value.kind ?? '').toLowerCase()) && !value.seg) throw error('CRAFT_MODEL_NOT_CONFIGURED', 'Object and prompt masks require a configured SAM model or a supplied segmentation'); Object.values(value).forEach(check); };
@@ -502,7 +539,10 @@ export function createCraftRuntime({ binDir = process.env.IMAGE2_CRAFT_BIN_DIR, 
       if (!engine.library) { const native = await readBounded(path.join(workDir, 'native', `document.${engine.extension}`)); files.push({ name: `document.${engine.extension}`, mime: mime(`document.${engine.extension}`), bytes: native, role: 'native' }); }
       if (files.reduce((sum, item) => sum + item.bytes.length, checkpointBytes.length) > MAX_TOTAL) throw error('CRAFT_OUTPUT_LIMIT', 'Native outputs exceed their storage budget', 422);
       receipt.finishedAt = new Date().toISOString(); receipt.stepsCompleted = receipt.steps.length;
-      return { result: results, files, checkpoint: { name: 'checkpoint.craftbundle', mime: BUNDLE_MIME, bytes: checkpointBytes }, receipt, state, warnings };
+      return { result: craftPublicValue(results, workDir), files, checkpoint: { name: 'checkpoint.craftbundle', mime: BUNDLE_MIME, bytes: checkpointBytes }, receipt: craftPublicValue(receipt, workDir), state: craftPublicValue(state, workDir), warnings: warnings.map(message => publicDiagnostic(message, workDir)) };
+    } catch (cause) {
+      if (cause instanceof Error) cause.message = publicDiagnostic(cause.message, workDir);
+      throw cause;
     } finally { client?.stop(); }
   }
   return { capabilities, catalog: capabilities, engineCapability, execute };

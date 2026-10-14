@@ -5,10 +5,23 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
-import { createCraftRuntime, resolveCraftArguments, restoreCraftBundle, validateCraftSchema, craftPublicSchema, validateCraftBudgets } from '../craft-runtime.mjs';
+import { createCraftRuntime, resolveCraftArguments, restoreCraftBundle, validateCraftSchema, craftPublicSchema, validateCraftBudgets, craftPublicValue } from '../craft-runtime.mjs';
 import { craftEngines, isCraftCommandSafe, isCraftToolSafe } from '../craft-catalog.mjs';
 
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
+
+test('public metadata hides worker paths while preserving document text and internal values', () => {
+  const root = '/private/worker/project-job';
+  const input = { path: `${root}/exports/result.png`, nested: { sourcePath: `${root}/inputs/photo.png`, files: [`${root}/native/document.dxf`], workDir: root }, fontPath: '/private/host/fonts/UserFont.ttf', title: `${root}/exports/result.png`, text: `Keep ${root}/inputs/photo.png as visible text`, value: `${root}/inputs/photo.png`, pathGeometry: 'M0 0 L4 8', relative: 'inputs/photo.png' };
+  const original = structuredClone(input), result = craftPublicValue(input, root);
+  assert.equal(result.path, 'workspace:/exports/result.png');
+  assert.equal(result.nested.sourcePath, 'workspace:/inputs/photo.png');
+  assert.deepEqual(result.nested.files, ['workspace:/native/document.dxf']);
+  assert.equal(result.nested.workDir, 'workspace:/');
+  assert.equal(result.fontPath, 'external:/UserFont.ttf');
+  for (const key of ['title', 'text', 'value', 'pathGeometry', 'relative']) assert.equal(result[key], input[key]);
+  assert.deepEqual(input, original, 'public projection must not mutate native state or resultRef data');
+});
 
 async function fixture(t) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'craft-runtime-test-'));
@@ -21,7 +34,7 @@ const tools=[tool('doc_new',{width:{type:'integer'},height:{type:'integer'}}),to
 const commands=[{id:'layer.add',params:'{ amount:number }',inputSchema:{type:'object',properties:{amount:{type:'integer',minimum:1,maximum:10}},additionalProperties:false}},{id:'script.run'},{id:'file.openRecent'},{id:'dialog.pick'},{id:'document.export',inputSchema:{type:'object',properties:{path:{type:'string'}},required:['path'],additionalProperties:false}}];
 function result(value){return {content:[{type:'text',text:JSON.stringify(value)}]};}
 for await (const line of createInterface({input:process.stdin})) {const request=JSON.parse(line);if(!request.id)continue; let out;
-if(request.method==='initialize')out={protocolVersion:'2025-06-18'};else if(request.method==='tools/list')out={tools};else {const {name,arguments:a}=request.params;if(name==='command_list')out=result(commands);else if(name==='doc_new'){state={count:0};out=result(state);}else if(name==='doc_open'){state=JSON.parse(fs.readFileSync(a.path));out=result(state);}else if(name==='doc_save'){fs.writeFileSync(a.path,JSON.stringify(state));out=result({saved:true});}else if(name==='command_run'){if(a.id==='dialog.pick')out=result({pending:true});else if(a.id==='document.export'){fs.writeFileSync(a.params.path,JSON.stringify(state));out=result({saved:true});}else{state.count+=a.params.amount??1;out=result(state);}}else if(name==='render_preview')out={content:[{type:'image',mimeType:'image/png',data:Buffer.from(JSON.stringify(state)).toString('base64')}]};else out=result(state);}process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:request.id,result:out})+'\\n');}`;
+if(request.method==='initialize')out={protocolVersion:'2025-06-18'};else if(request.method==='tools/list')out={tools};else {const {name,arguments:a}=request.params;if(name==='command_list')out=result(commands);else if(name==='doc_new'){state={count:0};out=result(state);}else if(name==='doc_open'){state=JSON.parse(fs.readFileSync(a.path));out=result(state);}else if(name==='doc_save'){fs.writeFileSync(a.path,JSON.stringify(state));out=result({saved:true});}else if(name==='command_run'){if(a.id==='dialog.pick')out=result({pending:true});else if(a.id==='document.export'){fs.writeFileSync(a.params.path,JSON.stringify(state));out=result({saved:true,path:a.params.path});}else{state.count+=a.params.amount??1;out=result(state);}}else if(name==='render_preview')out={content:[{type:'image',mimeType:'image/png',data:Buffer.from(JSON.stringify(state)).toString('base64')}]};else out=result(state);}process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:request.id,result:out})+'\\n');}`;
   const file = path.join(binDir, 'photocraft-cli'); await fs.writeFile(file, script);
   const engine = craftEngines().find(item => item.id === 'photocraft');
   await fs.writeFile(path.join(binDir, 'manifest.json'), JSON.stringify({ platform: process.platform, arch: process.arch, engines: [{ id: engine.id, sourceCommit: engine.commit, binary: 'photocraft-cli', sha256: sha(script), bytes: Buffer.byteLength(script) }] }));
@@ -47,6 +60,9 @@ test('arguments enforce native schema and owned file references', () => {
 test('runtime filters desktop, script and network commands rather than exposing raw generic execution', () => {
   for (const id of ['script.run', 'plugin.install', 'file.openRecent', 'ui.click', 'data.fromWeb', 'app.openUrl', 'command.batch', 'file.automate.batch', 'file.automate.runDroplet', 'file.scripts.scriptEventsManager']) assert.equal(isCraftCommandSafe(id), false, id);
   assert.equal(isCraftCommandSafe('shape.rectangle'), true);
+  assert.equal(isCraftCommandSafe('attach', '', 'cadcraft'), false);
+  assert.equal(isCraftCommandSafe('-xref', '', 'cadcraft'), true);
+  assert.equal(isCraftCommandSafe('-script', '', 'cadcraft'), false);
   assert.equal(isCraftCommandSafe('file.revealInFinder'), false);
   assert.equal(isCraftCommandSafe('layer.smartObjects.revealInFinder'), false);
   assert.equal(isCraftCommandSafe('file.scripts.imageProcessor', '', 'photocraft'), false, 'native automation refuses this CPU command despite supporting it on the desktop');
@@ -147,6 +163,7 @@ test('final candidates ignore intermediate previews and do not republish untouch
   const first = await runtime.execute({ engineId: 'photocraft', workDir: path.join(dir, 'candidate1'), steps: [
     { command: 'preview', args: {} }, { command: 'layer.add', args: { amount: 2 } }, { command: 'document.export', args: { path: { outputName: 'result.json' } } },
   ] });
+  assert.equal(first.result[2].path, 'workspace:/exports/result.json');
   const preview = first.files.filter(file => file.role === 'preview');
   assert.equal(preview.length, 1); assert.equal(JSON.parse(preview[0].bytes).count, 2);
   assert.equal(JSON.parse(first.files.find(file => file.role === 'export').bytes).count, 2);
@@ -158,4 +175,29 @@ test('final candidates ignore intermediate previews and do not republish untouch
   assert.equal(JSON.parse(await fs.readFile(path.join(dir, 'candidate2/exports/result.json'))).count, 2, 'historical dependency is retained in the private workspace');
   const same = await runtime.execute({ engineId: 'photocraft', workDir: path.join(dir, 'candidate3'), nativeFile, steps: [{ command: 'document.export', args: { path: { outputName: 'result.json' } } }] });
   assert.equal(same.files.filter(file => file.role === 'export').length, 1, 'explicit rewriting of identical export bytes is a current output');
+});
+
+
+test('checkpoint source compatibility allows font rebuilds and legacy bundles but rejects another source revision', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'craft-version-test-')); t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'checkpoint'); const data = Buffer.from('{}');
+  const base = { version: 1, engineId: 'photocraft', workDir: '/old', files: [{ path: 'native/document.pcraft', data: data.toString('base64'), sha256: sha(data) }] };
+  for (const [index, engineVersion] of [undefined, { sourceCommit: craftEngines().find(engine => engine.id === 'photocraft').commit, sha256: 'f'.repeat(64) }].entries()) {
+    const destination = path.join(dir, `accepted-${index}`); await fs.mkdir(destination); await fs.writeFile(file, gzipSync(JSON.stringify({ ...base, engineVersion })));
+    await restoreCraftBundle(file, destination, 'photocraft'); assert.equal((await fs.readFile(path.join(destination, 'native/document.pcraft'))).toString(), '{}');
+  }
+  await fs.writeFile(file, gzipSync(JSON.stringify({ ...base, engineVersion: { sourceCommit: '0'.repeat(40), sha256: 'f'.repeat(64) } })));
+  await assert.rejects(restoreCraftBundle(file, path.join(dir, 'rejected'), 'photocraft'), { code: 'CRAFT_CHECKPOINT_VERSION_MISMATCH' });
+});
+
+
+test('DXF relocation rewrites only IMAGEDEF, XREF BLOCK and STYLE paths while preserving visible text', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'craft-dxf-test-')); t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const raw = '0\nSECTION\n2\nOBJECTS\n0\nIMAGEDEF\n1\n/old/inputs/image.png\n0\nBLOCK\n1\n/old/inputs/reference.dxf\n0\nSTYLE\n3\n/old/inputs/font.ttf\n0\nTEXT\n1\n/old/inputs/image.png\n0\nENDSEC\n0\nEOF\n';
+  const data = Buffer.from(raw), file = path.join(dir, 'bundle'); const workDir = path.join(dir, 'job'); await fs.mkdir(workDir);
+  await fs.writeFile(file, gzipSync(JSON.stringify({ version: 1, engineId: 'cadcraft', workDir: '/old', files: [{ path: 'native/document.dxf', data: data.toString('base64'), sha256: sha(data) }] })));
+  await restoreCraftBundle(file, workDir, 'cadcraft');
+  const actual = await fs.readFile(path.join(workDir, 'native/document.dxf'), 'utf8');
+  assert.ok(actual.includes(`IMAGEDEF\n1\n${workDir}/inputs/image.png`)); assert.ok(actual.includes(`BLOCK\n1\n${workDir}/inputs/reference.dxf`)); assert.ok(actual.includes(`STYLE\n3\n${workDir}/inputs/font.ttf`));
+  assert.ok(actual.includes('TEXT\n1\n/old/inputs/image.png'));
 });

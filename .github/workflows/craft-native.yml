@@ -73,10 +73,15 @@ jobs:
         if: inputs.platform == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends build-essential pkg-config clang cmake bubblewrap libasound2-dev libfontconfig1-dev libfreetype6-dev libudev-dev libssl-dev libx11-dev libxkbcommon-dev libwayland-dev fonts-noto-cjk ffmpeg
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config clang cmake bubblewrap apparmor-profiles apparmor-utils libasound2-dev libfontconfig1-dev libfreetype6-dev libudev-dev libssl-dev libx11-dev libxkbcommon-dev libwayland-dev fonts-noto-cjk ffmpeg poppler-utils
+      - name: Verify Bubblewrap isolation and prepare scoped runner policy if needed
+        if: inputs.platform == 'linux'
+        run: /usr/bin/python3 scripts/ci-prepare-bwrap.py
       - name: Install macOS external media test oracle
         if: inputs.platform != 'linux'
-        run: command -v ffprobe >/dev/null || brew install ffmpeg
+        run: |
+          command -v ffprobe >/dev/null || brew install ffmpeg
+          command -v pdfinfo >/dev/null || brew install poppler
       - name: Install service dependencies
         run: npm ci --prefix services/image2
       - name: Compile pinned native engines
@@ -95,6 +100,9 @@ jobs:
       - name: Real Chinese glyph and checkpoint verification
         if: matrix.engine == 'photocraft' || matrix.engine == 'vectorcraft'
         run: node services/image2/tests/craft-cjk.integration.mjs "$CRAFT_ENGINE"
+      - name: Real Chinese text verification for other text engines
+        if: contains(fromJSON('["filmcraft","lightcraft","effectcraft","designcraft","figcraft","wordcraft","deckcraft","cadcraft"]'), matrix.engine)
+        run: node services/image2/tests/craft-text.integration.mjs "$CRAFT_ENGINE"
       - name: Real VectorCraft dots, holes and thin-line tracing measurements
         if: matrix.engine == 'vectorcraft'
         run: node services/image2/tests/craft-vector.integration.mjs
