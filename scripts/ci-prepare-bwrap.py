@@ -7,19 +7,22 @@ https://gitlab.com/apparmor/apparmor/-/blob/master/profiles/apparmor/profiles/ex
 """
 
 import hashlib
+import ctypes
+import errno
 import json
 import os
 from pathlib import Path
 import re
 import stat
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 
 
 PROFILE = Path('/usr/share/apparmor/extra-profiles/bwrap-userns-restrict')
 POLICIES = Path('/sys/kernel/security/apparmor/policy/profiles')
-PROFILE_SOURCE_DIR = Path('/etc/apparmor.d')
 RESTRICTION = Path('/proc/sys/kernel/apparmor_restrict_unprivileged_userns')
 PROBE = r'''
 import json, os, socket, sys
@@ -135,39 +138,80 @@ def verified_package_bytes(file, expected_package=None):
     return data
 
 
-def resolve_unknown_attachment(name):
-    # Some kernel builds expose <unknown> for a compiled AARE attachment (for
-    # example Noble's traceroute alternation). Recover only a unique header
-    # from a checksum-verified installed distro profile, using its own parser.
-    from apparmor.regex import RE_PROFILE_START, parse_profile_start_line
-
-    candidates = []
-    for file in PROFILE_SOURCE_DIR.iterdir():
-        if not file.is_file() or file.stat().st_size > 1048576:
+def wait_child(pid, timeout=5):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            waited, status = os.waitpid(pid, os.WNOHANG | os.WUNTRACED)
+        except InterruptedError:
             continue
-        text = file.read_text()
-        for line in text.splitlines():
-            if not line.startswith(('profile ', '/', '"', '@{')) or not RE_PROFILE_START.search(line):
-                continue
-            parsed = parse_profile_start_line(line, str(file))
-            if parsed['profile'] == name:
-                candidates.append((file, parsed.get('attachment') or parsed.get('plainprofile'), text))
-    if len(candidates) != 1:
-        raise RuntimeError(f'Cannot uniquely resolve existing attachment from installed policy: {name}')
-    file, pattern, text = candidates[0]
-    verified_package_bytes(file)
-    alias = PROFILE_SOURCE_DIR / 'tunables/alias'
-    if re.search(r'^\s*alias\s', text, re.M) or (alias.exists() and re.search(r'^\s*alias\s', alias.read_text(), re.M)):
-        raise RuntimeError(f'Existing attachment uses alias rules requiring manual review: {name}')
-    if not pattern or '@{' in pattern or not pattern.startswith(('/', '{')):
-        raise RuntimeError(f'Cannot safely resolve existing attachment variables: {name}')
-    return pattern, str(file)
+        if waited == pid:
+            return status
+        time.sleep(0.01)
+    raise RuntimeError('Timed out waiting for the Bubblewrap attachment probe')
+
+
+def inspect_bwrap_attachment():
+    """Ask the kernel which profile actually attaches, before bwrap can run.
+
+    A traced exec stops at SIGTRAP after the kernel's exec/LSM transition and
+    before the new program starts. This resolves AAREs/variables without
+    guessing from incomplete securityfs attachment strings or runner sources.
+    https://man7.org/linux/man-pages/man2/ptrace.2.html
+    """
+    binary = Path('/usr/bin/bwrap')
+    verified_package_bytes(binary, 'bubblewrap')
+    if binary.resolve() != binary or binary.stat().st_mode & (stat.S_ISUID | stat.S_ISGID):
+        raise RuntimeError('Attachment probe requires the exact non-setuid /usr/bin/bwrap')
+    try:
+        if os.getxattr(binary, 'security.capability'):
+            raise RuntimeError('Attachment probe refuses a binary with file capabilities')
+    except OSError as error:
+        if error.errno != errno.ENODATA:
+            raise
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.ptrace.restype = ctypes.c_long
+    libc.ptrace.argtypes = [ctypes.c_uint, ctypes.c_uint, ctypes.c_void_p, ctypes.c_void_p]
+    pid = os.fork()
+    if pid == 0:
+        try:
+            if libc.ptrace(0, 0, None, None) != 0:  # PTRACE_TRACEME
+                raise OSError(ctypes.get_errno(), 'PTRACE_TRACEME denied')
+            os.execve(str(binary), [str(binary), '--version'], {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'})
+        except Exception as error:
+            os.write(2, f'Bubblewrap attachment child failed: {error}\n'.encode())
+            os._exit(127)
+    reaped = False
+    try:
+        status = wait_child(pid)
+        if os.WIFEXITED(status) or os.WIFSIGNALED(status):
+            reaped = True
+            raise RuntimeError(f'Bubblewrap exited before its exec stop (status {status})')
+        if not os.WIFSTOPPED(status) or os.WSTOPSIG(status) != signal.SIGTRAP:
+            raise RuntimeError(f'Bubblewrap did not stop at the required exec SIGTRAP (status {status})')
+        executable = os.readlink(f'/proc/{pid}/exe')
+        if executable != str(binary):
+            raise RuntimeError(f'Unexpected executable at the exec stop: {executable}')
+        label = Path(f'/proc/{pid}/attr/current').read_text().strip()
+        if label != 'unconfined':
+            raise RuntimeError(f'An existing AppArmor profile attaches to bwrap: {label}')
+        return {'executable': executable, 'execStop': 'SIGTRAP', 'apparmor': label}
+    except ChildProcessError as error:
+        reaped = True
+        raise RuntimeError('Lost ownership of the Bubblewrap attachment probe') from error
+    finally:
+        if not reaped:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            status = wait_child(pid)
+            if not (os.WIFEXITED(status) or os.WIFSIGNALED(status)):
+                raise RuntimeError('Could not reap the stopped Bubblewrap attachment probe')
 
 
 def inspect_profile():
     """Read-only privileged preflight; does not add, replace or remove policy."""
-    from apparmor.aare import AARE  # Provided by Ubuntu apparmor-utils/python3-apparmor.
-
     data = verified_package_bytes(PROFILE, 'apparmor-profiles')
     validate_profile_text(data.decode())
     for name in ['bwrap-userns-restrict', 'unpriv_bwrap']:
@@ -178,7 +222,7 @@ def inspect_profile():
         raise RuntimeError('An installed bwrap profile already exists; refusing to override it')
     if not POLICIES.is_dir():
         raise RuntimeError('Cannot inspect active AppArmor profile attachments')
-    checked, resolved, conflicts = 0, [], []
+    checked, opaque, conflicts = 0, 0, []
     for attachment in POLICIES.rglob('attach'):
         checked += 1
         try:
@@ -186,15 +230,9 @@ def inspect_profile():
             pattern = attachment.read_text().strip()
             if any(part in {'bwrap', 'unpriv_bwrap'} for part in name.split('//')):
                 raise RuntimeError(f'Existing loaded profile conflicts: {name}')
-            if pattern == '<unknown>':
-                pattern, source = resolve_unknown_attachment(name)
-                resolved.append({'name': name, 'attachment': pattern, 'source': source})
-            if '@{' in pattern:
-                raise RuntimeError(f'Cannot safely resolve existing attachment: {name}: {pattern}')
-            if pattern.startswith(('/', '{')):
-                matcher = AARE(pattern, is_path=True)
-                if any(matcher.match(value) for value in ['/usr/bin/bwrap', '/bin/bwrap']):
-                    raise RuntimeError(f'Existing attachment conflicts: {name}: {pattern}')
+            opaque += int(pattern == '<unknown>')
+            if pattern in {'/usr/bin/bwrap', '/bin/bwrap'}:
+                raise RuntimeError(f'Existing attachment conflicts: {name}: {pattern}')
         except Exception as error:
             # Report the complete preflight in one CI run; any error still
             # prevents all policy mutation, including otherwise valid entries.
@@ -203,7 +241,7 @@ def inspect_profile():
         raise RuntimeError('No readable AppArmor attachments; cannot prove absence of conflicts')
     if conflicts:
         raise RuntimeError('Existing policy attachment preflight failed:\n' + '\n'.join(conflicts[:50]))
-    return {'profile': str(PROFILE), 'sha256': hashlib.sha256(data).hexdigest(), 'checkedAttachments': checked, 'resolvedAttachments': resolved, 'package': execute(['dpkg-query', '-W', '-f=${Version}', 'apparmor-profiles']).stdout.strip()}
+    return {'profile': str(PROFILE), 'sha256': hashlib.sha256(data).hexdigest(), 'checkedAttachments': checked, 'opaqueAttachmentsCheckedByExecProbe': opaque, 'package': execute(['dpkg-query', '-W', '-f=${Version}', 'apparmor-profiles']).stdout.strip()}
 
 
 def main():
@@ -221,6 +259,7 @@ def main():
     print(f'Initial Bubblewrap probe failed: {first.stderr.strip()}', flush=True)
     diagnose()
     require_ephemeral_runner()
+    print(f'Kernel bwrap attachment preflight: {json.dumps(inspect_bwrap_attachment())}', flush=True)
     checked = execute(['sudo', '-n', '/usr/bin/python3', str(Path(__file__).resolve()), '--inspect-profile'])
     print(f'Distro profile preflight: {checked.stdout.strip()}', flush=True)
     parser = ['sudo', '-n', 'apparmor_parser', '--skip-cache', '--base', '/etc/apparmor.d']

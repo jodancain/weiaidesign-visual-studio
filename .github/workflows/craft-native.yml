@@ -119,3 +119,58 @@ jobs:
           name: craft-native-${{ inputs.platform }}-${{ matrix.engine }}
           path: output/artcraft-native/bin/
           retention-days: 14
+  assemble:
+    needs: [prepare, native]
+    if: inputs.engine == 'all' && needs.prepare.result == 'success' && needs.native.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Download verified per-engine binaries and licenses
+        uses: actions/download-artifact@v4
+        with:
+          pattern: craft-native-${{ inputs.platform }}-*
+          path: output/craft-artifacts
+          merge-multiple: false
+      - name: Verify and assemble the complete pinned suite
+        env:
+          CRAFT_PLATFORM: ${{ inputs.platform }}
+          CRAFT_EXPECTED_ENGINES: ${{ needs.prepare.outputs.engines }}
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          import { spawnSync } from 'node:child_process';
+          import assert from 'node:assert/strict';
+          const platform = process.env.CRAFT_PLATFORM;
+          assert.ok(['linux', 'macos'].includes(platform));
+          const engines = JSON.parse(process.env.CRAFT_EXPECTED_ENGINES);
+          assert.equal(engines.length, 13);
+          assert.equal(new Set(engines).size, 13);
+          assert.ok(engines.every(id => /^[a-z]+$/.test(id)));
+          const root = path.resolve('output/craft-artifacts');
+          const expected = engines.map(id => `craft-native-${platform}-${id}`).sort();
+          const entries = fs.readdirSync(root, { withFileTypes: true });
+          assert.ok(entries.every(entry => entry.isDirectory() && !entry.isSymbolicLink()));
+          assert.deepEqual(entries.map(entry => entry.name).sort(), expected);
+          const output = path.resolve('output/artcraft-complete');
+          const args = ['scripts/assemble-craft-bundle.mjs', ...expected.flatMap(name => ['--input', path.join(root, name)]), '--output', output];
+          const assembly = spawnSync(process.execPath, args, { stdio: 'inherit', shell: false });
+          if (assembly.error) throw assembly.error;
+          assert.equal(assembly.status, 0, 'Bundle integrity/provenance assembly failed');
+          // Preserve executable modes through Actions' ZIP-based artifact storage.
+          const archive = path.resolve(`output/artcraft-complete-${platform}.tar.gz`);
+          const pack = spawnSync('tar', ['-czf', archive, '-C', output, '.'], { stdio: 'inherit', shell: false });
+          if (pack.error) throw pack.error;
+          assert.equal(pack.status, 0, 'Bundle archive failed');
+          NODE
+      - name: Archive the complete verified native bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: craft-native-complete-${{ inputs.platform }}
+          path: output/artcraft-complete-${{ inputs.platform }}.tar.gz
+          if-no-files-found: error
+          retention-days: 14
