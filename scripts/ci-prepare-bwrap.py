@@ -118,10 +118,12 @@ def verified_package_bytes(file, expected_package=None):
     if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022 or info.st_size > 1048576:
         raise RuntimeError(f'Expected a bounded root-owned, non-writable distro profile file: {file}')
     ownership = execute(['dpkg-query', '-S', str(file)]).stdout.strip()
-    match = re.fullmatch(r'(apparmor(?:-profiles)?): ' + re.escape(str(file)), ownership)
+    match = re.fullmatch(r'([a-z0-9][a-z0-9+.-]*(?::[a-z0-9-]+)?): ' + re.escape(str(file)), ownership)
     if not match or (expected_package and match.group(1) != expected_package):
-        raise RuntimeError(f'Profile is not owned exclusively by the expected AppArmor package: {file}')
+        raise RuntimeError(f'Profile is not owned exclusively by the expected distro package: {file}')
     package = match.group(1)
+    if execute(['dpkg-query', '-W', '-f=${Status}', package]).stdout.strip() != 'install ok installed':
+        raise RuntimeError(f'Profile owner package is not installed: {package}')
     sums = Path(execute(['dpkg-query', '--control-path', package, 'md5sums']).stdout.strip()).read_text()
     expected = next((line.split()[0] for line in sums.splitlines() if len(line.split()) == 2 and line.split()[1].lstrip('./') == str(file).lstrip('/')), None)
     if expected is None:
@@ -176,24 +178,31 @@ def inspect_profile():
         raise RuntimeError('An installed bwrap profile already exists; refusing to override it')
     if not POLICIES.is_dir():
         raise RuntimeError('Cannot inspect active AppArmor profile attachments')
-    checked, resolved = 0, []
+    checked, resolved, conflicts = 0, [], []
     for attachment in POLICIES.rglob('attach'):
         checked += 1
-        name = attachment.with_name('name').read_text().strip()
-        pattern = attachment.read_text().strip()
-        if any(part in {'bwrap', 'unpriv_bwrap'} for part in name.split('//')):
-            raise RuntimeError(f'Existing loaded profile conflicts: {name}')
-        if pattern == '<unknown>':
-            pattern, source = resolve_unknown_attachment(name)
-            resolved.append({'name': name, 'attachment': pattern, 'source': source})
-        if '@{' in pattern:
-            raise RuntimeError(f'Cannot safely resolve existing attachment: {name}: {pattern}')
-        if pattern.startswith(('/', '{')):
-            matcher = AARE(pattern, is_path=True)
-            if any(matcher.match(value) for value in ['/usr/bin/bwrap', '/bin/bwrap']):
-                raise RuntimeError(f'Existing attachment conflicts: {name}: {pattern}')
+        try:
+            name = attachment.with_name('name').read_text().strip()
+            pattern = attachment.read_text().strip()
+            if any(part in {'bwrap', 'unpriv_bwrap'} for part in name.split('//')):
+                raise RuntimeError(f'Existing loaded profile conflicts: {name}')
+            if pattern == '<unknown>':
+                pattern, source = resolve_unknown_attachment(name)
+                resolved.append({'name': name, 'attachment': pattern, 'source': source})
+            if '@{' in pattern:
+                raise RuntimeError(f'Cannot safely resolve existing attachment: {name}: {pattern}')
+            if pattern.startswith(('/', '{')):
+                matcher = AARE(pattern, is_path=True)
+                if any(matcher.match(value) for value in ['/usr/bin/bwrap', '/bin/bwrap']):
+                    raise RuntimeError(f'Existing attachment conflicts: {name}: {pattern}')
+        except Exception as error:
+            # Report the complete preflight in one CI run; any error still
+            # prevents all policy mutation, including otherwise valid entries.
+            conflicts.append(str(error)[:1024])
     if not checked:
         raise RuntimeError('No readable AppArmor attachments; cannot prove absence of conflicts')
+    if conflicts:
+        raise RuntimeError('Existing policy attachment preflight failed:\n' + '\n'.join(conflicts[:50]))
     return {'profile': str(PROFILE), 'sha256': hashlib.sha256(data).hexdigest(), 'checkedAttachments': checked, 'resolvedAttachments': resolved, 'package': execute(['dpkg-query', '-W', '-f=${Version}', 'apparmor-profiles']).stdout.strip()}
 
 
