@@ -146,6 +146,44 @@ test('one tenant font supplies actual Chinese glyphs in PNG, editable SVG and em
   assert.equal(artifacts.pdf.toString('ascii',0,5), '%PDF-'); assert.match(artifacts.pdf.toString('latin1'), /\/FontFile3/);
 });
 
+test('prepared Chinese lettering retains font and background history across a real project ZIP import', async t => {
+  const f = await harness(t), document = await f.json('/documents', { name: 'prepared-lettering-roundtrip', width: 160, height: 120 });
+  const font = await f.json('/assets/default-font', { documentId: document.id });
+  const pixels = Buffer.alloc(80 * 30 * 4);
+  for (let y = 0; y < 30; y++) for (let x = 0; x < 80; x++) {
+    const glyph = x >= 8 && x < 18 && y >= 5 && y < 23;
+    pixels.set(glyph ? [20,20,20,255] : [250,250,245,255], (y * 80 + x) * 4);
+  }
+  const source = await f.json('/assets', { documentId: document.id, name: 'original-lettering.png', mime: 'image/png', data: (await encodePNG({ width: 80, height: 30, data: pixels })).toString('base64') });
+  let current = await f.json(`/documents/${document.id}/commands`, { baseRevision: 0, commandId: 'source-text', commands: [{ type: 'layer.add', layer: { id: 'lettering', name: 'original-lettering.png', type: 'text', assetId: source.id, x: 80, y: 5, width: 80, height: 30, text: '新字', metadata: { fontConfirmed: false, sourcePatchAssetId: source.id, role: 'sourcePatch' } } }] });
+  const prepared = await f.json('/operations', { documentId: document.id, baseRevision: current.revision, operation: 'prepare_text', targetLayerId: 'lettering', params: {}, idempotencyKey: 'prepare-lettering' });
+  const done = await f.terminal(prepared.job.id); assert.equal(done.state, 'complete', done.error);
+  current = await f.json(`/documents/${document.id}`);
+  current = await f.json(`/documents/${document.id}/commands`, { baseRevision: current.revision, commandId: 'confirm-font', commands: [{ type: 'layer.update', layerId: 'lettering', patch: { fontAssetId: font.id, fontFamily: font.metadata.family, fontSize: 16, text: '新字', metadata: { ...current.layers.find(layer => layer.id === 'lettering').metadata, fontConfirmed: true } } }] });
+  const background = await f.json('/assets', { documentId: document.id, name: 'background.png', mime: 'image/png', data: (await image(160,120)).toString('base64') });
+  current = await f.json(`/documents/${document.id}/commands`, { baseRevision: current.revision, commandId: 'add-background', commands: [{ type: 'layer.add', layer: { id: 'background', name: 'background', type: 'raster', assetId: background.id, x: 0, y: 0, width: 160, height: 120, z: 0 } }] });
+  const restore = await f.json('/operations', { documentId: document.id, baseRevision: current.revision, operation: 'restore_layers', targetLayerId: 'background', params: {}, idempotencyKey: 'restore-background' });
+  const restored = await f.terminal(restore.job.id); assert.equal(restored.state,'complete',restored.error);
+  current = await f.json(`/documents/${document.id}/accept`, { baseRevision: current.revision, branchDocumentId: restored.output.branchDocumentId, commandId: 'accept-background' });
+  const target = current.layers.find(layer => layer.type === 'raster' && layer.assetId);
+  const resize = await f.json('/operations', { documentId: document.id, baseRevision: current.revision, operation: 'resize', targetLayerId: target.id, params: {width:80,height:60}, idempotencyKey: 'resize-background' });
+  const resized = await f.terminal(resize.job.id); assert.equal(resized.state,'complete',resized.error);
+  current = await f.json(`/documents/${document.id}`);
+  // Match a real editing session's history size: the full CJK face remains an immutable dependency.
+  for (let i = 0; i < 24; i++) current = await f.json(`/documents/${document.id}/commands`, { baseRevision: current.revision, commandId: `lettering-style-${i}`, commands: [{ type: 'layer.update', layerId: 'lettering', patch: { fontSize: 16 + i % 2, fill: i % 2 ? '#263645' : '#bf3030' } }] });
+  const exported = await f.json('/exports', { documentId: document.id, baseRevision: current.revision, format: 'project', idempotencyKey: 'lettering-project' });
+  const complete = await f.terminal(exported.job.id); assert.equal(complete.state, 'complete', complete.error);
+  const archive = await f.bytes(complete.output.assetId), started = performance.now();
+  const imported = await f.json('/imports/project', { data: archive.toString('base64') });
+  t.diagnostic(`Prepared-lettering archive ${archive.length} bytes, ${current.revision + 1} revisions imported in ${Math.round(performance.now() - started)} ms`);
+  const lettering = imported.layers.find(layer => layer.name === 'original-lettering.png');
+  assert.equal(lettering.text, '新字'); assert.equal(lettering.metadata.fontConfirmed, true);
+  assert.ok(imported.assetIds.includes(lettering.fontAssetId));
+  assert.ok(imported.assetIds.includes(lettering.metadata.cleanBackgroundAssetId));
+  assert.deepEqual(await f.bytes(lettering.fontAssetId), await f.bytes(font.id));
+  assert.equal((await f.json(`/documents/${imported.id}/revisions`)).length, (await f.json(`/documents/${document.id}/revisions`)).length);
+});
+
 test('service reopen recovers a candidate committed before its completion acknowledgement without repeating pixels', async t => {
   let calls = 0;
   const processor = async (request,ctx) => { calls++; return executeOperation(request,ctx); };

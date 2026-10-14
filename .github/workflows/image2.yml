@@ -32,3 +32,14 @@ jobs:
       - run: npm run lint && npm run build && npm run typecheck
       - run: npx playwright install --with-deps chromium
       - run: npm run test:image2:ui && npm run test:image2:browser
+      - name: Preserve browser and service verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: image2-browser-evidence-${{ github.sha }}
+          path: |
+            test-results/
+            /tmp/image2-real-browser-results/
+            /tmp/image2-integration-service.log
+          if-no-files-found: ignore
+          retention-days: 7

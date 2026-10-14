@@ -148,7 +148,19 @@ test('actual BFF/service: image, font, Logo, protected recolor, candidate restor
   await page.reload(); await expect(page.getByTestId('image2-canvas')).toBeVisible();
   await expect(page.getByRole('button', { name: '文 · 中文文字', exact: true })).toBeVisible();
   await waitCanvasMedia(doc); await page.screenshot({ path: testInfo.outputPath('real-service-workspace.png'), fullPage: true });
-  await page.locator('input[accept=".zip"]').setInputFiles({ name: 'roundtrip-project.zip', mimeType: 'application/zip', buffer: await zip.body() });
+  const importBytes = await zip.body(), importStarted = Date.now();
+  try {
+    const [importResponse] = await Promise.all([
+      page.waitForResponse(response => new URL(response.url()).pathname === '/api/v3/image2/imports/project' && response.request().method() === 'POST', { timeout: 60000 }),
+      page.locator('input[accept=".zip"]').setInputFiles({ name: 'roundtrip-project.zip', mimeType: 'application/zip', buffer: importBytes }),
+    ]);
+    const responseBody = await importResponse.text();
+    await writeFile(testInfo.outputPath('import-response.json'), JSON.stringify({ archiveBytes: importBytes.length, elapsedMs: Date.now() - importStarted, status: importResponse.status(), body: responseBody.slice(0, 32768) }, null, 2));
+    expect(importResponse.ok(), responseBody).toBeTruthy();
+  } catch (error) {
+    await writeFile(testInfo.outputPath('import-failure.json'), JSON.stringify({ archiveBytes: importBytes.length, elapsedMs: Date.now() - importStarted, responses: responses.slice(-40), browserErrors, status: await page.getByRole('status').allTextContents(), error: String(error) }, null, 2));
+    throw error;
+  }
   await expect.poll(async () => (await get<ImageDocument[]>('/documents')).filter(item => !item.parentDocumentId).length).toBe(2);
   documents = await get<ImageDocument[]>('/documents');
   const imported = documents.find(item => !item.parentDocumentId && item.id !== doc.id)!;
