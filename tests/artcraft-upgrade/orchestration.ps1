@@ -1,5 +1,8 @@
 # No Docker or production calls. AST-load ONLY function definitions, then mock I/O.
 $ErrorActionPreference='Stop';Set-StrictMode -Version Latest
+# Windows Start alias takes precedence over functions. Reproduce that resolution
+# in this disposable test process on other platforms; no profile/system change.
+if(!(Get-Alias -Name Start -ErrorAction SilentlyContinue)){Set-Alias -Name Start -Value Start-Process -Scope Script}
 $repo=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $path=Join-Path $repo 'scripts/artcraft-upgrade/upgrade.ps1'
 $tokens=$null;$errors=$null;$ast=[Management.Automation.Language.Parser]::ParseFile($path,[ref]$tokens,[ref]$errors)
@@ -14,6 +17,8 @@ function Check($Condition,$Name){if(!$Condition){throw "test failed: $Name"};$sc
 function Reject([scriptblock]$Action,[string]$Code){try{& $Action;throw 'did not reject'}catch{Check ($_.Exception.Message -eq $Code) $Code}}
 Check ($taskAst.Extent.Text.Contains('-ExecutionPolicy RemoteSigned -NoProfile -NonInteractive -File')) 'ScheduledTask action explicitly sets child process RemoteSigned on default Restricted host'
 Check (!$taskAst.Extent.Text.Contains('Set-ExecutionPolicy') -and !$taskAst.Extent.Text.Contains('-ExecutionPolicy Bypass') -and !$taskAst.Extent.Text.Contains('-ExecutionPolicy Unrestricted')) 'no persistent or broader script policy mutation'
+Check ((Get-Alias -Name Start).Definition -eq 'Start-Process') 'system Start alias remains present throughout orchestration tests'
+Check (@($ast.FindAll({param($n) $n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Start'},$true)).Count -eq 0) 'executor never invokes ambiguous Start command'
 $m=Map ('{"a":[],"b":[{"c":true}],"nested":{"id":"x"}}'|ConvertFrom-Json)
 Check ($m.a.Count -eq 0 -and $m.b.Count -eq 1 -and $m.b[0].c) 'JSON preserves empty and singleton arrays'
 Reject {Idle @{integrity='ok';active=1}} 'drain_required_no_automatic_retries'
@@ -75,7 +80,7 @@ $script:containers=@{web=@{Id='new-web-id';State=@{Running=$true};Image='new-web
 $script:events=@()
 function SetRestart($Name,$Policy){$script:events+="restart:$Name=$($Policy.Name)"}
 function Stop($Name,[switch]$IsWeb){$script:events+="stop:$Name"}
-function Start($Name){$script:events+="start:$Name"}
+function StartContainer($Name){$script:events+="start:$Name"}
 function Ready($Name,[switch]$IsWeb){}
 function Rename($From,$To,$Id){Check ($script:containers[$From].Id -eq $Id) 'rename identity';$script:containers[$To]=$script:containers[$From];$script:containers.Remove($From);$script:events+="rename:$From->$To"}
 function Ledger($Name,$Command){if($Command -eq 'witness'){return @{id='id';owner='owner'}};return @{integrity='ok';active=3}}

@@ -154,7 +154,7 @@ function SetRestart([string]$Name,$Policy){
     Need ($value -match '^(no|always|unless-stopped|on-failure(:[0-9]+)?)$') 'restart_policy_unknown'
     BeginOp "restart-policy-$Name";$null=Docker @('update',"--restart=$value",$Name);DoneOp
 }
-function OriginalStart([string]$Name,$Original){Need ((Container $Name).Id -ceq $Original.Id) 'original_start_identity';SetRestart $Name $Original.RestartPolicy;Start $Name}
+function OriginalStart([string]$Name,$Original){Need ((Container $Name).Id -ceq $Original.Id) 'original_start_identity';SetRestart $Name $Original.RestartPolicy;StartContainer $Name}
 function ReconcileGracefulStop([string]$Name,[string]$ExpectedId,[int]$WaitSeconds=180){
     Need ($State.GracefulStops.ContainsKey($ExpectedId)) 'graceful_receipt_missing'
     $receipt=$State.GracefulStops[$ExpectedId]
@@ -219,7 +219,7 @@ function StopLegacyWeb([string]$Name){
         Need $false 'legacy_interruption_uncertain_no_paid_replay'
     }
 }
-function Start([string]$Name){$c=Container $Name;if(!$c.State.Running){BeginOp "start-$Name";$null=Docker @('start',$Name);DoneOp}}
+function StartContainer([string]$Name){$c=Container $Name;if(!$c.State.Running){BeginOp "start-$Name";$null=Docker @('start',$Name);DoneOp}}
 function Rename([string]$From,[string]$To,[string]$Id){
     if(Exists 'container' $To){Need ((Container $To).Id -ceq $Id) 'retained_name_collision';return}
     Need ((Container $From).Id -ceq $Id) 'rename_identity_mismatch';BeginOp "rename-$From";$null=Docker @('rename',$From,$To);DoneOp
@@ -318,7 +318,7 @@ function AssertRuntime([string]$Name,[string]$Image,[string]$Volume,[switch]$IsW
     }
 }
 function CreateService([string]$Name,[string]$Image,[string]$Volume,[switch]$IsWeb,[switch]$Production,[switch]$InternalWeb){
-    if(Exists 'container' $Name){Need ((Container $Name).Image -ceq $Image -and (Container $Name).Config.Labels.'artcraft.release' -ceq $Release) 'existing_service_mismatch';AssertRuntime $Name $Image $Volume -IsWeb:$IsWeb -Production:$Production -InternalWeb:$InternalWeb;Start $Name;return}
+    if(Exists 'container' $Name){Need ((Container $Name).Image -ceq $Image -and (Container $Name).Config.Labels.'artcraft.release' -ceq $Release) 'existing_service_mismatch';AssertRuntime $Name $Image $Volume -IsWeb:$IsWeb -Production:$Production -InternalWeb:$InternalWeb;StartContainer $Name;return}
     $net=if($Production){$Network}else{$CanaryNetwork}
     if($Production){$source=if($IsWeb){$OldWeb}else{$OldCore};$values=EnvMap (Container $source)}
     else {$values=@{NODE_ENV='production';HOSTNAME='0.0.0.0';IMAGE2_API_TOKEN=('artcraft-canary-'+$Release+'-synthetic-local-only');STUDIO_VISITOR_SECRET=('artcraft-visitor-'+$Release+'-synthetic-local-only');ARTCRAFT_CANARY='1'}}
@@ -338,7 +338,7 @@ function CreateService([string]$Name,[string]$Image,[string]$Volume,[switch]$IsW
     BeginOp "create-$Name";$null=Docker ($a+@($Image)) '' $values;DoneOp
     if($Production){$actual=EnvMap (Container $Name);$prior=EnvMap (Container $source);foreach($key in $prior.Keys){if($key -notin @('IMAGE2_CRAFT_BIN_DIR')){Need ($actual[$key] -ceq $prior[$key]) 'preserved_environment_mismatch'}}}
     AssertRuntime $Name $Image $Volume -IsWeb:$IsWeb -Production:$Production -InternalWeb:$InternalWeb
-    Start $Name
+    StartContainer $Name
 }
 function Ready([string]$Name,[switch]$IsWeb){
     $port=if($IsWeb){18084}else{18088};$path=if($IsWeb){'/api/v1/health'}else{'/health'}
@@ -518,11 +518,11 @@ function CanaryStage {
     $old=Offline $State.OriginalCore.Image $copy 'old-read';EqualAudit $before $old
     $new=Offline $State.NewCore $copy 'new-read';EqualAudit $before $new
     $State.Compatibility=@{OldCoreImage=$State.OriginalCore.Image;CopyVolume=$copy;OldStoreReadback=$true;NewReopenPreserved=$true;FullOldFeatures=$false;Audit=$new};SaveState
-    Start $CanaryCore
+    StartContainer $CanaryCore
     # The safer post-acceptance rollback keeps the new core with the old Web.
     CreateService $CompatWeb $State.OriginalWeb.Image $wv -IsWeb -InternalWeb
     Ready $CompatWeb -IsWeb;$State.OldWebNewCore=Probe $CompatWeb $witness;Stop $CompatWeb -IsWeb
-    Start $CanaryWeb;Ready $CanaryWeb -IsWeb;$State.CanaryReopenBff=Probe $CanaryWeb $witness;$State.CanaryPassed=$true;SaveState
+    StartContainer $CanaryWeb;Ready $CanaryWeb -IsWeb;$State.CanaryReopenBff=Probe $CanaryWeb $witness;$State.CanaryPassed=$true;SaveState
 }
 function Gate {
     Need $State.CanaryPassed 'canary_required';Need ((Hash (Join-Path $State.NativeCanary.Directory 'receipt.json')) -ceq $State.NativeCanary.ReceiptSha256) 'native_evidence_changed';Need $Request.GateReceipt 'review_gate_required'
@@ -554,7 +554,7 @@ function RestorePair {
         AssertExclusive $CoreVolume @($c.Id)
         # Existing restart/recovery contract preserves original accepted IDs and
         # refuses uncertain submissions. A live Core is never stopped here.
-        Start $Core;Ready $Core
+        StartContainer $Core;Ready $Core
     }
     if(Exists 'container' $Web){
         $w=Container $Web;Need ($w.Id -ceq $State.OriginalWeb.Id -or ($w.Image -ceq $State.NewWeb -and $w.Config.Labels.'artcraft.release' -ceq $Release)) 'rollback_superseded'
