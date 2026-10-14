@@ -14,6 +14,26 @@ function fixture(t) {
   return { directory, get store() { return store; }, reopen() { store.close(); store = new ImageStore(directory); return store; } };
 }
 const layer = (id, text = id) => ({ id, type: 'text', text, width: 100, height: 30 });
+test('legacy SVG metadata is derived after owner and hash validation without rewriting its immutable record', t => {
+  const f = fixture(t), doc = f.store.createDocument(OWNER, {}), bytes = Buffer.from('<svg width="256" height="192" viewBox="0 0 256 192"><path d="M16 16 L240 32 L160 176 L32 144 Z" fill="#136a9f"/></svg>');
+  const asset = f.store.addAsset(doc.id, OWNER, { name: 'native-export.svg', mime: 'image/svg+xml', width: 1024, height: 768 }, bytes);
+  assert.deepEqual([asset.width, asset.height], [256, 192]);
+  const old = { ...asset }; delete old.width; delete old.height;
+  const frozen = JSON.stringify(old); f.store.db.prepare('UPDATE assets SET json=? WHERE id=?').run(frozen, asset.id);
+  const read = f.reopen().getAsset(asset.id, OWNER);
+  assert.deepEqual([read.asset.width, read.asset.height], [256, 192]); assert.deepEqual(read.bytes, bytes); assert.equal(read.asset.hash, asset.hash);
+  assert.equal(f.store.db.prepare('SELECT json FROM assets WHERE id=?').get(asset.id).json, frozen);
+  assert.deepEqual([f.store.listAssets(doc.id, OWNER)[0].width, f.store.listAssets(doc.id, OWNER)[0].height], [256, 192]);
+  assert.throws(() => f.store.getAsset(asset.id, OTHER), e => e.status === 404);
+  writeFileSync(join(f.directory, 'assets', asset.hash), Buffer.from('<svg width="1024" height="768"/>'));
+  assert.throws(() => f.store.getAsset(asset.id, OWNER), e => e.code === 'asset_corrupt');
+});
+test('missing SVG viewport cannot be certified by caller dimensions or stale database metadata', t => {
+  const f = fixture(t), doc = f.store.createDocument(OWNER, {}), asset = f.store.addAsset(doc.id, OWNER, { name: 'no-size.svg', mime: 'image/svg+xml', width: 1024, height: 768 }, Buffer.from('<svg><path d="M0 0L1 1"/></svg>'));
+  assert.equal(asset.width, undefined); assert.equal(asset.height, undefined);
+  f.store.db.prepare('UPDATE assets SET json=? WHERE id=?').run(JSON.stringify({ ...asset, width: 1024, height: 768 }), asset.id);
+  const checked = f.store.getAsset(asset.id, OWNER).asset; assert.equal(checked.width, undefined); assert.equal(checked.height, undefined);
+});
 test('job timing and provider counters persist across queue pauses and reopen without exposing private fields', t => {
   t.mock.timers.enable({ apis: ['Date'], now: Date.UTC(2026,9,10) });
   const f = fixture(t), d = f.store.createDocument(OWNER, {});

@@ -22,6 +22,25 @@ const abortCheck = signal => { if (signal?.aborted) throw error('CRAFT_CANCELLED
 const inside = (root, target) => target === root || target.startsWith(`${root}${path.sep}`);
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const plain = v => !!v && typeof v === 'object' && !Array.isArray(v) && Object.getPrototypeOf(v) === Object.prototype;
+const unsupportedAi = () => error('CRAFT_FORMAT_UNSUPPORTED', '此原生引擎的 AI 写出是 PDF 加 Craft 私有附件，不能作为 Adobe Illustrator 工程导出；请选择真实 PDF、SVG 或原生工程包');
+const VECTOR_SAVE_COMMANDS = new Set(['save_file', 'document.save', 'file.saveAs', 'file.saveCopy', 'file.saveAsTemplate']);
+const vectorOutputCommand = command => VECTOR_SAVE_COMMANDS.has(command) || command === 'export' || /^document\.(?:serialize|export(?:Selection|ForScreens|ForOffice|ForWeb(?:\.preview)?|Pdf|Dxf|Eps)?)$/.test(command);
+
+export function validateCraftOutputFormat(engineId, command, args, internal = false) {
+  if (internal || engineId !== 'vectorcraft' || !vectorOutputCommand(command)) return;
+  let hasTarget = false;
+  const visit = (value, key = '') => {
+    if (Array.isArray(value)) { value.forEach(item => visit(item, key)); return; }
+    if (plain(value)) { Object.entries(value).forEach(([name, item]) => visit(item, name)); return; }
+    if (typeof value !== 'string') return;
+    if (/^(?:format|extension|fileType|outputFormat)$/i.test(key) && value.trim().toLowerCase().replace(/^\.+/, '') === 'ai') throw unsupportedAi();
+    if (PATH_KEY.test(key) || LOCATION_KEY.test(key)) { if (/\.ai$/i.test(value.trim())) throw unsupportedAi(); if (value) hasTarget = true; }
+  };
+  visit(args);
+  // After opening a real .ai input, a pathless Save would overwrite that source
+  // with VectorCraft's PDF container. Managed checkpoints save explicitly instead.
+  if (VECTOR_SAVE_COMMANDS.has(command) && !hasTarget) throw error('CRAFT_OUTPUT_REQUIRED', '保存副本需要明确的 outputName（.vectorcraft、.pdf 或 .svg）；任务结束会自动保存原生检查点');
+}
 
 /** Public metadata never exposes worker directories. Native state and result
  * references retain real paths until the entire job and checkpoint are complete.
@@ -103,7 +122,10 @@ export function resolveCraftArguments(args, { inputs = new Map(), workDir, resul
     if (!value) throw error('CRAFT_ASSET_UNKNOWN', 'Input asset is not attached to this task');
     return value;
   }
-  if (plain(args) && Object.keys(args).length === 1 && typeof args.outputName === 'string') return path.join(workDir, 'exports', safeName(args.outputName));
+  if (plain(args) && Object.keys(args).length === 1 && typeof args.outputName === 'string') {
+    const name = safeName(args.outputName); if (/\.ai$/i.test(name)) throw unsupportedAi();
+    return path.join(workDir, 'exports', name);
+  }
   if (plain(args) && Object.keys(args).length === 1 && typeof args.resultRef === 'string') {
     const parts = /^(\d+)\.([\w.]+)$/.exec(args.resultRef);
     if (!parts || Number(parts[1]) >= results.length) throw error('CRAFT_RESULT_REF_INVALID', 'Result reference must point to a completed earlier step');
@@ -218,22 +240,25 @@ async function walk(root, prefix = '', list = [], budget = { bytes: 0 }) {
 
 function remapJson(bytes, oldRoot, newRoot) {
   const contentKey = /^(?:text|name|title|label|caption|description|value|string)$/i;
+  let changed = false;
   const remap = (value, key = '') => typeof value === 'string' && !contentKey.test(key) && value.startsWith(`${oldRoot}/`)
-    ? `${newRoot}${value.slice(oldRoot.length)}`
+    ? (changed = true, `${newRoot}${value.slice(oldRoot.length)}`)
     : Array.isArray(value) ? value.map(item => remap(item, key))
       : plain(value) ? Object.fromEntries(Object.entries(value).map(([k, v]) => [k, remap(v, k)])) : value;
-  try { return Buffer.from(JSON.stringify(remap(JSON.parse(bytes.toString('utf8'))))); } catch { return bytes; }
+  try { const mapped = remap(JSON.parse(bytes.toString('utf8'))); return changed ? Buffer.from(JSON.stringify(mapped)) : bytes; } catch { return bytes; }
 }
 
 function remapNative(bytes, oldRoot, newRoot, depth = 0) {
   if (depth > 2 || !oldRoot || oldRoot === newRoot) return bytes;
   if (bytes[0] === 0x1f && bytes[1] === 0x8b) return gzipSync(remapNative(gunzipSync(bytes, { maxOutputLength: MAX_FILE }), oldRoot, newRoot, depth + 1));
   if (bytes.subarray(0, 4).equals(Buffer.from('PK\x03\x04'))) {
-    let sum = 0;
-    const entries = unzipSync(bytes, { filter: entry => { sum += entry.originalSize; if (sum > MAX_FILE) throw error('CRAFT_FILE_INVALID', 'Native archive exceeds its expanded size budget'); return true; } });
+    let sum = 0; const compression = new Map();
+    const entries = unzipSync(bytes, { filter: entry => { sum += entry.originalSize; if (sum > MAX_FILE) throw error('CRAFT_FILE_INVALID', 'Native archive exceeds its expanded size budget'); compression.set(entry.name, entry.compression); return true; } });
     let changed = false;
     for (const [name, data] of Object.entries(entries)) if (name.endsWith('.json')) { const mapped = remapJson(Buffer.from(data), oldRoot, newRoot); if (!mapped.equals(Buffer.from(data))) { entries[name] = mapped; changed = true; } }
-    return changed ? Buffer.from(zipSync(entries)) : bytes;
+    // DeckCraft identifies its native format through the first stored mimetype
+    // member. Recompression must retain stored members, not hide that signature.
+    return changed ? Buffer.from(zipSync(Object.fromEntries(Object.entries(entries).map(([name, data]) => [name, [data, { level: compression.get(name) === 0 ? 0 : 6 }]])))) : bytes;
   }
   const split = bytes.indexOf(Buffer.from('\n\0VCBLOBS\0'));
   if (split >= 0) return Buffer.concat([remapJson(bytes.subarray(0, split), oldRoot, newRoot), bytes.subarray(split)]);
@@ -281,10 +306,18 @@ function mime(name) {
   return ({ png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', svg: 'image/svg+xml', pdf: 'application/pdf', wav: 'audio/wav', flac: 'audio/flac', aiff: 'audio/aiff', mp4: 'video/mp4', json: 'application/json', txt: 'text/plain', csv: 'text/csv', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })[path.extname(name).slice(1).toLowerCase()] ?? 'application/octet-stream';
 }
 
-export function craftPublicSchema(schema, name) {
+export function craftPublicSchema(schema, name, engineId) {
   const cloned = structuredClone(schema ?? { type: 'object' });
   const visit = (node, key = '') => {
     if (!plain(node)) return;
+    if (engineId === 'vectorcraft' && vectorOutputCommand(name) && /^(?:format|extension|fileType|outputFormat)$/i.test(key)) {
+      const isAi = value => typeof value === 'string' && value.trim().toLowerCase().replace(/^\.+/, '') === 'ai';
+      if (Array.isArray(node.enum)) node.enum = node.enum.filter(value => !isAi(value));
+      if (isAi(node.default)) delete node.default;
+      if (isAi(node.const)) { delete node.const; node.enum = []; node['x-craft-unavailable'] = 'CRAFT_FORMAT_UNSUPPORTED'; }
+      if (Array.isArray(node.examples)) node.examples = node.examples.filter(value => !isAi(value));
+      node.description = `${node.description ?? ''} AI output is unavailable: use genuine PDF, SVG or a native Craft checkpoint.`.trim();
+    }
     if ((PATH_KEY.test(key) || LOCATION_KEY.test(key)) && !/property path|SVG path|menu path/i.test(node.description ?? '')) {
       const role = /save|export|bounce|render|output|write/i.test(name) || /output|destination|out_dir/i.test(key) ? 'output' : 'input-asset';
       node['x-craft-role'] = role;
@@ -309,6 +342,26 @@ function commandSchema(entry) {
 
 function commandAvailable(engine, entry) {
   return isCraftCommandSafe(entry.id, entry.description ?? '', engine.id) && (engine.id !== 'pdfcraft' || (typeof entry.tool === 'string' && isCraftToolSafe({ name: entry.tool }, engine.id)));
+}
+
+export function craftCommandList(value, engineId) {
+  if (Array.isArray(value) || Array.isArray(value?.commands)) return (Array.isArray(value) ? value : value.commands).filter(item => item && typeof item.id === 'string');
+  // Pinned FigCraft deliberately exposes its command registry as compact text.
+  // Parse only that exact protocol, retaining parameter docs as docs (not a
+  // fabricated JSON schema). A truncated or changed response fails closed.
+  if (engineId === 'figcraft' && typeof value === 'string') {
+    const lines = value.trimEnd().split('\n');
+    const header = /^(\d+) commands \(id — label \[menu\] \(shortcut\) params; \* = undoable\):$/.exec(lines.shift() ?? '');
+    if (!header) throw error('CRAFT_PROTOCOL_ERROR', 'FigCraft command registry header is unsupported', 503);
+    const commands = lines.map(line => {
+      const match = /^([a-zA-Z][\w.:-]{0,159})(\*)? — (.+)$/.exec(line);
+      if (!match) throw error('CRAFT_PROTOCOL_ERROR', 'FigCraft command registry entry is unsupported', 503);
+      return { id: match[1], undoable: !!match[2], description: match[3], params: match[3], source: 'native-list-commands-text' };
+    });
+    if (commands.length !== Number(header[1]) || new Set(commands.map(item => item.id)).size !== commands.length) throw error('CRAFT_PROTOCOL_ERROR', 'FigCraft command registry is incomplete or contains duplicate IDs', 503);
+    return commands;
+  }
+  throw error('CRAFT_PROTOCOL_ERROR', 'Native command registry format is unsupported', 503);
 }
 
 export function createCraftRuntime({ binDir = process.env.IMAGE2_CRAFT_BIN_DIR, timeoutMs = 120000, maxOutputBytes = 64 * 1024 * 1024, sandbox = craftSandboxCommand } = {}) {
@@ -341,7 +394,7 @@ export function createCraftRuntime({ binDir = process.env.IMAGE2_CRAFT_BIN_DIR, 
     const tools = Array.isArray(raw.tools) ? raw.tools : [];
     const listTool = tools.find(item => item.name === engine.list);
     const list = unwrap(await client.tool(engine.list, listTool?.inputSchema?.properties?.schemas ? { schemas: true } : {}));
-    const commands = (Array.isArray(list) ? list : list?.commands ?? []).filter(item => item && typeof item.id === 'string');
+    const commands = craftCommandList(list, engine.id);
     return { tools, commands };
   }
   async function engineCapability(engineId) {
@@ -349,7 +402,7 @@ export function createCraftRuntime({ binDir = process.env.IMAGE2_CRAFT_BIN_DIR, 
     const base = {
       id: engine.id, name: engine.name, category: engine.category, nativeExtension: engine.nativeExtension,
       sourceCommit: engine.commit, repository: engine.repository, checkpointFormat: 'craftbundle', supportsSteps: true,
-      limitations: engine.id === 'pdfcraft' ? ['Added page text is limited by the pinned native engine to WinAnsi Western European characters and Helvetica/Times/Courier. Chinese text insertion is unsupported; reading existing Chinese PDF content is a separate capability.'] : [],
+      limitations: engine.id === 'pdfcraft' ? ['Added page text is limited by the pinned native engine to WinAnsi Western European characters and Helvetica/Times/Courier. Chinese text insertion is unsupported; reading existing Chinese PDF content is a separate capability.'] : engine.id === 'vectorcraft' ? ['AI output is disabled: the pinned writer produces PDF with a VectorCraft JSON attachment, not Adobe Illustrator editing data. Use PDF, SVG or a Craft checkpoint. Existing AI inputs remain supported.'] : [],
       defaults: { new: engine.new?.[0] ?? null, preview: engine.preview?.[0] ?? null, inspect: engine.inspect },
       limits: { maxSteps: MAX_STEPS, maxFileBytes: MAX_FILE, maxWorkspaceBytes: MAX_TOTAL },
     };
@@ -376,13 +429,13 @@ export function createCraftRuntime({ binDir = process.env.IMAGE2_CRAFT_BIN_DIR, 
         const result = {
           available: true, version: build.version, sandboxed: true,
           tools: catalog.tools.filter(item => isCraftToolSafe(item, engine.id)).map(item => ({
-            ...item, processor: 'native-cpu', inputSchema: craftPublicSchema(item.inputSchema, item.name),
+            ...item, processor: 'native-cpu', inputSchema: craftPublicSchema(item.inputSchema, item.name, engine.id),
           })),
           commands: catalog.commands.filter(item => commandAvailable(engine, item)).map(item => {
             const schema = commandSchema(item);
             return { ...item, processor: 'native-cpu', schemaUnavailable: !schema,
               ...(!schema ? { schemaUnavailableReason: 'upstream_parameter_documentation_only' } : {}),
-              inputSchema: craftPublicSchema(schema ?? { type: 'object' }, item.id) };
+              inputSchema: craftPublicSchema(schema ?? { type: 'object' }, item.id, engine.id) };
           }),
           unavailableTools: catalog.tools.filter(item => !isCraftToolSafe(item, engine.id)).map(unavailable),
           unavailableCommands: catalog.commands.filter(item => !commandAvailable(engine, item)).map(unavailable),
@@ -442,6 +495,7 @@ export function createCraftRuntime({ binDir = process.env.IMAGE2_CRAFT_BIN_DIR, 
         return unwrap(reply);
       };
       const run = async (command, args = {}, internal = false, capturePreview = false) => {
+        validateCraftOutputFormat(engine.id, command, args, internal);
         abortCheck(signal);
         // The service job already runs asynchronously. Keep the native process
         // alive until these file-producing commands have actually finished.
@@ -535,7 +589,10 @@ export function createCraftRuntime({ binDir = process.env.IMAGE2_CRAFT_BIN_DIR, 
         const stat = await fs.stat(path.join(workDir, 'exports', entry.relative), { bigint: true });
         // Re-exporting identical bytes is still a current output when the engine
         // rewrote the file. Untouched restored files remain checkpoint-only.
-        if (!before || before.hash !== digest(entry.bytes) || before.mtime !== stat.mtimeNs || before.ctime !== stat.ctimeNs || before.inode !== stat.ino) files.push({ name: entry.relative, mime: mime(entry.relative), bytes: entry.bytes, role: 'export' });
+        if (!before || before.hash !== digest(entry.bytes) || before.mtime !== stat.mtimeNs || before.ctime !== stat.ctimeNs || before.inode !== stat.ino) {
+          if (/\.ai$/i.test(entry.relative)) throw unsupportedAi();
+          files.push({ name: entry.relative, mime: mime(entry.relative), bytes: entry.bytes, role: 'export' });
+        }
       }
       if (!engine.library) { const native = await readBounded(path.join(workDir, 'native', `document.${engine.extension}`)); files.push({ name: `document.${engine.extension}`, mime: mime(`document.${engine.extension}`), bytes: native, role: 'native' }); }
       if (files.reduce((sum, item) => sum + item.bytes.length, checkpointBytes.length) > MAX_TOTAL) throw error('CRAFT_OUTPUT_LIMIT', 'Native outputs exceed their storage budget', 422);

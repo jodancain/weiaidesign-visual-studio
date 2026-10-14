@@ -168,7 +168,9 @@ test('putting native exports on the original canvas preserves immutable pixels/p
   const svg = craftCanvasLayer(document, project, { ...source, mime: 'image/svg+xml' }, 'native-job', 'svg-layer'); assert.equal(svg.type, 'vector'); assert.equal(svg.editability, 'path');
   assert.throws(() => craftCanvasLayer({ ...document, id: 'other' }, project, source, 'job', 'layer'), /归属/);
   assert.throws(() => craftCanvasLayer(document, project, { ...source, mime: 'application/octet-stream' }, 'job', 'layer'), /PNG 或 SVG/);
-  assert.throws(() => craftCanvasLayer(document, project, { ...source, width: undefined }, 'job', 'layer'), /尺寸尚未验证/);
+  for (const width of [undefined, NaN, Infinity, -1, 0, 1.5, 32769]) assert.throws(() => craftCanvasLayer(document, project, { ...source, width }, 'job', 'layer'), /尺寸尚未验证/);
+  const nativeSvg = craftCanvasLayer(document, project, { ...source, mime: 'image/svg+xml', width: 256, height: 192 }, 'native-svg-job', 'svg-256');
+  assert.deepEqual([nativeSvg.width, nativeSvg.height], [256, 192]); assert.equal(nativeSvg.type, 'vector');
   for (const role of ['preview', 'native', undefined]) assert.throws(() => craftCanvasLayer(document, project, { ...source, role }, 'job', 'layer'), /预览缩略图不能放回画布/);
 });
 

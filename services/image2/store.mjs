@@ -416,7 +416,7 @@ export class ImageStore {
     });
     fail(inputs.length <= 100, 'too many asset inputs');
     const asset = { id: descriptor.assignedId || randomUUID(), documentId, name: descriptor.name, ...inspected, hash, bytes: bytes.length, createdAt: timestamp(),
-      ...(inspected.width === undefined && Number.isSafeInteger(descriptor.width) && Number.isSafeInteger(descriptor.height) ? { width: descriptor.width, height: descriptor.height } : {}),
+      ...(inspected.mime !== 'image/svg+xml' && inspected.width === undefined && Number.isSafeInteger(descriptor.width) && Number.isSafeInteger(descriptor.height) ? { width: descriptor.width, height: descriptor.height } : {}),
       ...(descriptor.metadata || font ? { metadata: { ...clone(descriptor.metadata || {}), ...(font ? { family: font.familyName, postscriptName: font.postscriptName, fullName: font.fullName, numGlyphs: font.numGlyphs, weight: fontWeight(font) } : {}) } } : {}), ...(inputs.length ? { inputs } : {}) };
     asset.url = `/api/v3/image2/assets/${asset.id}/content`;
     const file = this.writeBlob(bytes, hash);
@@ -430,6 +430,13 @@ export class ImageStore {
     requireOwner(owner); const row = this.db.prepare('SELECT * FROM assets WHERE id=?').get(id);
     fail(row, 'asset not found', 404, 'not_found'); this.documentRow(row.document_id, owner);
     const asset = parse(row), bytes = readFileSync(row.path); fail(digest(bytes) === asset.hash && bytes.length === asset.bytes, 'stored asset integrity failed', 500, 'asset_corrupt');
+    // Older SVG rows predate viewport inspection. Derive read metadata only
+    // after ownership and byte integrity checks; keep blobs and history intact.
+    if (asset.mime === 'image/svg+xml') {
+      const inspected = inspectBytes(bytes, asset.mime);
+      delete asset.width; delete asset.height;
+      Object.assign(asset, inspected);
+    }
     return { asset, bytes };
   }
   listAssets(documentId, owner) { const document = this.getDocument(documentId, owner); return document.assetIds.map(id => this.getAsset(id, owner).asset); }

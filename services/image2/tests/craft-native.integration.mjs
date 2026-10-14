@@ -27,7 +27,7 @@ const cases = {
   designcraft: { first: [s('new', { width: 256, height: 192 }), s('frame.create', { rect: [20, 20, 210, 80], content: 'text', text: 'Native Probe' }), s('export_png', { path: output('result.png'), page: 0, scale: 1 })], second: [s('export_png', { path: output('result.png'), page: 0, scale: 1 })], compare: 'result.png' },
   figcraft: { first: [s('create_node', { type: 'rectangle', name: 'Native Probe', x: 10, y: 10, width: 128, height: 96, props: { fill: '#136a9f', cornerRadius: 8 } }), png], second: [png], compare: 'result.png' },
   wordcraft: { first: [s('font.add', { path: asset('font') }), s('format.font', { name: 'Craft Acceptance Face' }), s('type_text', { text: 'Native Probe: persistent document.' }), s('render_page', { page: 1, scale: 1 })], second: [s('render_page', { page: 1, scale: 1 })], preview: true },
-  soundcraft: { first: [s('import_audio', { path: asset('audio') }), s('bounce_mix', { path: output('result.wav'), format: 'wav', start: { seconds: 0 }, end: { seconds: 0.25 } })], second: [s('bounce_mix', { path: output('result.wav'), format: 'wav', start: { seconds: 0 }, end: { seconds: 0.25 } })], compare: 'result.wav' },
+  soundcraft: { first: [s('import_audio', { path: asset('audio') }), s('clip.gain', { clips: [ref('0.imported.0.clip')], db: -6 }), s('bounce_mix', { path: output('result.wav'), format: 'wav', start: { seconds: 0 }, end: { seconds: 0.25 } })], second: [s('bounce_mix', { path: output('result.wav'), format: 'wav', start: { seconds: 0 }, end: { seconds: 0.25 } })], compare: 'result.wav' },
   deckcraft: { first: [s('add_shape', { preset: 'rect', x: 30, y: 30, w: 160, h: 100, text: 'Native Probe', fill: '#136a9f' }), s('export', { path: output('result.png'), format: 'png', slide: 0, scale: 1 })], second: [s('export', { path: output('result.png'), format: 'png', slide: 0, scale: 1 })], compare: 'result.png' },
   cadcraft: { first: [s('circle', { center: [10, 10], radius: 8 }), s('line', { points: [[0, 0], [20, 20]] }), s('xattach', { path: asset('cad-reference'), name: 'Reference', at: [30, 0] }), s('xref'), s('render', { path: output('result.png'), width: 256, height: 192 })], second: [s('-xref', { option: 'reload', names: 'Reference' }), s('xref'), s('render', { path: output('result.png'), width: 256, height: 192 })], compare: 'result.png' },
   gridcraft: { first: [s('cell.set', { cell: 'A1', input: 'Native Probe' }), s('cell.set', { cell: 'B1', input: '=6*7' }), s('read_range', { range: 'A1:B1' })], second: [s('read_range', { range: 'A1:B1' })], values: true },
@@ -40,6 +40,7 @@ const exportCases = {
   pdfcraft: { files: ['document.pdf'] },
   effectcraft: { steps: [s('renderQueue.add', { output: output('result.mp4'), format: 'h264', timeSpan: 'custom', start: 0, end: 0.25, frameRate: 12, audio: 'off' }), s('renderQueue.render', { wait: true }), s('file.import', { paths: [output('result.mp4')], addToComp: true, background: false }), s('render_frame', { path: output('result.png'), max_side: 128 })], files: ['result.mp4'] },
   designcraft: { steps: [s('file.exportPdf', { path: output('result.pdf') })], files: ['result.pdf'] },
+  figcraft: { steps: [s('export', { path: output('result.svg'), format: 'svg' })], files: ['result.svg'] },
   wordcraft: { files: ['document.docx'] },
   deckcraft: { steps: [s('export', { path: output('result.pptx'), format: 'pptx' })], files: ['result.pptx'] },
   cadcraft: { steps: [s('save', { path: output('result.pdf') })], files: ['document.dxf', 'result.pdf'] },
@@ -70,7 +71,7 @@ async function inspectFormat(file, directory) {
     return { format: 'pdf', parser: 'poppler-pdfinfo', realHeader: true, pages, width: Number(box[1]), height: Number(box[2]), bytes: bytes.length };
   }
   if (extension === 'dxf') { assert.match(bytes.toString(), /SECTION/); assert.match(bytes.toString(), /ENTITIES/); assert.match(bytes.toString(), /CIRCLE/); return { format: 'dxf', circleEntity: true, bytes: bytes.length }; }
-  if (extension === 'svg') { const text = bytes.toString(); assert.match(text, /<svg[\s>]/); assert.match(text, /<path[\s>]/); return { format: 'svg', path: true, bytes: bytes.length }; }
+  if (extension === 'svg') { const text = bytes.toString(); assert.match(text, /<svg[\s>]/); assert.match(text, /<(?:path|rect|circle|ellipse|polygon|polyline|line)[\s>]/); assert.doesNotMatch(text, /<image[\s>]/); return { format: 'svg', vectorGeometry: true, rasterImage: false, bytes: bytes.length }; }
   if (extension === 'mp4') {
     assert.equal(bytes.toString('ascii', 4, 8), 'ftyp');
     const { stdout } = await execFileAsync(process.env.IMAGE2_CRAFT_FFPROBE || 'ffprobe', ['-v', 'error', '-show_streams', '-show_format', '-of', 'json', local], { timeout: 30000, maxBuffer: 2 * 1024 * 1024 });
@@ -117,6 +118,16 @@ export async function runNativeCraftAcceptance({ binDir = process.env.IMAGE2_CRA
     const cap = capabilities.find(item => item.id === id); const engineRoot = path.join(root, `${id}-${Date.now()}`); await fs.mkdir(engineRoot);
     try {
       assert.ok(cap?.available, `${id} unavailable: ${cap?.reason} ${cap?.message}`);
+      if (id === 'vectorcraft') {
+        const formats = cap.tools.find(tool => tool.name === 'export')?.inputSchema?.properties?.format?.enum;
+        assert.ok(Array.isArray(formats) && formats.includes('pdf') && formats.includes('svg') && !formats.includes('ai'), 'Public Vector export must advertise PDF/SVG without mislabelling the Craft PDF container as Illustrator AI');
+        await assert.rejects(runtime.execute({ engineId: id, workDir: path.join(engineRoot, 'reject-ai-format'), steps: [s('export', { format: 'ai', path: output('mislabelled.pdf') })] }), { code: 'CRAFT_FORMAT_UNSUPPORTED' });
+        await assert.rejects(runtime.execute({ engineId: id, workDir: path.join(engineRoot, 'reject-ai-extension'), steps: [s('export', { format: 'pdf', path: output('mislabelled.AI') })] }), { code: 'CRAFT_FORMAT_UNSUPPORTED' });
+        await assert.rejects(runtime.execute({ engineId: id, workDir: path.join(engineRoot, 'reject-ai-alias'), steps: [s('document.serialize', { format: '..AI' })] }), { code: 'CRAFT_FORMAT_UNSUPPORTED' });
+        await assert.rejects(runtime.execute({ engineId: id, workDir: path.join(engineRoot, 'reject-menu-proxy'), steps: [s('invoke_menu', { command: 'document.serialize', params: { format: 'ai' } })] }), { code: 'CRAFT_COMMAND_UNAVAILABLE' });
+        const selections = await runtime.execute({ engineId: id, workDir: path.join(engineRoot, 'selection-query'), steps: [s('select.savedList')] });
+        assert.ok(selections.checkpoint, 'Saved selection metadata is an in-memory command, not a file Save');
+      }
       const first = await runtime.execute({ engineId: id, workDir: path.join(engineRoot, 'job1'), inputFiles, steps: [...spec.first, ...(exportCases[id]?.steps ?? [])] });
       const formats = [];
       for (const name of exportCases[id]?.files ?? []) { const file = first.files.find(item => item.name === name); assert.ok(file, `${id} did not export ${name}`); formats.push(await inspectFormat(file, engineRoot)); }
@@ -127,6 +138,7 @@ export async function runNativeCraftAcceptance({ binDir = process.env.IMAGE2_CRA
       const second = await runtime.execute({ engineId: id, workDir: path.join(engineRoot, 'job2'), nativeFile: checkpoint, steps: spec.second });
       assert.equal(second.receipt.externalModelCalls, 0); assert.ok(second.state);
       if (id === 'wordcraft') { assert.match(JSON.stringify(second.state), /Craft Acceptance Face/); assert.ok(second.files.find(file => file.name === 'document.docx')); }
+      if (id === 'soundcraft') { assert.equal(first.result[1].clips, 1); assert.equal(second.state.tracks[0].clips[0].gain_db, -6); }
       if (id === 'cadcraft') { const refs = second.result[1]?.xrefs; assert.equal(refs?.length, 1); assert.equal(refs[0].status, 'Loaded'); assert.ok(refs[0].objects > 0); assert.ok(refs[0].path.startsWith('workspace:/inputs/')); }
       const a = spec.preview ? first.files.findLast(file => file.role === 'preview') : first.files.find(file => file.name === spec.compare);
       const b = spec.preview ? second.files.findLast(file => file.role === 'preview') : second.files.find(file => file.name === spec.compare);

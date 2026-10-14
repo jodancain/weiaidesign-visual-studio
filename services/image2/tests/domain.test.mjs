@@ -32,6 +32,19 @@ test('canonical hashes are stable while unsafe SVGs and MIME lies are rejected',
   for (const markup of ['<svg><script>alert(1)</script></svg>', '<svg><image href="https://example.com/a"/></svg>', '<svg><rect onclick="x"/></svg>']) assert.throws(() => inspectBytes(Buffer.from(markup), 'image/svg+xml'));
   assert.equal(inspectBytes(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><path fill="#000" d="M0 0L1 1"/></svg>'), 'image/svg+xml').mime, 'image/svg+xml');
 });
+test('SVG export dimensions come from the validated source viewport, never defaults or nested shapes', () => {
+  const inspect = markup => inspectBytes(Buffer.from(markup), 'image/svg+xml');
+  const path = '<path d="M16 16 L240 32 L160 176 L32 144 Z" fill="#136a9f"/>';
+  for (const attributes of ['width="256" height="192" viewBox="0 0 256 192"', 'width="256px" height="192px"', 'viewBox="0 0 256 192"']) {
+    assert.deepEqual(inspect(`<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" ${attributes}>${path}</svg>`), { mime: 'image/svg+xml', width: 256, height: 192 });
+  }
+  assert.deepEqual(inspect('<svg width="1in" height="72pt"/>'), { mime: 'image/svg+xml', width: 96, height: 96 });
+  assert.deepEqual(inspect('<svg width="100" height="200" style="width:256px;height:192px"/>'), { mime: 'image/svg+xml', width: 256, height: 192 });
+  for (const source of [`<svg>${path}</svg>`, '<svg><svg width="1024" height="768"/></svg>', '<svg width="100%" height="100%"/>', '<svg width="256.5" height="192"/>']) {
+    assert.equal(inspect(source).width, undefined); assert.equal(inspect(source).height, undefined);
+  }
+  for (const source of ['<svg width="256" height="192"><path></svg>', '<html><svg width="256" height="192"/></html>', '<svg width="0" height="192"/>', '<svg width="-1" height="192"/>', '<svg width="256" height="192" viewBox="0 0 -1 192"/>', '<svg width="40000" height="1"/>', '<svg width="256" height="192"><script/></svg>']) assert.throws(() => inspect(source));
+});
 test('locked layers and locked group descendants cannot change except explicit own unlock', () => {
   const d = createImageDocument({ layers: [{ ...textLayer('logo'), locked: true, z: 0 }, { id: 'group', type: 'group', locked: true, z: 1 }, { ...textLayer('child'), parentId: 'group', z: 2 }] });
   for (const commands of [

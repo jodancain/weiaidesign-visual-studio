@@ -91,8 +91,19 @@ export class CraftService {
     const row=this.store.db.prepare('SELECT json,document_id FROM craft_jobs WHERE id=?').get(project.lastJobId);if(!row)return project;this.store.getDocument(row.document_id,owner);const job=parse(row);
     const output=job.output;if(!output||job.acceptedRevision===undefined||output.nativeAssetId!==project.nativeAssetId)return project;
     if(![project.nativeAssetId,...(output.assetIds||[])].every(id=>doc.assetIds.includes(id)))return project;
-    return {...project,latestOutput:{...output,needsAcceptance:false,accepted:true,sourceJobId:job.id,sourceDocumentId:row.document_id,acceptedProjectRevision:project.revision}};
+    return {...project,latestOutput:{...this.outputView(output,owner),needsAcceptance:false,accepted:true,sourceJobId:job.id,sourceDocumentId:row.document_id,acceptedProjectRevision:project.revision}};
   }
+  outputView(output,owner) {
+    if(!output?.assets)return output;
+    return {...output,assets:output.assets.map(item=>{
+      if(item.mime!=='image/svg+xml')return item;
+      const asset=this.store.getAsset(item.id,owner).asset;
+      fail(asset.mime===item.mime&&(!item.hash||asset.hash===item.hash),'Craft output identity changed',500,'asset_corrupt');
+      const result={...item,...asset};delete result.width;delete result.height;
+      if(asset.width!==undefined){result.width=asset.width;result.height=asset.height;}return result;
+    })};
+  }
+  jobView(job,owner) { const result=publicJob(job);if(result.output)result.output=this.outputView(result.output,owner);return result; }
   listRevisions(documentId, owner, projectId) { this.project(documentId,owner,projectId); return this.store.db.prepare('SELECT json FROM craft_revisions WHERE project_id=? ORDER BY revision DESC').all(projectId).map(parse); }
   addAsset(documentId, owner, { name, mime = 'application/octet-stream', metadata = {}, inputs = [], assignedId }, bytes) {
     this.writable(documentId,owner); nativeName(name);
@@ -129,8 +140,8 @@ export class CraftService {
     setImmediate(()=>void this.tick()); return publicJob(job);
   }
   record(documentId,owner,jobId) { this.store.getDocument(documentId,owner); const row=this.store.db.prepare('SELECT json FROM craft_jobs WHERE document_id=? AND id=?').get(documentId,jobId); fail(row,'Craft 任务不存在',404,'not_found'); return parse(row); }
-  getJob(documentId,owner,jobId) { return publicJob(this.record(documentId,owner,jobId)); }
-  listJobs(documentId,owner) { this.store.getDocument(documentId,owner); return this.store.db.prepare('SELECT json FROM craft_jobs WHERE document_id=? ORDER BY rowid DESC LIMIT 200').all(documentId).map(row=>publicJob(parse(row))); }
+  getJob(documentId,owner,jobId) { return this.jobView(this.record(documentId,owner,jobId),owner); }
+  listJobs(documentId,owner) { this.store.getDocument(documentId,owner); return this.store.db.prepare('SELECT json FROM craft_jobs WHERE document_id=? ORDER BY rowid DESC LIMIT 200').all(documentId).map(row=>this.jobView(parse(row),owner)); }
   updateJob(job,patch) { const value={...job,...patch,updatedAt:timestamp()}; this.store.db.prepare('UPDATE craft_jobs SET json=? WHERE id=?').run(json(value),job.id); return value; }
   cancel(documentId,owner,jobId) { const job=this.record(documentId,owner,jobId); if(TERMINAL.has(job.state))return publicJob(job); const result=this.updateJob(job,{state:'cancelled',stage:'cancelled',finishedAt:timestamp()});this.active.get(jobId)?.controller.abort();return publicJob(result); }
   discard(documentId,owner,jobId) { return this.store.transaction(()=>{this.writable(documentId,owner);const job=this.record(documentId,owner,jobId);fail(job.state==='complete'&&job.acceptedRevision===undefined,'只可放弃尚未接受的已完成候选',409,'craft_candidate_not_discardable');return publicJob(this.updateJob(job,{state:'cancelled',stage:'candidate_discarded',discarded:true,output:{...job.output,needsAcceptance:false,discarded:true}}));}); }

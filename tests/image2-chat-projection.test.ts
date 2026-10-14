@@ -42,6 +42,9 @@ test('old native structured result details do not expose host paths or alter ord
   assert.equal(displayToolText('https://example.com/data/file.png'), 'https://example.com/data/file.png');
   assert.equal(displayToolText('workspace:/exports/result.png'), 'workspace:/exports/result.png');
   assert.equal(displayToolText('中文文本、导出失败'), '中文文本、导出失败');
+  for (const quote of ['"', "'", '`']) {
+    assert.equal(displayToolText(`无法打开 ${quote}/Users/person/My Project/input.svg${quote}，请重试`), `无法打开 ${quote}[内部文件]${quote}，请重试`);
+  }
 });
 
 test('native branch acceptance labels distinguish reviewed task branches from the main document', () => {

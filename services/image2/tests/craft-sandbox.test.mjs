@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, rm, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
@@ -31,8 +31,15 @@ test('native confinement blocks network and neighbouring writes while retaining 
     const own = join(work, 'result.txt'), outside = join(root, 'not-output.txt');
     assert.equal((await execute(await craftSandboxCommand('/usr/bin/tee', [own], { workDir: work }), 'result')).code, 0);
     assert.equal(await readFile(own, 'utf8'), 'result');
-    assert.notEqual((await execute(await craftSandboxCommand('/usr/bin/tee', [outside], { workDir: work }), 'denied')).code, 0);
-    await assert.rejects(readFile(outside));
+    const outsideWrite = await execute(await craftSandboxCommand('/usr/bin/tee', [outside], { workDir: work }), 'namespace-only');
+    // Bubblewrap can create this pathname in its private /tmp; it is not the host path.
+    // Seatbelt instead denies the write. Both must preserve the host's absence state.
+    if (outsideWrite.code === 0) {
+      assert.equal(process.platform, 'linux'); assert.equal(outsideWrite.stdout, 'namespace-only');
+    }
+    await assert.rejects(readFile(outside), { code: 'ENOENT' });
+    const laterNamespace = await execute(await craftSandboxCommand('/bin/cat', [outside], { workDir: work }));
+    assert.notEqual(laterNamespace.code, 0); assert.equal(laterNamespace.stdout, '');
   } finally { await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true }); }
 });
 
@@ -57,5 +64,35 @@ test('native process reads its fixture but cannot read a neighbouring project', 
     assert.equal(await readFile(other, 'utf8'), 'not-an-engine-input');
     const env = (await craftSandboxCommand('/bin/cat', [own], { workDir: work })).env;
     assert.equal(env.OPENAI_API_KEY, undefined); assert.equal(env.IMAGE2_API_TOKEN, undefined);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+
+test('native writes and workspace symlinks cannot alter existing or absent host neighbours', { skip: !['darwin','linux'].includes(process.platform) }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'craft-host-write-')), work = join(root, 'work');
+  const { mkdir } = await import('node:fs/promises'); await mkdir(work);
+  try {
+    const existing = join(root, 'existing.txt'), absent = join(root, 'absent.txt');
+    const existingLink = join(work, 'existing-link.txt'), absentLink = join(work, 'absent-link.txt');
+    await writeFile(existing, 'original-host-content');
+    await symlink(existing, existingLink); await symlink(absent, absentLink);
+    for (const target of [existing, existingLink]) {
+      const read = await execute(await craftSandboxCommand('/bin/cat', [target], { workDir: work }));
+      assert.notEqual(read.code, 0); assert.equal(read.stdout, '');
+    }
+    for (const target of [existing, absent, existingLink, absentLink]) {
+      const write = await execute(await craftSandboxCommand('/usr/bin/tee', [target], { workDir: work }), 'namespace-only');
+      if (write.code === 0) {
+        assert.equal(process.platform, 'linux'); assert.equal(write.stdout, 'namespace-only');
+      }
+      assert.equal(await readFile(existing, 'utf8'), 'original-host-content');
+      await assert.rejects(readFile(absent), { code: 'ENOENT' });
+      // A new namespace sees neither the host content nor a previous private write.
+      const read = await execute(await craftSandboxCommand('/bin/cat', [target], { workDir: work }));
+      assert.notEqual(read.code, 0); assert.equal(read.stdout, '');
+    }
+    const own = join(work, 'own.txt');
+    assert.equal((await execute(await craftSandboxCommand('/usr/bin/tee', [own], { workDir: work }), 'accepted')).code, 0);
+    assert.equal(await readFile(own, 'utf8'), 'accepted');
   } finally { await rm(root, { recursive: true, force: true }); }
 });

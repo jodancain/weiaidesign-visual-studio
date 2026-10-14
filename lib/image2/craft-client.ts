@@ -154,7 +154,7 @@ export function craftCanvasLayer(document: ImageDocument, project: CraftProject,
   if (document.id !== project.documentId || !document.assetIds.includes(output.id)) throw new Error('结果素材尚未归属当前画布，请先接受原生候选并刷新。');
   if (output.role !== 'export') throw new Error('请先使用“导出文件”取得实际尺寸的 PNG 或 SVG，预览缩略图不能放回画布');
   if (!['image/png', 'image/svg+xml'].includes(output.mime || '')) throw new Error('仅支持将 PNG 或 SVG 导出结果放回画布');
-  if (!output.width || !output.height || output.width <= 0 || output.height <= 0) throw new Error('结果尺寸尚未验证，请刷新后重试');
+  if (!Number.isSafeInteger(output.width) || !Number.isSafeInteger(output.height) || !output.width || !output.height || output.width <= 0 || output.height <= 0 || output.width > 32768 || output.height > 32768 || output.width * output.height > 100000000) throw new Error('结果尺寸尚未验证，请刷新后重试');
   const vector = output.mime === 'image/svg+xml';
   return { id, type: vector ? 'vector' : 'raster', name: `${project.name} · 导出快照`, assetId: output.id, sourceAssetId: output.id, x: at.x, y: at.y, width: output.width, height: output.height, rotation: 0, opacity: 1, visible: true, locked: false, z: document.layers.length, editability: vector ? 'path' : 'pixels', metadata: { craftProjectId: project.id, craftRevision: project.revision, craftJobId: jobId, craftOutputAssetId: output.id, craftEngineId: project.engineId, craftImportMode: 'export-snapshot' } };
 }

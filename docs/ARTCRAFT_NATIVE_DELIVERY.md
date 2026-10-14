@@ -51,6 +51,8 @@ AI 的原生编辑只写持久任务分支。聊天卡片显示原生回执、�
 
 原有“保细节”像素描摹保留，输出真实 SVG 路径，按既有像素验收执行。VectorCraft 的平滑描摹作为可编辑描摹模式，不能据其预览清晰度宣称像素完全一致。
 
+VectorCraft 固定版本的 `ai_native` 使用 `vectorcraft_format::save_with` 产生自身 JSON，再由 PDF writer 嵌入名为 `vectorcraft-editing.vectorcraft` 的附件；此路径没有写出 Adobe Illustrator 的 `AIPrivateData` 编辑数据。托管出口因此去掉 `ai` 格式，并拒绝 `.ai` 输出名、格式别名与打开 AI 后的隐式原址保存。仍可导入用户已有 AI 文件；对外提供实际 PDF、SVG 与原生工程包，不用 PDF 容器冒充 Illustrator 工程。
+
 2026-10-14 原生描摹专项：256×192 合成图包含 108 个小点、一个细孔和 140 像素的一像素细线。导出有 111 个真实路径、112 个闭合子路径，无整图位图嵌入；重合成保留 111 个连通区域、一个孔洞、108 个点中心及全部细线采样点。仍有 335 个二值遮罩像素差异、6,807 个 RGBA 通道差异，平均绝对通道误差约 2.2576。因此明确不替换像素保真描摹。
 
 ## 可复跑验收
@@ -76,15 +78,19 @@ IMAGE2_CRAFT_REAL_BIN_DIR=/absolute/native/bin node --test services/image2/tests
 
 ## 当前交付记录
 
-2026-10-14 本地 macOS 已通过 PhotoCraft、VectorCraft、FilmCraft、LightCraft 的真实跨任务闭环。原首页已实测素材打开、PNG 导出、候选接受、原尺寸导出快照回画布、刷新后恢复、原生历史恢复，以及工程包下载/上传后继续编辑。全工程包另经过跨访客迁移、继续编辑和历史恢复，解码 RGBA 差异为 0。服务回归 334 项通过，另 1 项真实原生门控测试单独运行通过；客户端 104 项通过，lint 和生产构建通过。
+2026-10-14 本地 macOS 已通过 PhotoCraft、VectorCraft、FilmCraft、LightCraft、PdfCraft、EffectCraft、DesignCraft、FigCraft、WordCraft、SoundCraft、DeckCraft 的真实跨任务闭环。CADCraft 与 GridCraft 继续构建及真实验证；本记录不会以协议 mock 替代原生引擎通过。
 
-此记录对应源码集成阶段。其余 9 个引擎仍在固定源码编译与真实验收；没有以协议 mock 代替通过。未嵌入共享字体的 Film/Light 二进制在中文专项中检出了缺字，最终二进制必须带固定字体重建后再验。Linux 原生验收尚未完成。
+原首页已实测素材打开、PNG/SVG 真实导出、候选接受、导出快照回画布、刷新恢复、原生历史恢复、工程包下载/上传后继续编辑。SVG 真实路径导出为 256×192；旧导出缺失的尺寸从同一不可变文件验证补读，回画布成为 SVG 图层并保留路径身份。全工程包另经过跨访客迁移、继续编辑和历史恢复，解码 RGBA 差异为 0。
 
-后续测试结果应追加到本记录。代码推送、原生二进制分发、Linux 验收与正式生产部署是独立状态；本地通过不代表线上已启用。
+原聊天区使用固定测试 LLM 回执及真实 PhotoCraft 完成三轮能力发现、编辑和导出；接受后原生工程升到版本 4，刷新后保持已接受，未重复执行。测试 fixture 已关闭，全程没有真实远端模型调用；此记录不代表自然语言模型效果验收。
+
+服务回归当前 355 项通过，另 1 项真实原生门控测试单独运行通过；客户端 114 项通过。typecheck、lint 和 Next.js 生产构建通过。构建时检出了聊天正则在压缩输出中的反引号转义问题，修复后再次完成真实生产构建。
+
+Ubuntu CI 已真实通过独立网络命名空间、零 capabilities、宿主相邻文件不可读和受限 AppArmor 子进程检查。完整 Linux 引擎矩阵仍是独立验收。代码推送、原生二进制分发、Linux 验收与正式生产部署分别记录；本地通过不代表线上已启用。
 
 
 ## 中文能力边界
 
-字体打包、真实文本编辑和原生渲染分别验收。`craft-cjk.integration.mjs` 使用 VectorCraft 逐字渲染“中、文、测、试、□”，检查实际像素轮廓彼此不同、非空，导出的 SVG 为路径且不依赖整图位图或外部字体；再删除初次任务目录，重开中文原生工程并比较解码 RGBA。当前 macOS 结果不能代替最终内嵌字体构建或 Linux 验收。
+字体打包、真实文本编辑和原生渲染分别验收。`craft-cjk.integration.mjs` 使用 VectorCraft 逐字渲染“中、文、测、试、□”，检查实际像素轮廓彼此不同、非空，导出的 SVG 为路径且不依赖整图位图或外部字体；再删除初次任务目录，重开中文原生工程并比较解码 RGBA。当前 macOS 二进制已按固定 craft-fonts 来源构建，结果仍不能代替 Linux 验收。Film、Light、Effect、Design、Fig、Word 的五个中文/方框字形区分及原生重开检查已通过；Design、Word 的 PDF 另经 Poppler 渲染与文字提取验证。Word 的 DOCX 保存中文文本，但没有嵌入字体部件，不据此声称独立 DOCX 在任意设备字体一致。
 
 PDFCraft 固定版本的 `page_add_text` 只提供 Helvetica、Times、Courier，并明确仅接受 WinAnsi 西欧字符；新增中文文字会被上游拒绝。读取已有中文 PDF、在其他设计引擎完成中文排版后导出 PDF，与 PDFCraft 的新增文字能力分开记录。现有 Image2 文字层和 PDF 导出不因此降级，但不标称 PDFCraft 原生中文新增已接通。

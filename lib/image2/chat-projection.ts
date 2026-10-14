@@ -6,8 +6,8 @@ export function displayToolText(value: string): string {
   if (new RegExp(`^${root}`).test(value)) return '[内部文件]';
   // A quoted path may contain spaces. Process it before the unquoted fallback.
   return value
-    .replace(new RegExp(`(["'\x60])${root}[^\\n\\r]*?\\1`, 'g'), '$1[内部文件]$1')
-    .replace(new RegExp(`(?<![A-Za-z0-9:])${root}[^\\s"'\x60<>，。；！？）)\\]}]+`, 'g'), '[内部文件]');
+    .replace(new RegExp(`(["'\\u0060])${root}[^\\n\\r]*?\\1`, 'g'), '$1[内部文件]$1')
+    .replace(new RegExp(`(?<![A-Za-z0-9:])${root}[^\\s"'\\u0060<>，。；！？）)\\]}]+`, 'g'), '[内部文件]');
 }
 
 export interface DisplayConversationMessage { id: string; role: 'user' | 'assistant'; text: string; error?: boolean }

@@ -9,6 +9,7 @@ import { ImageStore } from '../store.mjs';
 import { CraftService } from '../craft-service.mjs';
 import { createImageService } from '../server.mjs';
 import { buildAgentTools } from '../agent-control.mjs';
+import { encodePNG } from '../processors.mjs';
 
 const OWNER='11111111-1111-4111-8111-111111111111',OTHER='22222222-2222-4222-8222-222222222222';
 const ENGINES=['photocraft','vectorcraft','filmcraft','lightcraft','pdfcraft','effectcraft','designcraft','figcraft','wordcraft','soundcraft','deckcraft','cadcraft','gridcraft'];
@@ -32,6 +33,22 @@ async function fixture(t,options={}) {
 async function done(craft,doc,job) { const until=Date.now()+10000;while(Date.now()<until){const current=craft.getJob(doc.id,OWNER,job.id);if(['complete','failed','cancelled'].includes(current.state))return current;await new Promise(resolve=>setTimeout(resolve,10));}throw new Error('fixture job timeout'); }
 async function create(f,engineId='vectorcraft',key=engineId) { return f.craft.createProject(f.doc.id,OWNER,{engineId,name:engineId,idempotencyKey:`create:${key}`}); }
 async function submit(f,project,key='edit',revision=project.revision) { return f.craft.submit(f.doc.id,OWNER,{projectId:project.id,baseRevision:revision,steps:[{command:'edit',args:{}}],inputAssetIds:[],idempotencyKey:key}); }
+
+test('accepted legacy Vector SVG outputs regain source dimensions while preview size and immutable receipts stay unchanged',async t=>{
+  const runtime=fakeRuntime(),execute=runtime.execute.bind(runtime),svg=Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="256" height="192" viewBox="0 0 256 192"><path d="M16 16 L240 32 L160 176 L32 144 Z" fill="#136a9f"/></svg>');
+  const preview=await encodePNG({width:1024,height:768,data:new Uint8Array(1024*768*4)});
+  runtime.execute=async args=>({...await execute(args),files:[{name:'preview.png',mime:'image/png',bytes:preview,role:'preview'},{name:'网页真实路径.svg',mime:'image/svg+xml',bytes:svg,role:'export'}]});
+  const f=await fixture(t,{runtime}),project=await create(f),job=await done(f.craft,f.doc,await submit(f,project));assert.equal(job.state,'complete',job.error);
+  const accepted=f.craft.accept(f.doc.id,OWNER,job.id,{baseRevision:0,idempotencyKey:'accept-svg'}),output=job.output.assets.find(asset=>asset.role==='export');
+  assert.deepEqual([output.width,output.height],[256,192]);
+  const legacy={...f.store.getAsset(output.id,OWNER).asset};delete legacy.width;delete legacy.height;f.store.db.prepare('UPDATE assets SET json=? WHERE id=?').run(JSON.stringify(legacy),output.id);
+  const frozen=f.craft.record(f.doc.id,OWNER,job.id);for(const asset of frozen.output.assets)if(asset.id===output.id){delete asset.width;delete asset.height;}const frozenJSON=JSON.stringify(frozen);f.store.db.prepare('UPDATE craft_jobs SET json=? WHERE id=?').run(frozenJSON,job.id);
+  for(const read of [f.craft.getJob(f.doc.id,OWNER,job.id).output,f.craft.listJobs(f.doc.id,OWNER)[0].output,f.craft.projectView(f.doc.id,OWNER,project.id).latestOutput]){
+    const exported=read.assets.find(asset=>asset.id===output.id),thumb=read.assets.find(asset=>asset.role==='preview');assert.deepEqual([exported.width,exported.height],[256,192]);assert.deepEqual([thumb.width,thumb.height],[1024,768]);assert.equal(exported.hash,output.hash);
+  }
+  assert.equal(f.store.db.prepare('SELECT json FROM craft_jobs WHERE id=?').get(job.id).json,frozenJSON);assert.deepEqual(f.store.getAsset(output.id,OWNER).bytes,svg);assert.equal(f.craft.project(f.doc.id,OWNER,project.id).revision,accepted.revision);assert.equal(runtime.calls,1);
+  assert.throws(()=>f.craft.getJob(f.doc.id,OTHER,job.id),e=>e.status===404);
+});
 
 test('all thirteen engines have independent native ledgers and immutable candidate outputs',async t=>{
   const f=await fixture(t);

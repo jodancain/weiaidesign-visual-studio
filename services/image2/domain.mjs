@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { validateV3Document, createV3Document, applyV3Commands, CONTENT_MIME, validateContentJSON } from './domain-v3.mjs';
+import { normalizeSvg } from './svg-normalize.mjs';
 
 export class ImageError extends Error {
   constructor(message, status = 400, code = 'invalid_request') { super(message); this.status = status; this.code = code; }
@@ -177,6 +178,20 @@ export function inspectBytes(bytes, declaredMime) {
     const refs = [...svg.matchAll(/\b(?:href|src)\s*=\s*(["'])(.*?)\1/gi)].map(m => decode(m[2]).trim());
     const urls = [...svg.matchAll(/url\(\s*([^)]+)\)/gi)].map(m => decode(m[1]).trim().replace(/^["']|["']$/g, ''));
     fail(/<svg\b/i.test(svg) && !/<(?:script|foreignObject)\b|<!DOCTYPE|<!ENTITY|\bon\w+\s*=|@import/i.test(svg) && refs.every(ref => ref.startsWith('#') || /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(ref)) && urls.every(ref => ref.startsWith('#') || /^data:font\/(?:ttf|otf|woff2?);base64,[A-Za-z0-9+/]+={0,2}$/.test(ref)), 'unsafe or invalid SVG');
+    // Inspect the immutable source using the same XML, CSS and viewport rules as
+    // canvas rendering. Never infer export dimensions from a preview thumbnail.
+    try {
+      const viewport = normalizeSvg(svg);
+      fail(viewport.width <= 32768 && viewport.height <= 32768 && viewport.width * viewport.height <= 100000000, 'asset pixel limit exceeded');
+      // Raster-size metadata is integer-valued. Fractional viewports remain
+      // downloadable, but cannot claim a verified whole-pixel export size.
+      const w = Math.round(viewport.width), h = Math.round(viewport.height);
+      if (Math.abs(w - viewport.width) < 1e-9 && Math.abs(h - viewport.height) < 1e-9) { width = w; height = h; }
+    } catch (error) {
+      // A dimensionless SVG can be retained as a source, but a caller-provided
+      // size must not turn it into a verified native export.
+      if (error.code !== 'SVG_VIEWPORT_REQUIRED') throw error;
+    }
   } else if (mime === 'application/pdf') fail(bytes.toString('ascii',0,5) === '%PDF-', 'invalid PDF');
   else if (mime === 'application/zip') fail(bytes[0] === 80 && bytes[1] === 75, 'invalid ZIP');
   else if (mime === 'font/ttf') fail(bytes.length >= 4 && (bytes.readUInt32BE(0) === 0x00010000 || bytes.toString('ascii',0,4) === 'true'), 'invalid TTF');

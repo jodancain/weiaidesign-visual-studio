@@ -5,10 +5,46 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
-import { createCraftRuntime, resolveCraftArguments, restoreCraftBundle, validateCraftSchema, craftPublicSchema, validateCraftBudgets, craftPublicValue } from '../craft-runtime.mjs';
+import { zipSync, unzipSync } from 'fflate';
+import { createCraftRuntime, resolveCraftArguments, restoreCraftBundle, validateCraftSchema, craftPublicSchema, validateCraftBudgets, craftPublicValue, validateCraftOutputFormat, craftCommandList } from '../craft-runtime.mjs';
 import { craftEngines, isCraftCommandSafe, isCraftToolSafe } from '../craft-catalog.mjs';
 
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
+
+test('FigCraft command text is normalized exactly without inventing argument schemas', () => {
+  const registry = '2 commands (id — label [menu] (shortcut) params; * = undoable):\nfile.new — New design file [File] (Cmd+N) {name?}\nnode.set* — Set properties {ids?, fill?}\n';
+  const commands = craftCommandList(registry, 'figcraft');
+  assert.deepEqual(commands.map(item => item.id), ['file.new', 'node.set']);
+  assert.equal(commands[1].undoable, true); assert.equal(commands[0].inputSchema, undefined);
+  assert.match(commands[0].params, /name\?/);
+  for (const invalid of [registry.replace('2 commands', '3 commands'), registry.replace('node.set*', 'file.new*'), registry.replace(' — ', ' => ')]) assert.throws(() => craftCommandList(invalid, 'figcraft'), { code: 'CRAFT_PROTOCOL_ERROR' });
+  assert.throws(() => craftCommandList(registry, 'photocraft'), { code: 'CRAFT_PROTOCOL_ERROR' });
+});
+
+test('managed outputs cannot disguise Craft PDF as AI, while real AI inputs remain readable', () => {
+  const ctx = { workDir: '/job', inputs: new Map([['real-ai', '/job/inputs/design.ai']]) };
+  assert.equal(resolveCraftArguments({ path: { assetId: 'real-ai' } }, ctx).path, '/job/inputs/design.ai');
+  assert.throws(() => resolveCraftArguments({ path: { outputName: 'design.AI' } }, ctx), { code: 'CRAFT_FORMAT_UNSUPPORTED' });
+  for (const command of ['export', 'document.export', 'save_file', 'document.save', 'file.saveAs', 'file.saveCopy', 'file.saveAsTemplate', 'document.serialize', 'document.exportForScreens']) {
+    assert.throws(() => validateCraftOutputFormat('vectorcraft', command, { format: 'ai', path: '/job/exports/design.pdf' }), { code: 'CRAFT_FORMAT_UNSUPPORTED' });
+    assert.throws(() => validateCraftOutputFormat('vectorcraft', command, { format: 'pdf', path: '/job/exports/design.ai' }), { code: 'CRAFT_FORMAT_UNSUPPORTED' });
+  }
+  assert.throws(() => validateCraftOutputFormat('vectorcraft', 'document.save', {}), { code: 'CRAFT_OUTPUT_REQUIRED' });
+  for (const format of ['.ai', '..ai', '...AI']) for (const command of ['document.export', 'document.serialize']) {
+    assert.throws(() => validateCraftOutputFormat('vectorcraft', command, { format, path: '/job/exports/result.pdf' }), { code: 'CRAFT_FORMAT_UNSUPPORTED' });
+    assert.throws(() => validateCraftOutputFormat('vectorcraft', command, { options: { format }, path: '/job/exports/result.pdf' }), { code: 'CRAFT_FORMAT_UNSUPPORTED' });
+  }
+  validateCraftOutputFormat('vectorcraft', 'open_file', { path: '/job/inputs/design.ai' });
+  validateCraftOutputFormat('vectorcraft', 'save_file', { path: '/job/native/document.vectorcraft' }, true);
+  const schema = { type: 'object', properties: { format: { type: 'string', enum: ['svg', 'ai', 'pdf', 'png'] } } };
+  assert.deepEqual(craftPublicSchema(schema, 'export', 'vectorcraft').properties.format.enum, ['svg', 'pdf', 'png']);
+  assert.deepEqual(schema.properties.format.enum, ['svg', 'ai', 'pdf', 'png'], 'the upstream schema remains intact for protocol validation');
+  const defaults = craftPublicSchema({ properties: { format: { type: 'string', default: 'AI', const: '.ai', examples: ['AI', 'pdf'] } } }, 'document.export', 'vectorcraft').properties.format;
+  assert.equal(defaults.default, undefined); assert.equal(defaults.const, undefined); assert.deepEqual(defaults.enum, []); assert.deepEqual(defaults.examples, ['pdf']);
+  assert.equal(defaults['x-craft-unavailable'], 'CRAFT_FORMAT_UNSUPPORTED');
+  for (const command of ['select.savedList', 'select.save', 'select.editSaved', 'pdf.preset.save']) validateCraftOutputFormat('vectorcraft', command, { name: 'AI', format: 'ai' });
+  assert.equal(craftPublicSchema({ properties: { format: { type: 'string', default: 'ai' } } }, 'pdf.preset.save', 'vectorcraft').properties.format.default, 'ai', 'in-memory presets are not file output commands');
+});
 
 test('public metadata hides worker paths while preserving document text and internal values', () => {
   const root = '/private/worker/project-job';
@@ -88,6 +124,8 @@ test('runtime filters desktop, script and network commands rather than exposing 
   assert.equal(isCraftToolSafe({ name: 'command_run' }), false);
   assert.equal(isCraftToolSafe({ name: 'run_script' }), false);
   assert.equal(isCraftToolSafe({ name: 'doc_batch' }), false);
+  assert.equal(isCraftToolSafe({ name: 'invoke_menu' }, 'vectorcraft'), false, 'menu proxies must not bypass actual-command validation');
+  assert.equal(isCraftToolSafe({ name: 'press_key' }, 'vectorcraft'), false, 'shortcut proxies must not bypass actual-command validation');
   assert.equal(isCraftToolSafe({ name: 'render_page', description: 'Render page' }), true);
 });
 
@@ -155,6 +193,17 @@ test('checkpoint restores only bounded, hashed safe files and remaps managed nat
   assert.deepEqual(JSON.parse(await fs.readFile(path.join(destination, 'native/document.pcraft'))), { source: `${destination}/inputs/a.png`, exportSource: `${destination}/exports/b.png`, text: '/old/inputs/a.png', title: '/old/exports/b.png' });
   bundle.files[0].path = 'native/../../escaped'; await fs.writeFile(file, gzipSync(JSON.stringify(bundle)));
   await assert.rejects(restoreCraftBundle(file, destination, 'photocraft'), { code: 'CRAFT_CHECKPOINT_INVALID' });
+});
+
+test('DeckCraft archive relocation preserves its uncompressed native mimetype signature', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'craft-deck-archive-')); t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const mimetype = Buffer.from('application/vnd.storyteller.deckcraft+zip');
+  const data = Buffer.from(zipSync({ mimetype: [mimetype, { level: 0 }], 'presentation.json': Buffer.from(JSON.stringify({ path: '/old/inputs/image.png', text: '/old/inputs/image.png' })) }));
+  const file = path.join(dir, 'bundle'), workDir = path.join(dir, 'job'); await fs.mkdir(workDir);
+  await fs.writeFile(file, gzipSync(JSON.stringify({ version: 1, engineId: 'deckcraft', workDir: '/old', files: [{ path: 'native/document.deckcraft', data: data.toString('base64'), sha256: sha(data) }] })));
+  await restoreCraftBundle(file, workDir, 'deckcraft'); const restored = await fs.readFile(path.join(workDir, 'native/document.deckcraft'));
+  assert.equal(restored.readUInt16LE(8), 0, 'mimetype must remain a stored ZIP member'); assert.ok(restored.subarray(0, 200).includes(mimetype));
+  const json = JSON.parse(Buffer.from(unzipSync(restored)['presentation.json'])); assert.equal(json.path, `${workDir}/inputs/image.png`); assert.equal(json.text, '/old/inputs/image.png');
 });
 
 

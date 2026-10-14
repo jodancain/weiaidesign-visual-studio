@@ -32,7 +32,7 @@ export function craftEngine(id) {
 const GENERIC = new Set(['command_run', 'run_command', 'execute', 'execute_command', 'command_batch', 'command.batch', 'doc_batch', 'execute_batch', 'batch', 'script', 'run_script', 'execute_script', 'command_line', 'control']);
 const UNSAFE = /(?:^|[._])(?:ui|appOnly|shell|execProcess|script|javascript|python|macro|plugin|plugins|extension|extensions|network|server|collab|collaboration|publish|share|upload|download|remote|cloud|account|login|logout|auth|print|prefs|preferences|settings|quit|exit|launch|openUrl|openURL|reveal|browse|zotero|refreshAll|connection|connections|externalData|webQuery)(?:[._]|$)/i;
 const UNSAFE_WORDS = /(?:desktop app only|APP_ONLY|requires a running|connected desktop|live app|running desktop)/i;
-const UI_TOOLS = new Set(['screenshot', 'click', 'drag', 'key', 'pointer', 'pointer_gesture', 'select_tool', 'menu_invoke', 'inspect_ui', 'type_key', 'script_ui']);
+const UI_TOOLS = new Set(['screenshot', 'click', 'drag', 'key', 'pointer', 'pointer_gesture', 'select_tool', 'menu_invoke', 'invoke_menu', 'press_key', 'inspect_ui', 'type_key', 'script_ui']);
 
 export function craftCommandUnavailableReason(id, description = '', engineId) {
   if (engineId === 'cadcraft' && ['attach', '3dorbit', 'orbit'].includes(id)) return 'CRAFT_UPSTREAM_NOT_IMPLEMENTED';
