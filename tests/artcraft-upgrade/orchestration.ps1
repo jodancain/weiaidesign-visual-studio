@@ -28,7 +28,7 @@ if($Mode -ne 'suite'){
 }
 $taskAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $repo 'scripts/artcraft-upgrade/task.ps1'),[ref]$tokens,[ref]$errors)
 if($errors.Count){throw 'task wrapper parse failed'}
-$null=[Management.Automation.Language.Parser]::ParseFile((Join-Path $repo 'scripts/artcraft-sandbox-policy/collect-review-facts.ps1'),[ref]$tokens,[ref]$errors)
+$collectorAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $repo 'scripts/artcraft-sandbox-policy/collect-review-facts.ps1'),[ref]$tokens,[ref]$errors)
 if($errors.Count){throw 'policy collector parse failed'}
 $script:checks=0
 function Check($Condition,$Name){if(!$Condition){throw "test failed: $Name"};$script:checks++}
@@ -52,6 +52,25 @@ Check ((QuoteArg 'a b\') -eq '"a b\\"') 'Windows trailing slash quoting'
 $out=Exec (Get-Process -Id $PID).Path @('-NoProfile','-Command','[Console]::Write($env:ARTCRAFT_SYNTHETIC_PROBE)') '' @{ARTCRAFT_SYNTHETIC_PROBE='local-value'}
 Check ($out -eq 'local-value') 'child-only environment injection'
 Check (!$env:ARTCRAFT_SYNTHETIC_PROBE) 'parent environment unchanged'
+# Exercise the actual allowlisted collector parser without running Docker. Actual
+# Windows Docker proofs separately verify Go index on omitted optional map keys.
+$collectorFunction=$collectorAst.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst]},$false)|Where-Object Name -eq 'Read-DockerFields'
+Invoke-Expression $collectorFunction.Extent.Text
+foreach($statement in $collectorAst.EndBlock.Statements){if($statement -is [Management.Automation.Language.AssignmentStatementAst] -and $statement.Left.VariablePath.UserPath -ceq 'containerFields'){Invoke-Expression $statement.Extent.Text}}
+Check ($containerFields.Tmpfs -ceq '(index .HostConfig `Tmpfs`)' -and $containerFields.Sysctls -ceq '(index .HostConfig `Sysctls`)') 'only optional missing HostConfig members use safe index'
+Check ($containerFields.Id -ceq '.Id' -and $containerFields.Image -ceq '.Image' -and $containerFields.Memory -ceq '.HostConfig.Memory') 'required identity and resource fields retain strict queries'
+$script:collectorExit=0;$script:collectorLines=@('"synthetic-id"','null','null','2147483648','["no-new-privileges=true","seccomp={\"mask\":18446744073707453426}"]','"bind"','"/policy"','false','"C:/synthetic-policy"','null')
+function docker {$script:collectorArguments=@($args);$global:LASTEXITCODE=$script:collectorExit;return $script:collectorLines}
+try {
+    $fields=[ordered]@{Id='.Id';Tmpfs=$containerFields.Tmpfs;Sysctls=$containerFields.Sysctls;Memory='.HostConfig.Memory';SecurityOpt='.HostConfig.SecurityOpt'}
+    $facts=Read-DockerFields @('inspect','synthetic') $fields -WithMounts
+    Check ($null -eq $facts.Tmpfs -and $null -eq $facts.Sysctls -and $facts.Memory -eq 2147483648) 'omitted optionals stay null without masking required resource values'
+    Check ($facts.Mounts.Count -eq 1 -and $facts.Mounts[0].Type -ceq 'bind' -and $null -eq $facts.Mounts[0].Name -and !$facts.Mounts[0].RW) 'bind mount with omitted Name retains exact source and readonly flag'
+    Check ($facts.SecurityOpt[1] -ceq 'seccomp={"mask":18446744073707453426}') 'embedded seccomp uint64 remains an unparsed string'
+    Check ($script:collectorArguments[-1].Contains('{{json (index . `Name`)}}') -and !$script:collectorArguments[-1].Contains('"')) 'native template uses raw Go keys without embedded double quotes'
+    $script:collectorExit=1;$script:collectorLines=@();Reject {Read-DockerFields @('inspect','synthetic') $fields} 'Read-only Docker query failed'
+    $script:collectorExit=0;$script:collectorLines=@('"synthetic-id"');Reject {Read-DockerFields @('inspect','synthetic') $fields} 'Incomplete Docker field output'
+} finally {Remove-Item Function:docker}
 # First-create then two atomic replacements survive process boundaries. This
 # reproduces Inspect -> saved state -> Prepare rather than mocking SaveState.
 $roundtrip=Join-Path ([IO.Path]::GetTempPath()) ('artcraft-state-roundtrip-'+[Guid]::NewGuid().ToString('N'));$null=[IO.Directory]::CreateDirectory($roundtrip)

@@ -11,7 +11,9 @@ function Read-DockerFields([string[]]$DockerArguments, [System.Collections.IDict
   # No literal double quotes in native arguments: Windows PowerShell 5.1 can
   # strip embedded JSON-template quotes while constructing Docker's argv.
   $template = ($Fields.Values | ForEach-Object { '{{json ' + $_ + '}}{{println}}' }) -join ''
-  if ($WithMounts) { $template += '{{range .Mounts}}{{json .Type}}{{println}}{{json .Destination}}{{println}}{{json .RW}}{{println}}{{json .Source}}{{println}}{{json .Name}}{{println}}{{end}}' }
+  # Docker omits Name on bind mounts. Raw Go string keys survive Windows 5.1
+  # argument handling; index emits JSON null only for this optional member.
+  if ($WithMounts) { $template += '{{range .Mounts}}{{json .Type}}{{println}}{{json .Destination}}{{println}}{{json .RW}}{{println}}{{json .Source}}{{println}}{{json (index . `Name`)}}{{println}}{{end}}' }
   $lines = @(& docker @DockerArguments --format $template)
   if ($LASTEXITCODE -ne 0) { throw 'Read-only Docker query failed' }
   # Docker may append one empty line after the template's final println.
@@ -51,9 +53,9 @@ $containerFields = [ordered]@{
   Id = '.Id'; Image = '.Image'; Hostname = '.Config.Hostname'; User = '.Config.User'
   Privileged = '.HostConfig.Privileged'; CapAdd = '.HostConfig.CapAdd'; CapDrop = '.HostConfig.CapDrop'
   NetworkMode = '.HostConfig.NetworkMode'; PidMode = '.HostConfig.PidMode'; IpcMode = '.HostConfig.IpcMode'; UsernsMode = '.HostConfig.UsernsMode'
-  SecurityOpt = '.HostConfig.SecurityOpt'; PortBindings = '.HostConfig.PortBindings'; ReadonlyRootfs = '.HostConfig.ReadonlyRootfs'; Tmpfs = '.HostConfig.Tmpfs'
+  SecurityOpt = '.HostConfig.SecurityOpt'; PortBindings = '.HostConfig.PortBindings'; ReadonlyRootfs = '.HostConfig.ReadonlyRootfs'; Tmpfs = '(index .HostConfig `Tmpfs`)'
   Memory = '.HostConfig.Memory'; NanoCpus = '.HostConfig.NanoCpus'; PidsLimit = '.HostConfig.PidsLimit'
-  Sysctls = '.HostConfig.Sysctls'; Devices = '.HostConfig.Devices'; Binds = '.HostConfig.Binds'
+  Sysctls = '(index .HostConfig `Sysctls`)'; Devices = '.HostConfig.Devices'; Binds = '.HostConfig.Binds'
   Running = '.State.Running'; ExitCode = '.State.ExitCode'
 }
 $facts = [ordered]@{
