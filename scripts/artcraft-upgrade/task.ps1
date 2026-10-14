@@ -45,7 +45,9 @@ try {
     [IO.File]::WriteAllText($requestPath,($r|ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
     # Interactive qrrwi context reaches their Docker Desktop engine; no password,
     # RunLevel elevation, SSH-owned jobs, auto-restart or automatic stage chaining.
-    $args='-NoProfile -NonInteractive -File "'+$runner+'" -RequestFile "'+$requestPath+'"'
+    # Process RemoteSigned permits these hash-verified local scripts on Windows
+    # default Restricted; no persistent policy/GPO change, Bypass or Unrestricted.
+    $args='-ExecutionPolicy RemoteSigned -NoProfile -NonInteractive -File "'+$runner+'" -RequestFile "'+$requestPath+'"'
     $action=New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $args -WorkingDirectory $root
     $principal=New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Limited
     $settings=New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew

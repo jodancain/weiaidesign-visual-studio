@@ -12,6 +12,8 @@ if($errors.Count){throw 'policy collector parse failed'}
 $script:checks=0
 function Check($Condition,$Name){if(!$Condition){throw "test failed: $Name"};$script:checks++}
 function Reject([scriptblock]$Action,[string]$Code){try{& $Action;throw 'did not reject'}catch{Check ($_.Exception.Message -eq $Code) $Code}}
+Check ($taskAst.Extent.Text.Contains('-ExecutionPolicy RemoteSigned -NoProfile -NonInteractive -File')) 'ScheduledTask action explicitly sets child process RemoteSigned on default Restricted host'
+Check (!$taskAst.Extent.Text.Contains('Set-ExecutionPolicy') -and !$taskAst.Extent.Text.Contains('-ExecutionPolicy Bypass') -and !$taskAst.Extent.Text.Contains('-ExecutionPolicy Unrestricted')) 'no persistent or broader script policy mutation'
 $m=Map ('{"a":[],"b":[{"c":true}],"nested":{"id":"x"}}'|ConvertFrom-Json)
 Check ($m.a.Count -eq 0 -and $m.b.Count -eq 1 -and $m.b[0].c) 'JSON preserves empty and singleton arrays'
 Reject {Idle @{integrity='ok';active=1}} 'drain_required_no_automatic_retries'
