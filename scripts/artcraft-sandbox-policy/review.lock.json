@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "status": "T06-local-candidate-target-not-run",
+  "profileSha256": "54445b51b34a5884dba65c7875995a0991402c5d46ca66df404690f968fb2ac4",
+  "sourcesLockSha256": "098ca8ec214c12bd7a0ef1730d75d30a6db699b2cc91564e3f79fd7050985a90",
+  "inputs": [
+    {
+      "path": "services/image2/craft-sandbox.mjs",
+      "sha256": "07a0ac07a085ae2a7f56d094fc3185f4903010727d38e81061802ab22d56114c"
+    },
+    {
+      "path": "services/image2/craft-runtime.mjs",
+      "sha256": "9095389f56f76306363db73d0ffa9d067a4bcfe6a78823cd01676cd46b5ee59b"
+    },
+    {
+      "path": "services/image2/Dockerfile",
+      "sha256": "5765bce6d7b1fc9e094d49358779f61aa1807b9bf99930773cdefbd5a696e19b"
+    },
+    {
+      "path": "services/image2/Dockerfile.native",
+      "sha256": "360bd26ac7ca1b7455ed9b9eec526fb361f90851d1d639b60e429621af436dcb"
+    },
+    {
+      "path": "services/image2/compose.native.yml",
+      "sha256": "634431c7f2f56f15a63133c2df45d3035174f636c2e3612ee151681bdeeeb0ab"
+    },
+    {
+      "path": "services/image2/tests/craft-sandbox.test.mjs",
+      "sha256": "8a357ff8cb879d29859b6b270ed3b36372e920e4b3773de934024a24f5974b3d"
+    },
+    {
+      "path": "services/image2/tests/craft-native.integration.mjs",
+      "sha256": "09be501a96152656b84c40c3c768440d9bc74a6c91969876366145808f5f05c6"
+    },
+    {
+      "path": "../output/artcraft-native-20261014/production-cutover/T01-runtime.json",
+      "sha256": "467c16fbe7b586b6d456ac3477e3e72127868863081f90dd31b478171883eb18"
+    },
+    {
+      "path": "../output/artcraft-native-20261014/production-cutover/T01-host-metadata.json",
+      "sha256": "1ba8d29fbd27acde675b404d423ed47371fa9208b4033edc95b6aaf7348951c0"
+    },
+    {
+      "path": "../output/artcraft-native-20261014/production-cutover/T01-targets-152832.json",
+      "sha256": "be36c148e7ee8f8763107a0424b8cf82c448f7d1dfd11f7194630f142019cc00"
+    }
+  ],
+  "knownGaps": [
+    "Successful T01 host metadata and exact targets supersede the failed partial collector. Fresh Engine GitCommit and full baseline facts still required.",
+    "Actual final image, bwrap binary/package provenance, builtin control and candidate service isolation/full acceptance remain target gates.",
+    "No root production policy approval is asserted by this local lock."
+  ],
+  "artifacts": {
+    "policy.py": "b1c11fec3489e2f58e959bc97cfffa7fe6cfaaa93bd5853b6b0ee5cd9411d40b",
+    "target-probe.mjs": "09a43a7458935df27c0ba159b0bbca42ea556a2423daa9b8ccd1301bc0cd4667",
+    "collect-review-facts.ps1": "f22ee0a9699d3b534882b1997ee3575c8a742ef061a8c7a82055ddf01b0a96d1",
+    "test_policy.py": "032a01cf0627902c7802541783756189a3cd1f48e0b3b678bf7ea95c49cc6255",
+    "probe-checks.test.mjs": "0be3656ed204e2c413db54a22c2994b5616c02b6986f73aaad28b274b9533091",
+    "README.md": "c0e610774c455b6d1190a7d76c427040af4ccc30694031a5cb2f6bab233ff66e"
+  },
+  "nativeManifestSha256": "8e050bb717ab92246fec121a4e8bff45e328c1b9ff0994b015fc99c2dcc45509"
+}

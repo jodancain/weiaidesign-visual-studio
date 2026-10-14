@@ -1,0 +1,23 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { verifyBundle } from '../../services/image2/ops/upgrade-bundle.mjs';
+const sha = bytes => createHash('sha256').update(bytes).digest('hex');
+test('final native root requires every pinned executable ELF64, exact hash and source commit', t => {
+  const root = mkdtempSync(join(tmpdir(), 'native-root-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const binary = Buffer.alloc(64); binary.write('7f454c46', 'hex'); binary[4] = 2; binary[5] = 1; binary.writeUInt16LE(62, 18);
+  const engines = Array.from({ length: 13 }, (_, i) => ({ id: `engine${i}`, commit: 'a'.repeat(40) }));
+  const manifest = { platform: 'linux', arch: 'x64', engines: engines.map(e => ({ id: e.id, sourceCommit: e.commit, binary: `${e.id}-cli`, bytes: binary.length, sha256: sha(binary) })) };
+  for (const entry of manifest.engines) writeFileSync(join(root, entry.binary), binary, { mode: 0o755 });
+  const bytes = JSON.stringify(manifest); writeFileSync(join(root, 'manifest.json'), bytes);
+  assert.equal(verifyBundle(root, sha(bytes), { engines }).binaries.length, 13);
+  const file = join(root, manifest.engines[0].binary);
+  chmodSync(file, 0o644); assert.throws(() => verifyBundle(root, sha(bytes), { engines })); chmodSync(file, 0o755);
+  writeFileSync(file, 'corrupt'); assert.throws(() => verifyBundle(root, sha(bytes), { engines })); writeFileSync(file, binary);
+  engines[0].commit = 'b'.repeat(40); assert.throws(() => verifyBundle(root, sha(bytes), { engines }));
+  assert.throws(() => verifyBundle(join(root, 'bin'), sha(bytes), { engines }));
+});

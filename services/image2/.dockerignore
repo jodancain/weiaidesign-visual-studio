@@ -2,6 +2,15 @@ node_modules
 data
 models
 tests
+!tests/
+tests/*
+!tests/craft-sandbox.test.mjs
+!tests/craft-native.integration.mjs
+!tests/craft-service-native.test.mjs
+!tests/craft-cjk.integration.mjs
+!tests/craft-text.integration.mjs
+!tests/craft-vector.integration.mjs
+!tests/fixtures/
 vision-worker
 .env
 .env.*

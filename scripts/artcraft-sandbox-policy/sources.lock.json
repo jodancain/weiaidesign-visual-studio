@@ -1,0 +1,114 @@
+{
+  "schemaVersion": 1,
+  "dockerTag": "docker-v29.4.1",
+  "dockerCommit": "6c91b92cc71077b70c779c510da125301a8e40f3",
+  "seccompModule": "github.com/moby/profiles/seccomp v0.1.0",
+  "seccompTag": "seccomp/v0.1.0",
+  "seccompCommit": "c936cc7b4074219137bc0bee45670f5e4618d462",
+  "bubblewrapTag": "v0.11.0",
+  "bubblewrapCommit": "9ca3b05ec787acfb4b17bed37db5719fa777834f",
+  "sources": [
+    {
+      "id": "default",
+      "repository": "moby/profiles",
+      "commit": "c936cc7b4074219137bc0bee45670f5e4618d462",
+      "path": "seccomp/default.json",
+      "url": "https://raw.githubusercontent.com/moby/profiles/c936cc7b4074219137bc0bee45670f5e4618d462/seccomp/default.json",
+      "permalink": "https://github.com/moby/profiles/blob/c936cc7b4074219137bc0bee45670f5e4618d462/seccomp/default.json",
+      "sha256": "01536f1d1df938ae611eba20d6349e0de7a99b6ecdee1549427a0b01b8301e28",
+      "bytes": 13063,
+      "local": "upstream/docker-29.4.1-default.json"
+    },
+    {
+      "id": "license",
+      "repository": "moby/profiles",
+      "commit": "c936cc7b4074219137bc0bee45670f5e4618d462",
+      "path": "LICENSE",
+      "url": "https://raw.githubusercontent.com/moby/profiles/c936cc7b4074219137bc0bee45670f5e4618d462/LICENSE",
+      "permalink": "https://github.com/moby/profiles/blob/c936cc7b4074219137bc0bee45670f5e4618d462/LICENSE",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "bytes": 11358,
+      "local": "upstream/LICENSE"
+    },
+    {
+      "id": "moby_dependency",
+      "repository": "moby/moby",
+      "commit": "6c91b92cc71077b70c779c510da125301a8e40f3",
+      "path": "go.mod",
+      "url": "https://raw.githubusercontent.com/moby/moby/6c91b92cc71077b70c779c510da125301a8e40f3/go.mod",
+      "permalink": "https://github.com/moby/moby/blob/6c91b92cc71077b70c779c510da125301a8e40f3/go.mod",
+      "sha256": "c94f1bab50d9ed25cc2a5273e7f8fc4bf5a4ae919bad195e286c72a15a5f9316",
+      "bytes": 15117
+    },
+    {
+      "id": "moby_loader",
+      "repository": "moby/moby",
+      "commit": "6c91b92cc71077b70c779c510da125301a8e40f3",
+      "path": "daemon/seccomp_linux.go",
+      "url": "https://raw.githubusercontent.com/moby/moby/6c91b92cc71077b70c779c510da125301a8e40f3/daemon/seccomp_linux.go",
+      "permalink": "https://github.com/moby/moby/blob/6c91b92cc71077b70c779c510da125301a8e40f3/daemon/seccomp_linux.go",
+      "sha256": "230098e7dd291ecdc6cf342d9f40cad0aea4e201221adf401fc4c6f8d3b9ab4d",
+      "bytes": 1876
+    },
+    {
+      "id": "profile_generator",
+      "repository": "moby/profiles",
+      "commit": "c936cc7b4074219137bc0bee45670f5e4618d462",
+      "path": "seccomp/default_linux.go",
+      "url": "https://raw.githubusercontent.com/moby/profiles/c936cc7b4074219137bc0bee45670f5e4618d462/seccomp/default_linux.go",
+      "permalink": "https://github.com/moby/profiles/blob/c936cc7b4074219137bc0bee45670f5e4618d462/seccomp/default_linux.go",
+      "sha256": "9fcf5ac6798c0639a8460d55a332dce76b835d60ec45cbf984c30794f9f5a50b",
+      "bytes": 16513
+    },
+    {
+      "id": "profile_loader",
+      "repository": "moby/profiles",
+      "commit": "c936cc7b4074219137bc0bee45670f5e4618d462",
+      "path": "seccomp/seccomp_linux.go",
+      "url": "https://raw.githubusercontent.com/moby/profiles/c936cc7b4074219137bc0bee45670f5e4618d462/seccomp/seccomp_linux.go",
+      "permalink": "https://github.com/moby/profiles/blob/c936cc7b4074219137bc0bee45670f5e4618d462/seccomp/seccomp_linux.go",
+      "sha256": "50fd816ac121e81dff3a34e596e8ff1eaa24757c2ce3c097bdf18211a05d02f9",
+      "bytes": 4688
+    },
+    {
+      "id": "bubblewrap",
+      "repository": "containers/bubblewrap",
+      "commit": "9ca3b05ec787acfb4b17bed37db5719fa777834f",
+      "path": "bubblewrap.c",
+      "url": "https://raw.githubusercontent.com/containers/bubblewrap/9ca3b05ec787acfb4b17bed37db5719fa777834f/bubblewrap.c",
+      "permalink": "https://github.com/containers/bubblewrap/blob/9ca3b05ec787acfb4b17bed37db5719fa777834f/bubblewrap.c",
+      "sha256": "7e972f6193fe48ff046033be85c5d8988102978ac6176ba19ff9e02e0594f741",
+      "bytes": 116178
+    },
+    {
+      "id": "bind_mount",
+      "repository": "containers/bubblewrap",
+      "commit": "9ca3b05ec787acfb4b17bed37db5719fa777834f",
+      "path": "bind-mount.c",
+      "url": "https://raw.githubusercontent.com/containers/bubblewrap/9ca3b05ec787acfb4b17bed37db5719fa777834f/bind-mount.c",
+      "permalink": "https://github.com/containers/bubblewrap/blob/9ca3b05ec787acfb4b17bed37db5719fa777834f/bind-mount.c",
+      "sha256": "19a6ae020803e342667dd562efab027967b1c1f2965525ec7ee09521554f8f71",
+      "bytes": 15808
+    },
+    {
+      "id": "docker_docs",
+      "repository": "docker/docs",
+      "commit": "37ba9076a66c8a5b1cd7ba7f4b0eb1eb361fe698",
+      "path": "content/manuals/engine/security/seccomp.md",
+      "url": "https://raw.githubusercontent.com/docker/docs/37ba9076a66c8a5b1cd7ba7f4b0eb1eb361fe698/content/manuals/engine/security/seccomp.md",
+      "permalink": "https://github.com/docker/docs/blob/37ba9076a66c8a5b1cd7ba7f4b0eb1eb361fe698/content/manuals/engine/security/seccomp.md",
+      "sha256": "6d2168f8d94fea5eeed8aec8d68b6b9c34355054a0dbb389eaf25714f78f0f6d",
+      "bytes": 18521
+    },
+    {
+      "id": "default_json_generator",
+      "repository": "moby/profiles",
+      "commit": "c936cc7b4074219137bc0bee45670f5e4618d462",
+      "path": "seccomp/generate.go",
+      "url": "https://raw.githubusercontent.com/moby/profiles/c936cc7b4074219137bc0bee45670f5e4618d462/seccomp/generate.go",
+      "permalink": "https://github.com/moby/profiles/blob/c936cc7b4074219137bc0bee45670f5e4618d462/seccomp/generate.go",
+      "sha256": "43fa91d623f3f1b1861b84ccf8f39a35bda7db9e0c45d492ae05b3b08d97e683",
+      "bytes": 560
+    }
+  ]
+}

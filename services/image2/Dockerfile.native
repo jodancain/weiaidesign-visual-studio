@@ -7,5 +7,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     bubblewrap fontconfig fonts-noto-cjk libasound2t64 libfontconfig1 libfreetype6 \
     libudev1 libx11-6 libxcb1 libxkbcommon0 libwayland-client0 libegl1 libgl1 \
     libvulkan1 mesa-vulkan-drivers \
+    curl ffmpeg poppler-utils python3 \
     && rm -rf /var/lib/apt/lists/*
 USER node
+# curl is the confinement test's independent network oracle; ffmpeg/ffprobe and
+# Poppler verify real media/PDF output. No compilers, model weights or dev npm deps.
