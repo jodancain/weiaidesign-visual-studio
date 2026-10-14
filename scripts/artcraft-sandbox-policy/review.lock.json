@@ -18,7 +18,7 @@
     },
     {
       "path": "services/image2/Dockerfile.native",
-      "sha256": "39c8d27738c2308e30ffa8ec0c78576ba4eeab376840986db4c63017860c63fa"
+      "sha256": "7f5b3d7fdc27b3ba2f60edbf541bdea66f7742130db269527132d8f40efd7dbe"
     },
     {
       "path": "services/image2/compose.native.yml",
@@ -43,6 +43,14 @@
     {
       "path": "../output/artcraft-native-20261014/production-cutover/T01-targets-152832.json",
       "sha256": "be36c148e7ee8f8763107a0424b8cf82c448f7d1dfd11f7194630f142019cc00"
+    },
+    {
+      "path": "services/image2/ops/normalize-runtime-libraries.mjs",
+      "sha256": "c844e3406501f33c4a271e2d6905af2151774043f64eda2dcb9ac148bea7facc"
+    },
+    {
+      "path": "services/image2/tests/normalize-runtime-libraries.test.mjs",
+      "sha256": "980e19a4b56f8862d5d7ee737f04cab63a5ecc25485962899ee6d8f48cb65051"
     }
   ],
   "knownGaps": [
@@ -51,12 +59,12 @@
     "No root production policy approval is asserted by this local lock."
   ],
   "artifacts": {
-    "policy.py": "0cc711cc6be7f3a2c95db2fa20dae5fcaac318f8841b913af953c1809694d80b",
-    "target-probe.mjs": "e3ae846144a279982e12fc8494a4a8a1d44617643e6c74a9022317104ea4e8cb",
+    "policy.py": "cac6eb916f8fb65131e1df729eea5255ca22f5e7f1eac2679ee7ae240b9f973d",
+    "target-probe.mjs": "cb2c5eeff19a4bb0dd187ba459f86df4d4792e61293499754c3755c759831129",
     "collect-review-facts.ps1": "654b30f228b45996f9faaa389a9a33877ce78d2f234fe5094b20360ec7cae4ba",
-    "test_policy.py": "883075e34fd9609d7f1a123a7536cddca48c0e77540bfc2787e5369f245a268a",
-    "probe-checks.test.mjs": "2e80f8a94a128d76c1c0a4abcbd5ecacceb2dacb82c02e1e9df0553928c44b8c",
-    "README.md": "7b33efad85548a0c7644c07fde62b50b0c9269e3fd09131386397cd10b1a106f"
+    "test_policy.py": "ff22c500b1a97d3bc8d6a0220242ced2481b77518eeba5216f943c9b58a2db92",
+    "probe-checks.test.mjs": "15970270577bf46751549391a88096fa6c1b0a36b41b62a0896099c4c7496ac4",
+    "README.md": "94407a7ca4cbefd73119cb8b6a773e184b7767267d337c17fcab5d899f5f3ff3"
   },
   "nativeManifestSha256": "8e050bb717ab92246fec121a4e8bff45e328c1b9ff0994b015fc99c2dcc45509",
   "bwrap": {

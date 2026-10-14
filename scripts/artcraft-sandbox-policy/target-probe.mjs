@@ -14,7 +14,17 @@ const here = dirname(fileURLToPath(import.meta.url));
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const cleanEnv = { PATH: '/usr/local/bin:/usr/bin:/bin', LANG: 'C.UTF-8', HOME: '/tmp' };
 export const expectedEnvKeys = ['PATH', 'HOME', 'TMPDIR', 'TMP', 'TEMP', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME', 'LANG', 'LC_ALL', 'RUST_BACKTRACE'].sort();
-const canaryNames = ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'IMAGE2_API_TOKEN', 'HTTP_PROXY'];
+export const expectedSandboxEnvKeys = [...expectedEnvKeys, 'PWD'].sort();
+const canaryNames = ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'IMAGE2_API_TOKEN', 'HTTP_PROXY', 'PWD', 'T03_UNEXPECTED_ENV'];
+
+export function pwdMatchesWorkdir(pwd, cwd, expected) {
+  return typeof expected === 'string' && expected.startsWith('/') && pwd === cwd && cwd === expected;
+}
+
+export function assertSandboxEnvironment(record) {
+  assert.deepEqual(record.envKeys, expectedSandboxEnvKeys);
+  assert.equal(record.pwdMatchesWorkdir, true, 'bwrap PWD must equal the actual canonical owned work directory');
+}
 
 export function parseBwrapPackage(stdout) {
   const values = stdout.trimEnd().split(/\r?\n/);
@@ -32,7 +42,7 @@ export const observationCode = String.raw`
 const fs = require('node:fs'), os = require('node:os');
 const status = Object.fromEntries(fs.readFileSync('/proc/self/status','utf8').split('\n').filter(x => /^(CapEff|CapPrm|CapInh|CapAmb|CapBnd|NoNewPrivs|Seccomp|Seccomp_filters):/.test(x)).map(x => x.split(':').map(y => y.trim())));
 const ns = Object.fromEntries(['user','mnt','pid','net'].map(x=>[x,fs.readlinkSync('/proc/self/ns/'+x)]));
-console.log(JSON.stringify({uid:process.getuid(),gid:process.getgid(),status,ns,uidMap:fs.readFileSync('/proc/self/uid_map','utf8').trim(),gidMap:fs.readFileSync('/proc/self/gid_map','utf8').trim(),interfaces:os.networkInterfaces(),routes:fs.readFileSync('/proc/net/route','utf8').trim().split('\n').slice(1),envKeys:Object.keys(process.env).sort()}));`;
+console.log(JSON.stringify({uid:process.getuid(),gid:process.getgid(),status,ns,uidMap:fs.readFileSync('/proc/self/uid_map','utf8').trim(),gidMap:fs.readFileSync('/proc/self/gid_map','utf8').trim(),interfaces:os.networkInterfaces(),routes:fs.readFileSync('/proc/net/route','utf8').trim().split('\n').slice(1),envKeys:Object.keys(process.env).sort(),pwdMatchesWorkdir:(${pwdMatchesWorkdir.toString()})(process.env.PWD,process.cwd(),process.argv[1])}));`;
 
 export function assertZeroCaps(record, outer = false) {
   assert.equal(record.uid, 1000); assert.equal(record.gid, 1000);
@@ -80,7 +90,8 @@ async function worker(serviceDir, work) {
   assert.ok(inheritedCanariesPresent);
   const own = await observation();
   const { craftSandboxCommand } = await import(pathToFileURL(join(serviceDir, 'craft-sandbox.mjs')));
-  const command = await craftSandboxCommand(process.execPath, ['-e', observationCode], { workDir: work });
+  const canonicalWork = await fs.realpath(work);
+  const command = await craftSandboxCommand(process.execPath, ['-e', observationCode, canonicalWork], { workDir: canonicalWork });
   assert.equal(command.isolation, 'linux-bubblewrap');
   assert.deepEqual(Object.keys(command.env).sort(), expectedEnvKeys);
   const result = await execute(command);
@@ -143,7 +154,7 @@ async function main(args) {
     record.worker = observed.worker; record.sandbox = observed.sandbox;
     assertZeroCaps(record.worker, true); assertZeroCaps(record.sandbox);
     assertNetwork(record.worker, record.sandbox);
-    assert.deepEqual(record.sandbox.envKeys, expectedEnvKeys); assert.equal(observed.inheritedCanariesPresent, true);
+    assertSandboxEnvironment(record.sandbox); assert.equal(observed.inheritedCanariesPresent, true);
     const { craftSandboxCommand } = await import(pathToFileURL(join(serviceDir, 'craft-sandbox.mjs')));
     const sandbox = async (file, argv) => execute(await craftSandboxCommand(file, argv, { workDir: work }));
     let requests = 0;

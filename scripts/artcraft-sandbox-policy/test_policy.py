@@ -158,7 +158,7 @@ class PolicyTests(unittest.TestCase):
         proc["status"].update(NoNewPrivs="1", Seccomp="2")
         child = copy.deepcopy(proc); child["ns"] = {n: n + ":[2]" for n in proc["ns"]}
         child.update(interfaces={"lo": [{"address": "127.0.0.1", "internal": True}]}, routes=[],
-                     envKeys="PATH HOME TMPDIR TMP TEMP XDG_CONFIG_HOME XDG_CACHE_HOME XDG_DATA_HOME LANG LC_ALL RUST_BACKTRACE".split())
+                     envKeys="PATH HOME TMPDIR TMP TEMP XDG_CONFIG_HOME XDG_CACHE_HOME XDG_DATA_HOME LANG LC_ALL RUST_BACKTRACE PWD".split(), pwdMatchesWorkdir=True)
         result = {"status": "passed", "nativeManifestSha256": lock["nativeManifestSha256"], "policyMode": "candidate", "profileSha256": lock["profileSha256"], "kernel": p.KERNEL,
                   "containerHostname": "c" * 12, "sandboxSourceSha256": next(i["sha256"] for i in lock["inputs"] if i["path"].endswith('/craft-sandbox.mjs')),
                   "probeSha256": lock["artifacts"]["target-probe.mjs"], "nativeTestSha256": next(i["sha256"] for i in lock["inputs"] if i["path"].endswith('/craft-native.integration.mjs')),
@@ -170,7 +170,12 @@ class PolicyTests(unittest.TestCase):
         mutations = [lambda x: x.update(status="skipped"), lambda x: x["nativeResults"].pop(),
                      lambda x: x["sandbox"]["status"].update(CapEff="1"),
                      *[lambda x, who=who: x[who]["status"].update(CapBnd="200000") for who in ["node", "worker", "sandbox"]], lambda x: x["sandbox"]["ns"].update(net=x["worker"]["ns"]["net"]),
-                     lambda x: x["sandbox"]["envKeys"].append("OPENAI_API_KEY"), lambda x: x.update(profileSha256="0" * 64),
+                     lambda x: x["sandbox"]["envKeys"].append("OPENAI_API_KEY"),
+                     lambda x: x["sandbox"]["envKeys"].append("UNKNOWN_ENV"),
+                     lambda x: x["sandbox"]["envKeys"].append("PWD"),
+                     lambda x: x["sandbox"]["envKeys"].remove("PWD"),
+                     lambda x: x["sandbox"].pop("pwdMatchesWorkdir"),
+                     *[lambda x, value=value: x["sandbox"].update(pwdMatchesWorkdir=value) for value in [False, None, 0, 1, "true"]], lambda x: x.update(profileSha256="0" * 64),
                      lambda x: x.update(nativeTestSha256="0" * 64), lambda x: x["bwrap"].update(version="bubblewrap 0.11.0"),
                      lambda x: x["bwrap"].update(sha256="d" * 64), lambda x: x["bwrap"].update(setid=True),
                      lambda x: x["bwrap"]["package"].update(sourceVersion="unreviewed"),

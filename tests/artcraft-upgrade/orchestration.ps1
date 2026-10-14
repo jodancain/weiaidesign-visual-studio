@@ -39,6 +39,27 @@ Check ((Get-Alias -Name Start).Definition -eq 'Start-Process') 'system Start ali
 Check (@($ast.FindAll({param($n) $n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Start'},$true)).Count -eq 0) 'executor never invokes ambiguous Start command'
 $m=Map ('{"a":[],"b":[{"c":true}],"nested":{"id":"x"}}'|ConvertFrom-Json)
 Check ($m.a.Count -eq 0 -and $m.b.Count -eq 1 -and $m.b[0].c) 'JSON preserves empty and singleton arrays'
+# Actual native output contains one progress JSON per engine, then a final
+# envelope. Validate the final record and its path, never an earlier pass.
+$probeOut='/data/image2/upgrade-evidence/synthetic-probe'
+$probePass='{"status":"passed","stage":"isolation-probe","evidence":"/data/image2/upgrade-evidence/synthetic-probe/target.json","setupFailure":false,"errorCode":null}'
+$progress='{"engine":"vectorcraft","status":"passed","comparison":{"kind":"decoded-rgba"},"formats":[]}'
+$parsed=ParsePolicyInvocation ($progress+"`r`n"+$probePass+"`r`n") $probeOut
+Check ($parsed.status -ceq 'passed' -and $parsed.evidence -ceq "$probeOut/target.json") 'native NDJSON followed by valid final success'
+$parsed=ParsePolicyInvocation ((@($progress)*13 -join "`n")+"`n"+$probePass) $probeOut
+Check ($parsed.status -ceq 'passed') 'all13 progress records before final summary'
+$probeFailed=$probePass.Replace('"status":"passed"','"status":"failed"').Replace('"errorCode":null','"errorCode":"ERR_ASSERTION"')
+$parsed=ParsePolicyInvocation ($progress+"`n"+$probeFailed) $probeOut
+Check ($parsed.status -ceq 'failed' -and $parsed.errorCode -ceq 'ERR_ASSERTION') 'later failure cannot be hidden by native progress pass'
+$setup='{"status":"failed","stage":"evidence-setup","evidence":null,"setupFailure":true,"errorCode":"EEXIST"}'
+$parsed=ParsePolicyInvocation $setup $probeOut
+Check ($parsed.setupFailure -and $null -eq $parsed.evidence) 'setup failure preserves no-evidence semantics'
+foreach($bad in @('', 'null', '[]', $progress, ($progress+"`n{"), ($probePass+"`ntrailing noise"), ($probePass+"`n"+$progress), ($probePass+"`n"+$probePass), $probePass.Replace('synthetic-probe/target.json','other-probe/target.json'), $probePass.Replace('"setupFailure":false','"setupFailure":"false"'), $probePass.Replace('"errorCode":null','"errorCode":"ERR_ASSERTION"'), $probePass.Replace('"isolation-probe"','"probe"'), $setup.Replace('"status":"failed"','"status":"passed"'), $setup.Replace('"evidence":null','"evidence":"/unexpected/target.json"'), $probePass.Replace('"errorCode":null','"extra":true,"errorCode":null'))){
+    Reject {ParsePolicyInvocation $bad $probeOut} 'policy_probe_invocation_invalid'
+}
+foreach($bad in @($probePass.Replace('"status":"passed"','"status":["passed"]'), $probePass.Replace('"stage":"isolation-probe"','"stage":["isolation-probe"]'), ($progress.Replace('"status":"passed"','"status":["passed"]')+"`n"+$probePass), ($progress.Replace('"formats":[]','"formats":null')+"`n"+$probePass))){
+    Reject {ParsePolicyInvocation $bad $probeOut} 'policy_probe_invocation_invalid'
+}
 Reject {Idle @{integrity='ok';active=1}} 'drain_required_no_automatic_retries'
 Idle @{integrity='ok';active=0}
 Idle @{integrity='ok';active=0;uncertain=1;uncertainRecords=@('old:stable')}
@@ -433,5 +454,42 @@ try {
     Reject {PolicyProof 'builtin-control' -Control} 'policy_probe_setup_failed'
     $receipt=Get-Content -Raw (Join-Path $script:ReleaseRoot 'evidence/builtin-control-empty-volume-case/setup-failure.json')|ConvertFrom-Json
     Check ($receipt.Invocation.setupFailure -and $receipt.Invocation.errorCode -eq 'EEXIST') 'setup failure receipt retained instead of masking it with docker cp failure'
+} finally {if(Test-Path -LiteralPath $script:ReleaseRoot){[IO.Directory]::Delete($script:ReleaseRoot,$true)}}
+# Native receipts live on the owned data volume, never the /tmp tmpfs that
+# Docker archive/cp cannot see. Failure still retrieves and retains evidence.
+foreach($name in @('NativeTests','ReadJson','Hash','SaveJson')){$f=$ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst]},$false)|Where-Object Name -eq $name;Invoke-Expression $f.Extent.Text}
+$script:ReleaseRoot=Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString('N'))
+$script:Invocation='native-path-case';$script:State=@{NativeManifestSha256='manifest';PolicyCanary=@{BwrapSha256='bwrap'}}
+$script:nativeCalls=@();$script:nativeFail=$false;$script:nativeSetupReject=$false
+function NodeCode($Name,$Code,$Environment=@{}){
+    $script:nativeCalls+=@{Kind='setup';Code=$Code}
+    if($script:nativeSetupReject){throw 'existing_native_leaf'}
+    Check ($Code.Contains("const parent='/data/image2/upgrade-evidence';fs.mkdirSync(parent,{recursive:true})") -and $Code.Contains("fs.mkdirSync('/data/image2/upgrade-evidence/native-native-path-case-")) 'owned parent recursive but unique native leaf not recursive'
+    Check ($Code.Contains('fs.lstatSync(parent)') -and $Code.Contains('!stat.isDirectory()||stat.isSymbolicLink()')) 'existing native parent must be an ordinary directory'
+    return 'created'
+}
+function Docker($A,$InputText='', $Environment=@{}){
+    $script:nativeCalls+=@{Kind=$A[0];Arguments=@($A)}
+    if($A[0] -ceq 'exec'){
+        Check ($A[4] -like '/data/image2/upgrade-evidence/native-native-path-case-*' -and $A[-1] -in @('smoke','supplement')) 'native test writes only the unique owned data-volume root'
+        if($script:nativeFail){throw 'native_test_failed'}
+    } elseif($A[0] -ceq 'cp'){
+        Check ($A[1] -like 'synthetic-core:/data/image2/upgrade-evidence/native-native-path-case-*/.') 'retrieval uses same persistent evidence root'
+        SaveJson (Join-Path $A[2] 'receipt.json') @{passed=(!$script:nativeFail);manifestSha256='manifest';bwrapSha256='bwrap';sandbox=@{capabilitiesZero=$true}}
+    } else {throw 'unexpected native Docker operation'}
+}
+try {
+    $result=NativeTests 'synthetic-core' 'canary'
+    Check ($result.Passed -and (Test-Path -LiteralPath (Join-Path $result.Directory 'receipt.json'))) 'successful native evidence remains available'
+    $count=$script:nativeCalls.Count
+    Reject {NativeTests 'synthetic-core' 'canary'} 'native_evidence_directory_exists'
+    Check ($script:nativeCalls.Count -eq $count) 'reused host evidence never executes tests or overwrites receipts'
+    $script:nativeFail=$true
+    Reject {NativeTests 'synthetic-core' 'failure' -Smoke} 'native_test_failed'
+    $failed=Join-Path $script:ReleaseRoot 'evidence/failure-native-path-case/receipt.json'
+    Check ((Test-Path -LiteralPath $failed) -and !(ReadJson $failed).passed) 'test failure retrieves failed receipt without deleting it'
+    $script:nativeSetupReject=$true;$count=$script:nativeCalls.Count
+    Reject {NativeTests 'synthetic-core' 'existing-leaf'} 'existing_native_leaf'
+    Check ($script:nativeCalls.Count -eq $count+1 -and $script:nativeCalls[-1].Kind -eq 'setup') 'existing container leaf blocks execution and copy'
 } finally {if(Test-Path -LiteralPath $script:ReleaseRoot){[IO.Directory]::Delete($script:ReleaseRoot,$true)}}
 Write-Output "Passed $script:checks orchestration assertions (mocked Docker; no production access)."

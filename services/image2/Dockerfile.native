@@ -9,6 +9,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libvulkan1 mesa-vulkan-drivers \
     curl ffmpeg poppler-utils python3 \
     && rm -rf /var/lib/apt/lists/*
+# Resolve the two fixed Debian alternatives links after the last apt operation.
+# Existing root-owned library bytes stay unchanged; sandbox mounts stay narrow.
+RUN node /app/ops/normalize-runtime-libraries.mjs
 USER node
 # curl is the confinement test's independent network oracle; ffmpeg/ffprobe and
 # Poppler verify real media/PDF output. No compilers, model weights or dev npm deps.

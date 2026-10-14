@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assertBwrapIdentity, parseBwrapPackage, assertNetwork, assertZeroCaps, observationCode, prepareEvidenceDirectory } from './target-probe.mjs';
+import { assertBwrapIdentity, parseBwrapPackage, assertSandboxEnvironment, expectedEnvKeys, expectedSandboxEnvKeys, pwdMatchesWorkdir, assertNetwork, assertZeroCaps, observationCode, prepareEvidenceDirectory } from './target-probe.mjs';
 import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -63,4 +63,28 @@ test('network validator rejects reused namespaces, non-loopback interfaces/addre
 
 test("actual worker observation program parses without newline escape corruption", () => {
   assert.doesNotThrow(() => new Function(observationCode));
+});
+
+
+test('PWD must be derived from the canonical owned sandbox cwd, never an inherited value', () => {
+  assert.equal(expectedEnvKeys.includes('PWD'), false);
+  assert.equal(pwdMatchesWorkdir('/tmp/owned/project', '/tmp/owned/project', '/tmp/owned/project'), true);
+  for (const args of [
+    ['SYNTHETIC_PARENT_PWD', '/tmp/owned/project', '/tmp/owned/project'],
+    ['/tmp/other', '/tmp/other', '/tmp/owned/project'],
+    [undefined, '/tmp/owned/project', '/tmp/owned/project'],
+    ['', '/tmp/owned/project', '/tmp/owned/project'],
+    [undefined, undefined, undefined], ['relative', 'relative', 'relative'],
+  ]) assert.equal(pwdMatchesWorkdir(...args), false);
+});
+
+test('sandbox environment rejects missing/extra/duplicate keys and missing or invalid PWD proof', () => {
+  const valid = { envKeys: [...expectedSandboxEnvKeys], pwdMatchesWorkdir: true };
+  assertSandboxEnvironment(valid);
+  for (const change of [
+    x => x.envKeys.push('OPENAI_API_KEY'), x => x.envKeys.push('UNKNOWN_ENV'),
+    x => x.envKeys.push('PWD'), x => x.envKeys.splice(x.envKeys.indexOf('PWD'), 1),
+    x => { delete x.pwdMatchesWorkdir; },
+    ...[false, undefined, null, 0, 1, 'true'].map(value => x => { x.pwdMatchesWorkdir = value; }),
+  ]) { const bad = structuredClone(valid); change(bad); assert.throws(() => assertSandboxEnvironment(bad)); }
 });

@@ -368,8 +368,15 @@ function Probe([string]$Name,$Witness,[switch]$Public,[switch]$Ordinary){
     return Map ((NodeCode $Name $BffCode @{ARTCRAFT_PROBE_INPUT=$encoded})|ConvertFrom-Json)
 }
 function NativeTests([string]$Name,[string]$Label,[switch]$Smoke){
-    $path="/tmp/upgrade-$Invocation-$Label";$dir=Join-Path $ReleaseRoot "evidence\$Label-$Invocation";$null=[IO.Directory]::CreateDirectory($dir)
+    # docker cp cannot read the container's /tmp tmpfs. Keep the unique native
+    # evidence on its owned data volume, including when a test fails.
+    $path="/data/image2/upgrade-evidence/native-$Invocation-$Label";$dir=Join-Path $ReleaseRoot "evidence\$Label-$Invocation"
+    Need (!(Test-Path -LiteralPath $dir)) 'native_evidence_directory_exists'
+    $null=[IO.Directory]::CreateDirectory($dir)
     BeginOp "native-target-tests-$Label"
+    # Make only the owned parent recursive; a reused leaf is never overwritten.
+    $setup="import fs from 'node:fs';const parent='/data/image2/upgrade-evidence';fs.mkdirSync(parent,{recursive:true});const stat=fs.lstatSync(parent);if(!stat.isDirectory()||stat.isSymbolicLink())throw new Error('native_evidence_parent_invalid');fs.mkdirSync('$path');console.log('created');"
+    Need ((NodeCode $Name $setup) -ceq 'created') 'native_evidence_setup_failed'
     try{$args=@('exec',$Name,'node','/app/ops/upgrade-native.mjs',$path);if($Smoke){$args+='smoke'}else{$args+='supplement'};$null=Docker $args}finally{$null=Docker @('cp',"${Name}:$path/.",$dir)}
     $receipt=ReadJson (Join-Path $dir 'receipt.json');Need ($receipt.manifestSha256 -ceq $State.NativeManifestSha256) 'tested_native_manifest_drift';Need ($receipt.passed -eq $true -and $receipt.sandbox.capabilitiesZero -eq $true) 'native_gate_failed'
     if($Smoke){Need ($receipt.bwrapSha256 -ceq $State.PolicyCanary.BwrapSha256) 'production_bwrap_drift'}
@@ -482,6 +489,33 @@ function InitializeNativePolicy {
     PolicyValidate @('preflight','--facts',"/release/$before")
     $State.PolicyBeforeFile=$before;SaveState
 }
+function ParsePolicyInvocation([string]$Raw,[string]$ExpectedOut){
+    # Native acceptance emits progress NDJSON before the one final summary.
+    # Earlier per-engine "passed" records can never stand in for that summary.
+    $lines=@($Raw -split '\r?\n' | Where-Object {$_ -match '\S'})
+    Need ($lines.Count -gt 0) 'policy_probe_invocation_invalid'
+    $summary=$null
+    for($i=0;$i -lt $lines.Count;$i++){
+        try {$entry=Map ($lines[$i]|ConvertFrom-Json -ErrorAction Stop)} catch {Need $false 'policy_probe_invocation_invalid'}
+        Need ($entry -is [hashtable]) 'policy_probe_invocation_invalid'
+        if($i -lt $lines.Count-1){
+            Need (($entry.Keys|Sort-Object) -join ',' -ceq 'comparison,engine,formats,status') 'policy_probe_invocation_invalid'
+            Need ($entry.engine -is [string] -and $entry.engine -cmatch '^[a-z]+craft$' -and $entry.status -is [string] -and $entry.status -ceq 'passed' -and $entry.comparison -is [hashtable] -and $entry.formats -is [array]) 'policy_probe_invocation_invalid'
+        } else {$summary=$entry}
+    }
+    Need (($summary.Keys|Sort-Object) -join ',' -ceq 'errorCode,evidence,setupFailure,stage,status') 'policy_probe_invocation_invalid'
+    Need ($summary.status -is [string] -and $summary.status -cin @('passed','failed') -and $summary.stage -is [string] -and $summary.stage -cin @('evidence-setup','probe','package-provenance','isolation-probe') -and $summary.setupFailure -is [bool]) 'policy_probe_invocation_invalid'
+    Need ($null -eq $summary.errorCode -or ($summary.errorCode -is [string] -and $summary.errorCode.Length -gt 0)) 'policy_probe_invocation_invalid'
+    if($summary.setupFailure){
+        Need ($summary.status -ceq 'failed' -and $summary.stage -ceq 'evidence-setup' -and $null -eq $summary.evidence) 'policy_probe_invocation_invalid'
+    } else {
+        Need ($summary.stage -cne 'evidence-setup' -and $summary.evidence -is [string] -and $summary.evidence -ceq "$ExpectedOut/target.json") 'policy_probe_invocation_invalid'
+    }
+    if($summary.status -ceq 'passed'){
+        Need (!$summary.setupFailure -and $summary.stage -ceq 'isolation-probe' -and $null -eq $summary.errorCode) 'policy_probe_invocation_invalid'
+    }
+    return $summary
+}
 function PolicyProof([string]$Name,[switch]$Control){
     $label=if($Control){'builtin-control'}else{'policy'};$relative="evidence/$label-$Invocation";$dir=Join-Path $ReleaseRoot $relative
     $null=[IO.Directory]::CreateDirectory($dir);$out="/data/image2/upgrade-evidence/$label-$Invocation"
@@ -489,7 +523,8 @@ function PolicyProof([string]$Name,[switch]$Control){
     $failed=$false;$invoke=$null
     try {
         $raw=Exec 'docker' @('exec',$Name,'node','/policy/target-probe.mjs','--run-reviewed-target','--mode',$mode,'--expected-policy-sha256',$expected,'--service-dir','/app','--output-dir',$out) '' @{} @(0,1)
-        $invoke=Map ($raw|ConvertFrom-Json)
+        SaveJson (Join-Path $dir 'probe-stdout.json') @{Output=$raw}
+        $invoke=ParsePolicyInvocation $raw $out
         SaveJson (Join-Path $dir 'invocation.json') $invoke
         $failed=($invoke.status -ne 'passed')
         if($invoke.evidence -ceq "$out/target.json"){$null=Docker @('cp',"${Name}:$out/.",$dir)}

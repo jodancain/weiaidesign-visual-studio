@@ -267,3 +267,16 @@ canary. Its candidate trial requires a root-reviewed actual builtin failure and
 bwrap package provenance; the final gate requires reviewed target results.
 See [the integrated runbook](../../docs/ARTCRAFT_NATIVE_UPGRADE.md). No production
 policy approval is asserted by this lock or by local tests.
+
+## Sandbox-generated PWD
+
+The command environment still uses the original exact allowlist without `PWD`.
+[Reviewed bwrap 0.12.0 source](https://github.com/containers/bubblewrap/blob/2a76602a8c71f36c1527cf9fc3417d9149822e0c/bubblewrap.c#L3427)
+sets `PWD` after changing to the sandbox work directory. The child observation
+therefore permits exactly the command keys plus `PWD`, and records only a boolean
+proving `PWD == process.cwd() == the canonical owned work path` passed by the trusted
+worker. Node and Python receipt validation both require that proof. The worker
+receives a synthetic poisoned parent `PWD` and an unknown environment canary;
+they must not survive as the child's
+value. Missing/duplicate/unknown keys, provider keys and invalid PWD proofs fail.
+No environment values are emitted, and the raw profile/sandbox command is unchanged.

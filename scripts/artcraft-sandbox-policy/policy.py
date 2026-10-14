@@ -228,7 +228,8 @@ def bind(before, after, result, lock, profile, *, service_layout=None):
     interfaces = result["sandbox"]["interfaces"]
     require(set(interfaces) == {"lo"} and interfaces["lo"] and result["sandbox"]["routes"] == [], "Sandbox is not loopback-only")
     require(all(i["internal"] and i["address"] in ["127.0.0.1", "::1"] for i in interfaces["lo"]), "Unexpected sandbox address")
-    require(set(result["sandbox"]["envKeys"]) == set("PATH HOME TMPDIR TMP TEMP XDG_CONFIG_HOME XDG_CACHE_HOME XDG_DATA_HOME LANG LC_ALL RUST_BACKTRACE".split()), "Child environment is not the exact allowlist")
+    require(sorted(result["sandbox"]["envKeys"]) == sorted("PATH HOME TMPDIR TMP TEMP XDG_CONFIG_HOME XDG_CACHE_HOME XDG_DATA_HOME LANG LC_ALL RUST_BACKTRACE PWD".split()), "Child environment is not the exact allowlist")
+    require(result["sandbox"].get("pwdMatchesWorkdir") is True, "Child PWD is not the canonical owned work directory")
     for name in ["network", "neighbours", "symlinkEscape", "credentials", "ordinaryCommands"]:
         require(result["checks"][name] is True, "Missing targeted check: " + name)
     native = result["nativeResults"]
